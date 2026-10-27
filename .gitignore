@@ -1,6 +1,8 @@
-.mission/
 node_modules/
 dist/
-coverage/
-*.log
+.mission/
+*.db
+*.db-shm
+*.db-wal
 .DS_Store
+coverage/
