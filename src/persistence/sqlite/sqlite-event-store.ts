@@ -1,13 +1,24 @@
 import { randomUUID } from "node:crypto";
 import type { MissionEvent } from "../../core/domain/event.ts";
-import type { EventStore } from "../../core/events/event-store.ts";
+import { OptimisticConcurrencyError, type EventStore } from "../../core/events/event-store.ts";
+import type { MissionProjectionWriter } from "../../core/events/projection-store.ts";
 import type { MissionDatabase } from "./database.ts";
 
-export class ConcurrencyConflictError extends Error {}
+export class ConcurrencyConflictError extends OptimisticConcurrencyError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConcurrencyConflictError";
+  }
+}
 
 export class SqliteEventStore implements EventStore {
   private readonly database: MissionDatabase;
-  constructor(database: MissionDatabase) { this.database = database; }
+  private readonly projections?: MissionProjectionWriter;
+
+  constructor(database: MissionDatabase, projections?: MissionProjectionWriter) {
+    this.database = database;
+    this.projections = projections;
+  }
 
   async append<T>(event: Omit<MissionEvent<T>, "sequence">, expectedSequence: number): Promise<MissionEvent<T>> {
     const db = this.database.db;
@@ -37,8 +48,10 @@ export class SqliteEventStore implements EventStore {
           JSON.stringify(event.payload), event.causationId ?? null, event.correlationId ?? null, event.idempotencyKey ?? null,
           event.schemaVersion, event.createdAt
         );
+      const committed = { ...event, sequence } as MissionEvent<T>;
+      this.projections?.apply(committed as MissionEvent);
       db.exec("COMMIT");
-      return { ...event, sequence };
+      return committed;
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;

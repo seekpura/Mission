@@ -1,0 +1,4 @@
+# Replace the path with the absolute path to this checkout.
+- insert:
+    - id: mission-runtime
+      name: '/absolute/path/to/Mission/integrations/deepseek-plugin/src/index.ts'

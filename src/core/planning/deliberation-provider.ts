@@ -29,7 +29,7 @@ export interface CompletionChallenge {
 
 export interface DeliberationProvider {
   composeStrategy(input: { state: MissionState; userGoal: string }): Promise<StrategyProposal>;
-  planFrontier(input: { state: MissionState; openGaps: Gap[] }): Promise<FrontierProposal>;
+  planFrontier(input: { state: MissionState; userGoal: string; openGaps: Gap[] }): Promise<FrontierProposal>;
   diagnoseGap(input: { state: MissionState; gap: Gap }): Promise<GapDiagnosis>;
   challengeCompletion(input: { state: MissionState }): Promise<CompletionChallenge>;
 }

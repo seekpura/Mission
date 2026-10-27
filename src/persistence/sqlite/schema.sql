@@ -9,6 +9,13 @@ CREATE TABLE IF NOT EXISTS missions (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS mission_states (
+  mission_id TEXT PRIMARY KEY,
+  event_sequence INTEGER NOT NULL,
+  state_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS mission_events (
   id TEXT PRIMARY KEY,
   mission_id TEXT NOT NULL,

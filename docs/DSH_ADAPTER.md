@@ -1,23 +1,40 @@
-# DeepSeek Harness Adapter Boundary
+# DeepSeek Harness Reference Host Adapter
 
-DeepSeek Harness is the first reference host, not a dependency of Mission Core.
+DeepSeek Harness is the first reference host, not a Mission Core dependency.
 
-The adapter is responsible for:
+## Upstream contract pinned for the current integration
 
-- host/environment description
-- installed skill/tool/agent capability discovery
-- agent create / observe / steer / cancel
-- host-native capability invocation
-- permission / approval bridge
-- host event normalization
+The binding was inspected against:
 
-The adapter must not own:
+`deepseek-ai/deepseek-harness@22ddee3792402c3e70ec5f86a63c3e3e895a2f60`
 
-- mission strategy
-- mission planning
-- gap analysis
-- capability discovery policy
-- artifact finalization
-- mission completion
+Mission intentionally binds to documented/public structural surfaces rather than importing DSH implementation internals into Core:
 
-`src/hosts/deepseek/deepseek-host-adapter.ts` defines the compile-time boundary. Concrete DSH runtime bindings are intentionally injected through `DeepSeekBindings`, so DSH package details do not leak into core.
+- Cordis plugins export `apply(ctx)` and may declare `inject`.
+- Agent creation uses `ctx.agents.create({ sessionId, parentAgent?, meta?, agentOptions? })`.
+- Agent driving uses `followup`, `steer`, `cancel` and `whenIdle`.
+- Host tool observation uses `ctx.tools.schemas()`.
+- Programmatic host tool execution uses `ctx.tools.execute(...)`.
+- User-facing messages use DSH `createUserMessage`.
+
+`src/hosts/deepseek/official-bindings.ts` is the compatibility boundary. `integrations/deepseek-plugin/` supplies the actual DSH package imports and a loadable plugin surface.
+
+## Ownership boundary
+
+DSH owns:
+
+- Agent/session lifecycle implementation
+- Installed tool/Skill/MCP composition
+- Model/provider routing
+- Native approval and tool execution machinery
+
+Mission owns:
+
+- MissionSpec and AcceptanceContract
+- progressive planning and dynamic frontier
+- durable Mission state and projections
+- gaps, decisions, artifact/evidence state
+- capability need/acquisition policy
+- completion and verification logic
+
+A future DSH API change should be absorbed inside the reference-host integration without changing Mission Core domain contracts.
