@@ -49,4 +49,4 @@ Development continues toward the complete runtime, not a minimal demo. Highest-v
 
 ## GitHub source control
 
-A local Git repository is maintained as the source baseline. The connected GitHub app has read/write access to existing repositories but does not expose a create-repository action in this environment. Existing user repositories are not repurposed without explicit intent. Once a dedicated remote repository exists or the connector exposes repository creation, the local history can be pushed without re-baselining.
+`seekpura/Mission` is the canonical remote source of truth. `main` holds the synchronized Architecture/Implementation Freeze baseline and tested runtime source. Ongoing implementation is developed from the GitHub repository and promoted through reviewed checkpoints rather than by exchanging ZIP files as the primary source.
