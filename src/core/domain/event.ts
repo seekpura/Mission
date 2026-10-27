@@ -1,0 +1,68 @@
+export type MissionEventType =
+  | "mission.created"
+  | "mission.status.changed"
+  | "mission.spec.revised"
+  | "acceptance.created"
+  | "acceptance.revised"
+  | "requirement.status.changed"
+  | "constraint.added"
+  | "constraint.superseded"
+  | "truth.added"
+  | "truth.superseded"
+  | "environment.snapshot.created"
+  | "strategy.created"
+  | "strategy.revised"
+  | "graph.revised"
+  | "work.created"
+  | "work.updated"
+  | "work.started"
+  | "work.completed"
+  | "work.failed"
+  | "work.blocked"
+  | "work.invalidated"
+  | "attempt.created"
+  | "attempt.completed"
+  | "execution.created"
+  | "execution.started"
+  | "execution.completed"
+  | "execution.failed"
+  | "execution.lost"
+  | "execution.cancelled"
+  | "artifact.created"
+  | "artifact.superseded"
+  | "artifact.validated"
+  | "artifact.invalidated"
+  | "verification.started"
+  | "verification.completed"
+  | "finding.created"
+  | "gap.opened"
+  | "gap.resolved"
+  | "gap.accepted"
+  | "decision.created"
+  | "decision.applied"
+  | "capability.need.created"
+  | "capability.candidate.discovered"
+  | "capability.activated"
+  | "capability.rejected"
+  | "approval.requested"
+  | "approval.decided"
+  | "user.steering.received"
+  | "mission.completed"
+  | "mission.reopened";
+
+export interface MissionEvent<T = unknown> {
+  id: string;
+  missionId: string;
+  sequence: number;
+  type: MissionEventType;
+  actor: {
+    type: "user" | "controller" | "planner" | "worker" | "verifier" | "host" | "system";
+    id?: string;
+  };
+  payload: T;
+  causationId?: string;
+  correlationId?: string;
+  idempotencyKey?: string;
+  schemaVersion: number;
+  createdAt: string;
+}
