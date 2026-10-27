@@ -4,8 +4,15 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { MissionController } from "../core/mission/controller.ts";
 import type { EventStore } from "../core/events/event-store.ts";
+import type { MissionProjectionReader } from "../core/events/projection-store.ts";
+import type { MissionOrchestrator } from "../runtime/orchestration/mission-orchestrator.ts";
 
-export function createMissionApi(controller: MissionController, events: EventStore) {
+export interface MissionApiOptions {
+  projections?: MissionProjectionReader;
+  orchestrator?: MissionOrchestrator;
+}
+
+export function createMissionApi(controller: MissionController, events: EventStore, options: MissionApiOptions = {}) {
   const subscribers = new Map<string, Set<ServerResponse>>();
 
   async function publish(missionId: string) {
@@ -29,6 +36,8 @@ export function createMissionApi(controller: MissionController, events: EventSto
         const body = await readJson(req);
         const missionId = body.missionId ?? randomUUID();
         const state = await controller.createMission(missionId, body.userGoal ?? "");
+        await controller.runControllerCycle({ missionId, trigger: "mission_created" });
+        options.orchestrator?.wake(missionId);
         await publish(missionId);
         return json(res, 201, state);
       }
@@ -38,10 +47,21 @@ export function createMissionApi(controller: MissionController, events: EventSto
         if (req.method === "POST" && parts[2] === "steer") {
           const body = await readJson(req);
           const state = await controller.steer(missionId, body.message ?? "");
+          await controller.runControllerCycle({ missionId, trigger: "user_steering" });
+          options.orchestrator?.wake(missionId);
           await publish(missionId);
           return json(res, 200, state);
         }
         if (req.method === "GET" && parts[2] === "activity") return json(res, 200, await events.list(missionId));
+        if (req.method === "GET" && parts[2] === "acceptance") return json(res, 200, {
+          contract: await options.projections?.getAcceptanceContract(missionId) ?? null,
+          requirements: await options.projections?.listRequirements(missionId) ?? [],
+          evaluation: await controller.acceptanceEvaluation(missionId)
+        });
+        if (req.method === "GET" && parts[2] === "work") return json(res, 200, await options.projections?.listWorkItems(missionId) ?? []);
+        if (req.method === "GET" && parts[2] === "gaps") return json(res, 200, await options.projections?.listGaps(missionId) ?? []);
+        if (req.method === "GET" && parts[2] === "artifacts") return json(res, 200, await options.projections?.listArtifacts(missionId) ?? []);
+        if (req.method === "GET" && parts[2] === "evidence") return json(res, 200, await options.projections?.listEvidence(missionId) ?? []);
         if (req.method === "GET" && parts[2] === "events") {
           res.writeHead(200, {
             "Content-Type": "text/event-stream",

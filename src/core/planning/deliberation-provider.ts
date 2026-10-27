@@ -1,6 +1,11 @@
-import type { MissionState } from "../domain/mission.ts";
+import type { AcceptanceContract, MissionSpec, MissionState } from "../domain/mission.ts";
 import type { WorkItem } from "../domain/work-item.ts";
 import type { Gap } from "../domain/verification.ts";
+
+export interface MissionInterpretation {
+  missionSpec: MissionSpec;
+  acceptanceContract: AcceptanceContract;
+}
 
 export interface StrategyProposal {
   framing: string;
@@ -28,8 +33,9 @@ export interface CompletionChallenge {
 }
 
 export interface DeliberationProvider {
-  composeStrategy(input: { state: MissionState; userGoal: string }): Promise<StrategyProposal>;
-  planFrontier(input: { state: MissionState; userGoal: string; openGaps: Gap[] }): Promise<FrontierProposal>;
+  interpretMission?(input: { missionId: string; userGoal: string; state: MissionState }): Promise<MissionInterpretation>;
+  composeStrategy(input: { state: MissionState; userGoal: string; acceptanceContract?: AcceptanceContract | null }): Promise<StrategyProposal>;
+  planFrontier(input: { state: MissionState; userGoal: string; openGaps: Gap[]; acceptanceContract?: AcceptanceContract | null; requirements?: import("../domain/mission.ts").Requirement[] }): Promise<FrontierProposal>;
   diagnoseGap(input: { state: MissionState; gap: Gap }): Promise<GapDiagnosis>;
   challengeCompletion(input: { state: MissionState }): Promise<CompletionChallenge>;
 }

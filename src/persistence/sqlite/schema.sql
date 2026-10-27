@@ -59,6 +59,42 @@ CREATE TABLE IF NOT EXISTS acceptance_contracts (
   PRIMARY KEY(mission_id, revision)
 );
 
+CREATE TABLE IF NOT EXISTS requirements (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  contract_revision INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  priority TEXT NOT NULL,
+  type TEXT NOT NULL,
+  description TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_requirements_mission_status ON requirements(mission_id, status, priority);
+
+CREATE TABLE IF NOT EXISTS evidence (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  subject_ref TEXT NOT NULL,
+  type TEXT NOT NULL,
+  result TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_mission_subject ON evidence(mission_id, subject_ref);
+
+CREATE TABLE IF NOT EXISTS verification_results (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  artifact_ref TEXT NOT NULL,
+  level TEXT NOT NULL,
+  overall TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_verification_mission_artifact ON verification_results(mission_id, artifact_ref);
+
 CREATE TABLE IF NOT EXISTS work_items (
   id TEXT PRIMARY KEY,
   mission_id TEXT NOT NULL,

@@ -1,6 +1,30 @@
-import type { DeliberationProvider, StrategyProposal, FrontierProposal, GapDiagnosis, CompletionChallenge } from "./deliberation-provider.ts";
+import type { DeliberationProvider, StrategyProposal, FrontierProposal, GapDiagnosis, CompletionChallenge, MissionInterpretation } from "./deliberation-provider.ts";
 
 export class DeterministicDeliberationProvider implements DeliberationProvider {
+  async interpretMission(input: { missionId: string; userGoal: string }): Promise<MissionInterpretation> {
+    const now = new Date().toISOString();
+    return {
+      missionSpec: {
+        missionId: input.missionId,
+        revision: 1,
+        objective: input.userGoal,
+        requestedOutputs: [],
+        constraints: [],
+        preferences: [],
+        sourceRefs: [],
+        createdAt: now
+      },
+      acceptanceContract: {
+        missionId: input.missionId,
+        revision: 1,
+        requirements: [],
+        requiredArtifacts: [],
+        requiredValidations: [],
+        criticalFailureConditions: [],
+        createdAt: now
+      }
+    };
+  }
   async composeStrategy(input: any): Promise<StrategyProposal> {
     return { framing: input.userGoal, approach: "progressive", workstreams: [], revision: 1 };
   }

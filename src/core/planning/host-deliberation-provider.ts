@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { HostAdapter } from "../../hosts/deepseek/host-adapter.ts";
+import type { AcceptanceContract, MissionSpec, Requirement, RequiredArtifact, RequiredValidation } from "../domain/mission.ts";
 import type { WorkItem, WorkPurpose } from "../domain/work-item.ts";
-import type { DeliberationProvider, StrategyProposal, FrontierProposal, GapDiagnosis, CompletionChallenge } from "./deliberation-provider.ts";
+import type { DeliberationProvider, StrategyProposal, FrontierProposal, GapDiagnosis, CompletionChallenge, MissionInterpretation } from "./deliberation-provider.ts";
 
 export interface HostDeliberationOptions {
   capabilityRefs?: string[];
@@ -17,11 +18,76 @@ export class HostDeliberationProvider implements DeliberationProvider {
     this.options = options;
   }
 
+  async interpretMission(input: { missionId: string; userGoal: string; state: import("../domain/mission.ts").MissionState }): Promise<MissionInterpretation> {
+    const value = await this.askJson(input.missionId, "interpret", `
+You are the Mission Runtime Interpreter and Acceptance Composer.
+User goal: ${input.userGoal}
+Return ONLY JSON with this shape:
+{
+  "missionSpec": {"objective":string,"intent":string,"requestedOutputs":string[],"constraints":string[],"preferences":string[],"sourceRefs":string[]},
+  "acceptanceContract": {
+    "requirements":[{"id":string,"description":string,"type":"functional|content|visual|technical|evidence|experience|compliance","priority":"critical|required|preferred","verification":"artifact|test|review|evidence|runtime|human"}],
+    "requiredArtifacts":[{"logicalName":string,"type":string,"description":string,"requirementRefs":string[]}],
+    "requiredValidations":[{"id":string,"description":string,"level":"structural|functional|quality|integration|mission","requirementRefs":string[]}],
+    "criticalFailureConditions":string[]
+  }
+}
+Create an acceptance contract that captures the actual end goal, not implementation steps. Critical/required requirements must be objectively checkable. Use stable short ids. Do not invent extra deliverables the user did not request.
+`);
+    const now = new Date().toISOString();
+    const rawSpec = value.missionSpec ?? {};
+    const rawContract = value.acceptanceContract ?? {};
+    const requirements: Requirement[] = arrayValue(rawContract.requirements).map((raw: any, index) => ({
+      id: stringValue(raw?.id, `R${index + 1}`),
+      description: stringValue(raw?.description, `Satisfy mission requirement ${index + 1}`),
+      type: requirementType(raw?.type),
+      priority: requirementPriority(raw?.priority),
+      verification: requirementVerification(raw?.verification),
+      status: "unverified",
+      evidenceRefs: []
+    }));
+    const requiredArtifacts: RequiredArtifact[] = arrayValue(rawContract.requiredArtifacts).map((raw: any, index) => ({
+      logicalName: stringValue(raw?.logicalName, `deliverable-${index + 1}`),
+      type: typeof raw?.type === "string" ? raw.type : undefined,
+      description: typeof raw?.description === "string" ? raw.description : undefined,
+      requirementRefs: stringArray(raw?.requirementRefs)
+    }));
+    const requiredValidations: RequiredValidation[] = arrayValue(rawContract.requiredValidations).map((raw: any, index) => ({
+      id: stringValue(raw?.id, `validation-${index + 1}`),
+      description: stringValue(raw?.description, `Validate mission output ${index + 1}`),
+      level: validationLevel(raw?.level),
+      requirementRefs: stringArray(raw?.requirementRefs)
+    }));
+    const missionSpec: MissionSpec = {
+      missionId: input.missionId,
+      revision: 1,
+      objective: stringValue(rawSpec.objective, input.userGoal),
+      intent: typeof rawSpec.intent === "string" ? rawSpec.intent : undefined,
+      requestedOutputs: stringArray(rawSpec.requestedOutputs),
+      constraints: stringArray(rawSpec.constraints),
+      preferences: stringArray(rawSpec.preferences),
+      sourceRefs: stringArray(rawSpec.sourceRefs),
+      createdAt: now
+    };
+    const acceptanceContract: AcceptanceContract = {
+      missionId: input.missionId,
+      revision: 1,
+      requirements,
+      requiredArtifacts,
+      requiredValidations,
+      criticalFailureConditions: stringArray(rawContract.criticalFailureConditions),
+      completionPolicy: { requireAllCritical: true, requireAllRequired: true, allowPreferredOpen: true },
+      createdAt: now
+    };
+    return { missionSpec, acceptanceContract };
+  }
+
   async composeStrategy(input: Parameters<DeliberationProvider["composeStrategy"]>[0]): Promise<StrategyProposal> {
     const value = await this.askJson(input.state.missionId, "strategy", `
 You are the Mission Runtime Strategy Composer.
 Goal: ${input.userGoal}
 Current mission state: ${JSON.stringify(input.state)}
+Acceptance contract: ${JSON.stringify(input.acceptanceContract ?? null)}
 Return ONLY JSON with: framing:string, approach:string, workstreams:[{id:string,objective:string}], revision:number.
 Design the strategy for this mission specifically. Do not emit a fixed workflow. Keep distant uncertain work coarse.
 `);
@@ -39,9 +105,11 @@ You are the Mission Runtime Frontier Planner.
 Goal: ${input.userGoal}
 Current state: ${JSON.stringify(input.state)}
 Open gaps: ${JSON.stringify(input.openGaps)}
+Acceptance contract: ${JSON.stringify(input.acceptanceContract ?? null)}
+Requirements: ${JSON.stringify(input.requirements ?? [])}
 Plan ONLY the next useful execution frontier, not the entire mission. Prefer 1-4 meaningful work items. Do not create tiny coordination tasks.
-Return ONLY JSON: {"graphRevision":number,"workItems":[{"id":string,"purpose":"exploration|production|verification|repair|acquisition|integration","objective":string,"requirementRefs":string[],"gapRefs":string[],"inputArtifactRefs":string[],"capabilityNeedRefs":string[],"priority":number}]}.
-Use purpose=exploration when the direction is still uncertain and there is no stronger requirement/gap linkage.
+Return ONLY JSON: {"graphRevision":number,"workItems":[{"id":string,"purpose":"exploration|production|verification|repair|acquisition|integration","objective":string,"requirementRefs":string[],"gapRefs":string[],"inputArtifactRefs":string[],"capabilityNeedRefs":string[],"priority":number,"expectedOutputs":[{"logicalName":string,"type":string,"required":boolean}]}]}.
+When a work item produces a required deliverable, use the exact requiredArtifacts.logicalName and attach its requirementRefs. Use purpose=exploration when the direction is still uncertain and there is no stronger requirement/gap linkage.
 `);
     const now = new Date().toISOString();
     const nextRevision = Math.max(input.state.graphRevision + 1, numberValue(value.graphRevision, input.state.graphRevision + 1));
@@ -60,7 +128,11 @@ Use purpose=exploration when the direction is still uncertain and there is no st
         requirementRefs,
         gapRefs,
         inputArtifactRefs,
-        expectedOutputs: [],
+        expectedOutputs: arrayValue(raw?.expectedOutputs).map((output: any) => ({
+          logicalName: stringValue(output?.logicalName, `artifact-${index + 1}`),
+          type: stringValue(output?.type, "file"),
+          required: output?.required !== false
+        })),
         localAcceptanceCriteria: [],
         capabilityNeedRefs,
         priority: Math.max(0, Math.min(100, numberValue(raw?.priority, 50))),
@@ -153,3 +225,8 @@ function clamp01(value: number): number { return Math.max(0, Math.min(1, value))
 function purposeValue(value: unknown): WorkPurpose {
   return ["exploration", "production", "verification", "repair", "acquisition", "integration"].includes(String(value)) ? value as WorkPurpose : "exploration";
 }
+
+function requirementType(value: unknown): Requirement["type"] { const allowed = ["functional","content","visual","technical","evidence","experience","compliance"] as const; return (allowed as readonly unknown[]).includes(value) ? value as Requirement["type"] : "functional"; }
+function requirementPriority(value: unknown): Requirement["priority"] { return value === "critical" || value === "preferred" ? value : "required"; }
+function requirementVerification(value: unknown): Requirement["verification"] { const allowed = ["artifact","test","review","evidence","runtime","human"] as const; return (allowed as readonly unknown[]).includes(value) ? value as Requirement["verification"] : "evidence"; }
+function validationLevel(value: unknown): RequiredValidation["level"] { const allowed = ["structural","functional","quality","integration","mission"] as const; return (allowed as readonly unknown[]).includes(value) ? value as RequiredValidation["level"] : undefined; }

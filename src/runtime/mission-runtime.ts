@@ -6,11 +6,20 @@ import { MissionDatabase } from "../persistence/sqlite/database.ts";
 import { SqliteEventStore } from "../persistence/sqlite/sqlite-event-store.ts";
 import { SqliteProjectionStore } from "../persistence/sqlite/sqlite-projection-store.ts";
 import { SnapshotStore } from "../persistence/sqlite/snapshot-store.ts";
+import type { HostAdapter } from "../hosts/deepseek/host-adapter.ts";
+import { HostAgentExecutionBackend } from "../execution/host/host-agent-execution-backend.ts";
+import { WorkspaceManager } from "../execution/workspace/workspace-manager.ts";
+import { FileArtifactStore } from "../execution/artifacts/artifact-store.ts";
+import { BasicFileVerifier } from "../core/verification/basic-file-verifier.ts";
+import { MissionOrchestrator } from "./orchestration/mission-orchestrator.ts";
 
 export interface MissionRuntimeOptions {
   dbPath?: string;
   schemaPath?: string;
+  rootDir?: string;
   deliberation?: DeliberationProvider;
+  host?: HostAdapter;
+  maxConcurrency?: number;
 }
 
 export class MissionRuntime {
@@ -19,9 +28,13 @@ export class MissionRuntime {
   readonly events: SqliteEventStore;
   readonly snapshots: SnapshotStore;
   readonly controller: MissionController;
+  readonly workspaces: WorkspaceManager;
+  readonly artifacts: FileArtifactStore;
+  readonly orchestrator?: MissionOrchestrator;
 
   constructor(options: MissionRuntimeOptions = {}) {
-    const dbPath = options.dbPath ?? join(process.cwd(), ".mission", "mission.db");
+    const rootDir = options.rootDir ?? join(process.cwd(), ".mission");
+    const dbPath = options.dbPath ?? join(rootDir, "mission.db");
     const schemaPath = options.schemaPath ?? fileURLToPath(new URL("../persistence/sqlite/schema.sql", import.meta.url));
     this.database = new MissionDatabase(dbPath);
     this.database.migrate(schemaPath);
@@ -32,6 +45,19 @@ export class MissionRuntime {
       projections: this.projections,
       deliberation: options.deliberation
     });
+    this.workspaces = new WorkspaceManager(rootDir);
+    this.artifacts = new FileArtifactStore(rootDir);
+    if (options.host) {
+      this.orchestrator = new MissionOrchestrator({
+        controller: this.controller,
+        projections: this.projections,
+        hostBackend: new HostAgentExecutionBackend(options.host),
+        workspaces: this.workspaces,
+        artifacts: this.artifacts,
+        verifier: new BasicFileVerifier(),
+        options: { maxConcurrency: options.maxConcurrency }
+      });
+    }
   }
 
   async checkpoint(missionId: string): Promise<void> {

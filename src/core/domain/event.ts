@@ -35,6 +35,7 @@ export type MissionEventType =
   | "verification.started"
   | "verification.completed"
   | "finding.created"
+  | "evidence.created"
   | "gap.opened"
   | "gap.resolved"
   | "gap.accepted"

@@ -33,13 +33,32 @@ export interface Requirement {
   evidenceRefs: string[];
 }
 
+export interface RequiredArtifact {
+  logicalName: string;
+  type?: string;
+  description?: string;
+  requirementRefs: string[];
+}
+
+export interface RequiredValidation {
+  id: string;
+  description: string;
+  level?: "structural" | "functional" | "quality" | "integration" | "mission";
+  requirementRefs: string[];
+}
+
 export interface AcceptanceContract {
   missionId: string;
   revision: number;
   requirements: Requirement[];
-  requiredArtifacts: string[];
-  requiredValidations: string[];
+  requiredArtifacts: RequiredArtifact[];
+  requiredValidations: RequiredValidation[];
   criticalFailureConditions: string[];
+  completionPolicy?: {
+    requireAllCritical?: boolean;
+    requireAllRequired?: boolean;
+    allowPreferredOpen?: boolean;
+  };
   createdAt: string;
 }
 

@@ -4,10 +4,13 @@ import { OptimisticConcurrencyError } from "../events/event-store.ts";
 import type { MissionProjectionReader } from "../events/projection-store.ts";
 import { projectMissionState } from "../events/state-projector.ts";
 import type { MissionEvent, MissionEventType } from "../domain/event.ts";
-import type { MissionState } from "../domain/mission.ts";
+import type { AcceptanceContract, MissionSpec, MissionState, Requirement } from "../domain/mission.ts";
 import type { MissionDecision } from "../domain/decision.ts";
 import type { WorkItem } from "../domain/work-item.ts";
-import type { Gap } from "../domain/verification.ts";
+import type { Evidence, Gap, VerificationResult } from "../domain/verification.ts";
+import type { Artifact } from "../domain/artifact.ts";
+import { AcceptanceEvaluator, type AcceptanceEvaluation } from "../acceptance/acceptance-evaluator.ts";
+import { MissionReadModel } from "./mission-read-model.ts";
 import type { DeliberationProvider, CompletionChallenge } from "../planning/deliberation-provider.ts";
 
 export interface ControllerCycleInput {
@@ -35,12 +38,14 @@ export class MissionController {
   private readonly projections?: MissionProjectionReader;
   private readonly deliberation?: DeliberationProvider;
   private readonly concurrencyRetries: number;
+  private readonly readModel: MissionReadModel;
 
   constructor(store: EventStore, dependencies: MissionControllerDependencies = {}) {
     this.store = store;
     this.projections = dependencies.projections;
     this.deliberation = dependencies.deliberation;
     this.concurrencyRetries = dependencies.concurrencyRetries ?? 5;
+    this.readModel = new MissionReadModel(store, dependencies.projections);
   }
 
   async emit(
@@ -75,8 +80,18 @@ export class MissionController {
   async createMission(missionId: string, userGoal: string) {
     if (await this.store.lastSequence(missionId) > 0) return this.state(missionId);
     await this.emit(missionId, "mission.created", { missionId, userGoal }, { type: "user" }, `mission-created:${missionId}`);
-    await this.emit(missionId, "mission.spec.revised", { revision: 1, objective: userGoal }, { type: "controller" }, `mission-spec:${missionId}:1`);
-    await this.emit(missionId, "acceptance.created", { revision: 1, requirements: [], requiredArtifacts: [], requiredValidations: [] }, { type: "controller" }, `acceptance:${missionId}:1`);
+    const state = await this.state(missionId);
+    if (this.deliberation?.interpretMission) {
+      const interpretation = await this.deliberation.interpretMission({ missionId, userGoal, state });
+      await this.emit(missionId, "mission.spec.revised", { revision: interpretation.missionSpec.revision, spec: interpretation.missionSpec, objective: interpretation.missionSpec.objective }, { type: "controller" }, `mission-spec:${missionId}:${interpretation.missionSpec.revision}`);
+      await this.emit(missionId, "acceptance.created", { revision: interpretation.acceptanceContract.revision, contract: interpretation.acceptanceContract }, { type: "controller" }, `acceptance:${missionId}:${interpretation.acceptanceContract.revision}`);
+    } else {
+      const now = new Date().toISOString();
+      const spec: MissionSpec = { missionId, revision: 1, objective: userGoal, requestedOutputs: [], constraints: [], preferences: [], sourceRefs: [], createdAt: now };
+      const contract: AcceptanceContract = { missionId, revision: 1, requirements: [], requiredArtifacts: [], requiredValidations: [], criticalFailureConditions: [], createdAt: now };
+      await this.emit(missionId, "mission.spec.revised", { revision: 1, spec, objective: userGoal }, { type: "controller" }, `mission-spec:${missionId}:1`);
+      await this.emit(missionId, "acceptance.created", { revision: 1, contract }, { type: "controller" }, `acceptance:${missionId}:1`);
+    }
     return this.state(missionId);
   }
 
@@ -84,6 +99,33 @@ export class MissionController {
     const hasReason = work.purpose === "exploration" || work.requirementRefs.length > 0 || work.gapRefs.length > 0 || work.inputArtifactRefs.length > 0 || work.capabilityNeedRefs.length > 0;
     if (!hasReason) throw new Error(`Orphan work item rejected: ${work.id}`);
     await this.emit(work.missionId, "work.created", { id: work.id, status: work.status, workstreamId: work.workstreamId, work }, { type: work.createdBy === "verifier" ? "verifier" : "planner" }, `work-created:${work.id}`);
+  }
+
+  async recordArtifact(missionId: string, artifact: Artifact): Promise<void> {
+    await this.emit(missionId, "artifact.created", { artifact }, { type: "worker" }, `artifact-created:${artifact.id}:${artifact.version}`);
+  }
+
+  async recordVerification(missionId: string, verification: VerificationResult): Promise<void> {
+    await this.emit(missionId, "verification.completed", { verification }, { type: "verifier" }, `verification:${verification.id}`);
+  }
+
+  async recordEvidence(missionId: string, evidence: Evidence): Promise<void> {
+    await this.emit(missionId, "evidence.created", { evidence }, { type: "verifier" }, `evidence:${evidence.id}`);
+  }
+
+  async setRequirementStatus(missionId: string, requirementId: string, status: Requirement["status"], evidenceRefs: string[] = []): Promise<void> {
+    await this.emit(missionId, "requirement.status.changed", { id: requirementId, status, evidenceRefs }, { type: "verifier" }, `requirement:${requirementId}:${status}:${[...evidenceRefs].sort().join(",")}`);
+  }
+
+  async acceptanceEvaluation(missionId: string): Promise<AcceptanceEvaluation> {
+    const [contract, requirements, artifacts, evidence, verifications] = await Promise.all([
+      this.readModel.acceptanceContract(missionId),
+      this.readModel.requirements(missionId),
+      this.readModel.artifacts(missionId),
+      this.readModel.evidence(missionId),
+      this.readModel.verifications(missionId)
+    ]);
+    return new AcceptanceEvaluator().evaluate({ contract, requirements, artifacts, evidence, verifications });
   }
 
   async steer(missionId: string, message: string) {
@@ -105,7 +147,9 @@ export class MissionController {
 
   async completeIfEligible(missionId: string): Promise<MissionState> {
     const state = await this.state(missionId);
-    if (!this.passesDeterministicCompletionGate(state)) return state;
+    if (!this.passesOperationalCompletionGate(state)) return state;
+    const acceptance = await this.acceptanceEvaluation(missionId);
+    if (!acceptance.satisfied) return state;
 
     if (this.deliberation) {
       const challenge = await this.deliberation.challengeCompletion({ state });
@@ -131,15 +175,15 @@ export class MissionController {
     let state = await this.state(input.missionId);
 
     if (this.deliberation && state.strategyRevision === null) {
-      const proposal = await this.deliberation.composeStrategy({ state, userGoal: await this.currentUserGoal(input.missionId) });
+      const proposal = await this.deliberation.composeStrategy({ state, userGoal: await this.readModel.userGoal(input.missionId), acceptanceContract: await this.readModel.acceptanceContract(input.missionId) });
       await this.emit(input.missionId, "strategy.created", proposal, { type: "planner" }, `strategy:${input.missionId}:${proposal.revision}`);
       state = await this.state(input.missionId);
     }
 
-    const openGaps = await this.listOpenGaps(input.missionId);
+    const openGaps = await this.readModel.openGaps(input.missionId);
     const blockingGap = openGaps.find(gap => gap.status === "open" && (gap.severity === "critical" || gap.severity === "major"));
     if (this.deliberation && blockingGap) {
-      const existingRepair = (await this.listWorkItems(input.missionId)).find(work =>
+      const existingRepair = (await this.readModel.workItems(input.missionId)).find(work =>
         work.gapRefs.includes(blockingGap.id) && !["succeeded", "invalidated", "superseded", "abandoned"].includes(work.status)
       );
       if (!existingRepair) {
@@ -157,7 +201,13 @@ export class MissionController {
     }
 
     if (this.deliberation && this.shouldPlanFrontier(state)) {
-      const frontier = await this.deliberation.planFrontier({ state, userGoal: await this.currentUserGoal(input.missionId), openGaps });
+      const frontier = await this.deliberation.planFrontier({
+        state,
+        userGoal: await this.readModel.userGoal(input.missionId),
+        openGaps,
+        acceptanceContract: await this.readModel.acceptanceContract(input.missionId),
+        requirements: await this.readModel.requirements(input.missionId)
+      });
       if (frontier.graphRevision > state.graphRevision) {
         await this.emit(input.missionId, "graph.revised", { revision: frontier.graphRevision }, { type: "planner" }, `graph:${input.missionId}:${frontier.graphRevision}`);
       }
@@ -185,7 +235,7 @@ export class MissionController {
     return projectMissionState(missionId, await this.store.list(missionId));
   }
 
-  private passesDeterministicCompletionGate(state: MissionState): boolean {
+  private passesOperationalCompletionGate(state: MissionState): boolean {
     if (state.status === "completed") return false;
     if (state.blockingGapIds.length > 0) return false;
     if (state.readyWorkItemIds.length > 0 || state.activeWorkItemIds.length > 0 || state.verifyingWorkItemIds.length > 0 || state.activeExecutionIds.length > 0) return false;
@@ -201,62 +251,6 @@ export class MissionController {
       && state.verifyingWorkItemIds.length === 0
       && state.activeExecutionIds.length === 0
       && state.finalArtifactRefs.length === 0;
-  }
-
-  private async currentUserGoal(missionId: string): Promise<string> {
-    const events = await this.store.list(missionId);
-    for (let i = events.length - 1; i >= 0; i--) {
-      const event = events[i]!;
-      if (event.type !== "mission.spec.revised") continue;
-      const objective = (event.payload as { objective?: string }).objective;
-      if (objective) return objective;
-    }
-    const created = events.find(event => event.type === "mission.created");
-    return (created?.payload as { userGoal?: string } | undefined)?.userGoal ?? "";
-  }
-
-  private async listWorkItems(missionId: string): Promise<WorkItem[]> {
-    if (this.projections) return this.projections.listWorkItems(missionId);
-    const map = new Map<string, WorkItem>();
-    for (const event of await this.store.list(missionId)) {
-      const payload = event.payload as any;
-      if (event.type === "work.created" && payload.work) map.set(payload.work.id, payload.work as WorkItem);
-      const work = payload.id ? map.get(payload.id) : undefined;
-      if (!work) continue;
-      if (event.type === "work.started") work.status = "running";
-      if (event.type === "work.updated") work.status = payload.status;
-      if (event.type === "work.completed") work.status = "succeeded";
-      if (event.type === "work.failed") work.status = "failed";
-      if (event.type === "work.blocked") work.status = "blocked";
-      if (event.type === "work.invalidated") work.status = "invalidated";
-    }
-    return [...map.values()];
-  }
-
-  private async listOpenGaps(missionId: string): Promise<Gap[]> {
-    if (this.projections) return (await this.projections.listGaps(missionId)).filter(gap => gap.status === "open" || gap.status === "working" || gap.status === "blocked");
-    const map = new Map<string, Gap>();
-    for (const event of await this.store.list(missionId)) {
-      const payload = event.payload as any;
-      if (event.type === "gap.opened") {
-        map.set(payload.id, {
-          id: payload.id,
-          missionId,
-          category: payload.category ?? "quality",
-          severity: payload.severity,
-          description: payload.description ?? "Unspecified mission gap",
-          findingRefs: payload.findingRefs ?? [],
-          requirementRefs: payload.requirementRefs ?? [],
-          artifactRefs: payload.artifactRefs ?? [],
-          status: "open",
-          openedAt: event.createdAt
-        });
-      }
-      if ((event.type === "gap.resolved" || event.type === "gap.accepted") && map.has(payload.id)) {
-        map.get(payload.id)!.status = event.type === "gap.resolved" ? "resolved" : "accepted";
-      }
-    }
-    return [...map.values()].filter(gap => gap.status === "open" || gap.status === "working" || gap.status === "blocked");
   }
 
   private decisionForDiagnosis(missionId: string, gap: Gap, diagnosis: { intervention: "retry" | "revise_work" | "replace_capability" | "replan_local" | "revise_strategy"; rootCause: string; confidence: number }): MissionDecision {

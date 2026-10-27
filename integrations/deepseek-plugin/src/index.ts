@@ -30,7 +30,7 @@ export function apply(ctx: Context): void {
   });
   const host = new DeepSeekHarnessAdapter(bindings);
   const deliberation = new HostDeliberationProvider(host);
-  const runtime = new MissionRuntime({ deliberation });
+  const runtime = new MissionRuntime({ deliberation, host });
 
   ctx.effect(() => () => runtime.close(), "mission-runtime.close()");
 
@@ -47,6 +47,7 @@ export function apply(ctx: Context): void {
       const env = await host.snapshotEnvironment();
       await runtime.controller.emit(missionId, "environment.snapshot.created", env, { type: "host" }, `environment:${missionId}:${env.revision}`);
       await runtime.controller.runControllerCycle({ missionId, trigger: "mission_created" });
+      runtime.orchestrator?.wake(missionId);
       await runtime.checkpoint(missionId);
       return missionView(runtime, missionId);
     }
@@ -75,6 +76,7 @@ export function apply(ctx: Context): void {
     async execute(args) {
       await runtime.controller.steer(args.mission_id, args.message);
       await runtime.controller.runControllerCycle({ missionId: args.mission_id, trigger: "user_steering" });
+      runtime.orchestrator?.wake(args.mission_id);
       await runtime.checkpoint(args.mission_id);
       return missionView(runtime, args.mission_id);
     }
@@ -89,6 +91,7 @@ export function apply(ctx: Context): void {
     output: stringOutput(),
     async execute(args) {
       const cycle = await runtime.controller.runControllerCycle({ missionId: args.mission_id, trigger: "manual" });
+      await runtime.orchestrator?.runUntilQuiescent(args.mission_id);
       await runtime.checkpoint(args.mission_id);
       return JSON.stringify({ cycle, ...(JSON.parse(await missionView(runtime, args.mission_id)) as object) });
     }
@@ -103,12 +106,17 @@ function stringOutput() {
 }
 
 async function missionView(runtime: MissionRuntime, missionId: string): Promise<string> {
-  const [state, work, gaps] = await Promise.all([
+  const [state, work, gaps, contract, requirements, artifacts, evidence, acceptance] = await Promise.all([
     runtime.controller.state(missionId),
     runtime.projections.listWorkItems(missionId),
-    runtime.projections.listGaps(missionId)
+    runtime.projections.listGaps(missionId),
+    runtime.projections.getAcceptanceContract(missionId),
+    runtime.projections.listRequirements(missionId),
+    runtime.projections.listArtifacts(missionId),
+    runtime.projections.listEvidence(missionId),
+    runtime.controller.acceptanceEvaluation(missionId)
   ]);
-  return JSON.stringify({ missionId, state, work, gaps });
+  return JSON.stringify({ missionId, state, acceptanceContract: contract, requirements, acceptance, work, gaps, artifacts, evidence });
 }
 
 function hostCapabilities(ctx: Context): CapabilityDescriptor[] {
