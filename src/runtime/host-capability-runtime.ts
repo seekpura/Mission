@@ -29,6 +29,10 @@ export class HostCapabilityRuntime implements CapabilityRuntime {
     }
   }
 
+  deactivateMissionCapability(missionId: string, capabilityId: string): void {
+    this.overlay.deactivate(missionId, capabilityId);
+  }
+
   async ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult> {
     const snapshot = await this.host.snapshotEnvironment();
     const effective = this.overlay.effective(need.missionId, snapshot.capabilities);
@@ -47,7 +51,11 @@ export class HostCapabilityRuntime implements CapabilityRuntime {
         capability: resolved.capability,
         source: "host-or-overlay",
         attempts: [],
-        reason: resolved.reason
+        reason: resolved.reason,
+        evidence: {
+          provenanceSource: resolved.capability.provenance?.source
+            ?? (resolved.capability.hostNative ? "host" : resolved.capability.scope === "trusted-cache" ? "trusted-cache" : "mission")
+        }
       };
     }
     return {
