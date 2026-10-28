@@ -17,9 +17,10 @@ jobs:
           node-version: 22
       - name: Apply patch and verify
         run: |
-          chmod +x scripts/apply-repair-enactment.sh scripts/fix-repair-existing-work.sh
+          chmod +x scripts/apply-repair-enactment.sh scripts/fix-repair-existing-work.sh scripts/fix-repair-enactment-test-evidence.sh
           ./scripts/apply-repair-enactment.sh
           ./scripts/fix-repair-existing-work.sh
+          ./scripts/fix-repair-enactment-test-evidence.sh
           npm test
           npm run smoke
           git diff --check
