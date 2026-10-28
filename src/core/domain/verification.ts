@@ -42,6 +42,14 @@ export interface VerificationCheckResult {
   evidenceRefs: string[];
 }
 
+export interface GapAssessment {
+  gapId: string;
+  status: "resolved" | "still_open" | "inconclusive";
+  detail?: string;
+  evidenceRefs: string[];
+  confidence: number;
+}
+
 export interface VerificationResult {
   id: string;
   missionId: string;
@@ -53,6 +61,7 @@ export interface VerificationResult {
   checkResults: VerificationCheckResult[];
   findingRefs: string[];
   evidenceRefs: string[];
+  gapAssessments?: GapAssessment[];
   createdAt: string;
 }
 

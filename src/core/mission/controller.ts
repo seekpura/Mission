@@ -4,7 +4,7 @@ import type { CapabilityNeed } from "../domain/capability.ts";
 import type { MissionDecision } from "../domain/decision.ts";
 import type { MissionEventType } from "../domain/event.ts";
 import type { MissionState } from "../domain/mission.ts";
-import type { Finding, Gap, VerificationResult } from "../domain/verification.ts";
+import type { Finding, Gap, GapAssessment, VerificationResult } from "../domain/verification.ts";
 import type { WorkItem } from "../domain/work-item.ts";
 import type { CapabilityRuntime } from "../capabilities/capability-coordinator.ts";
 import { ContextCompiler } from "../context/context-compiler.ts";
@@ -48,6 +48,23 @@ interface CycleView {
 interface WorkCapabilityResolution {
   ok: boolean;
   capabilityRefs: string[];
+}
+
+interface VerificationOutcome {
+  runId: string;
+  verificationId?: string;
+  artifactRef: string;
+  passed: boolean;
+  evidenceRefs: string[];
+  gapAssessments: GapAssessment[];
+}
+
+interface GapEvidenceAggregate {
+  statuses: Set<GapAssessment["status"]>;
+  verificationRefs: Set<string>;
+  artifactRefs: Set<string>;
+  evidenceRefs: Set<string>;
+  details: string[];
 }
 
 export class MissionController {
@@ -143,8 +160,29 @@ export class MissionController {
     }, { type: "verifier" }, `gap:${payload.id}`);
   }
 
-  async resolveGap(missionId: string, gapId: string) {
-    await this.emit(missionId, "gap.resolved", { id: gapId }, { type: "verifier" }, `gap-resolved:${gapId}`);
+  async resolveGap(
+    missionId: string,
+    gapId: string,
+    evidence?: {
+      verificationRefs?: string[];
+      artifactRefs?: string[];
+      evidenceRefs?: string[];
+      detail?: string;
+    }
+  ) {
+    await this.emit(
+      missionId,
+      "gap.resolved",
+      {
+        id: gapId,
+        ...(evidence?.verificationRefs ? { verificationRefs: [...evidence.verificationRefs] } : {}),
+        ...(evidence?.artifactRefs ? { artifactRefs: [...evidence.artifactRefs] } : {}),
+        ...(evidence?.evidenceRefs ? { evidenceRefs: [...evidence.evidenceRefs] } : {}),
+        ...(evidence?.detail ? { detail: evidence.detail } : {})
+      },
+      { type: "verifier" },
+      `gap-resolved:${gapId}`
+    );
   }
 
   async validateArtifact(missionId: string, artifactRef: string, final = false) {
@@ -459,6 +497,7 @@ export class MissionController {
 
       const missing = missingRequiredOutputs(work, outcome.artifacts);
       let verificationFailed = false;
+      const gapEvidence = new Map<string, GapEvidenceAggregate>();
       for (const expected of missing) {
         verificationFailed = true;
         await this.openGap(missionId, {
@@ -489,6 +528,7 @@ export class MissionController {
           for (const artifact of outcome.artifacts) {
             const verification = await this.verifyArtifact(missionId, work, artifact, attemptId);
             verifications.push(verification.runId);
+            mergeGapEvidence(gapEvidence, verification);
             if (!verification.passed) verificationFailed = true;
           }
         }
@@ -498,6 +538,7 @@ export class MissionController {
         await this.emit(missionId, "attempt.completed", { id: attemptId, status: "failed", failureCategory: "verification" }, { type: "controller" }, `attempt-completed:${attemptId}`);
         await this.emit(missionId, "work.failed", { id: work.id, attemptId, reason: "verification failed" }, { type: "controller" }, `work-failed:${attemptId}`);
       } else {
+        await this.resolveVerifiedGaps(missionId, work, gapEvidence);
         await this.emit(
           missionId,
           "attempt.completed",
@@ -616,7 +657,7 @@ export class MissionController {
     work: WorkItem,
     artifact: Artifact,
     attemptId: string
-  ): Promise<{ runId: string; passed: boolean }> {
+  ): Promise<VerificationOutcome> {
     const ref = artifactRef(artifact);
     const runId = `verification:${work.id}:${attemptId}:${artifact.id}:${artifact.version}`;
     await this.emit(
@@ -627,9 +668,19 @@ export class MissionController {
       `verification-started:${runId}`
     );
 
+    const verificationView = await this.cycleView(missionId);
+    const relevantGaps = work.gapRefs
+      .map(gapId => verificationView.journal.gaps.get(gapId))
+      .filter((gap): gap is Gap => Boolean(gap) && (gap!.status === "open" || gap!.status === "working" || gap!.status === "blocked"));
+    const allowedGapIds = new Set(relevantGaps.map(gap => gap.id));
+
     let raw: VerificationResult;
     try {
-      raw = await this.verifier!.verify(artifact);
+      raw = await this.verifier!.verify(artifact, {
+        state: verificationView.state,
+        workItem: work,
+        gaps: relevantGaps
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.emit(
@@ -648,10 +699,10 @@ export class MissionController {
         requirementRefs: work.requirementRefs,
         artifactRefs: [ref]
       });
-      return { runId, passed: false };
+      return { runId, artifactRef: ref, passed: false, evidenceRefs: [], gapAssessments: [] };
     }
 
-    const protocolError = verifierProtocolError(raw, missionId, ref);
+    const protocolError = verifierProtocolError(raw, missionId, ref, allowedGapIds);
     if (protocolError) {
       await this.emit(
         missionId,
@@ -669,7 +720,7 @@ export class MissionController {
         requirementRefs: work.requirementRefs,
         artifactRefs: [ref]
       });
-      return { runId, passed: false };
+      return { runId, artifactRef: ref, passed: false, evidenceRefs: [], gapAssessments: [] };
     }
 
     const generatedFindings = synthesizeFindings(work, raw);
@@ -684,7 +735,11 @@ export class MissionController {
     }
     const verification: VerificationResult = {
       ...raw,
-      findingRefs: unique([...raw.findingRefs, ...generatedFindings.map(finding => finding.id)])
+      findingRefs: unique([...raw.findingRefs, ...generatedFindings.map(finding => finding.id)]),
+      gapAssessments: (raw.gapAssessments ?? []).map(assessment => ({
+        ...assessment,
+        evidenceRefs: [...assessment.evidenceRefs]
+      }))
     };
     await this.emit(
       missionId,
@@ -697,7 +752,14 @@ export class MissionController {
     const passed = verification.overall === "pass" || verification.overall === "pass_with_warnings";
     if (passed) {
       await this.validateArtifact(missionId, ref, verification.level === "mission");
-      return { runId, passed: true };
+      return {
+        runId,
+        verificationId: verification.id,
+        artifactRef: ref,
+        passed: true,
+        evidenceRefs: [...verification.evidenceRefs],
+        gapAssessments: verification.gapAssessments ?? []
+      };
     }
 
     await this.emit(
@@ -717,7 +779,39 @@ export class MissionController {
       requirementRefs: work.requirementRefs,
       artifactRefs: [ref]
     });
-    return { runId, passed: false };
+    return {
+      runId,
+      verificationId: verification.id,
+      artifactRef: ref,
+      passed: false,
+      evidenceRefs: [...verification.evidenceRefs],
+      gapAssessments: verification.gapAssessments ?? []
+    };
+  }
+
+  private async resolveVerifiedGaps(
+    missionId: string,
+    work: WorkItem,
+    aggregate: Map<string, GapEvidenceAggregate>
+  ): Promise<void> {
+    if (work.gapRefs.length === 0 || aggregate.size === 0) return;
+    const view = await this.cycleView(missionId);
+
+    for (const gapId of work.gapRefs) {
+      const evidence = aggregate.get(gapId);
+      const current = view.journal.gaps.get(gapId);
+      if (!evidence || !current) continue;
+      if (current.status !== "open" && current.status !== "working" && current.status !== "blocked") continue;
+      if (!evidence.statuses.has("resolved")) continue;
+      if (evidence.statuses.has("still_open") || evidence.statuses.has("inconclusive")) continue;
+
+      await this.resolveGap(missionId, gapId, {
+        verificationRefs: [...evidence.verificationRefs],
+        artifactRefs: [...evidence.artifactRefs],
+        evidenceRefs: [...evidence.evidenceRefs],
+        detail: evidence.details.filter(Boolean).join(" | ") || "Independent verification explicitly assessed this gap as resolved."
+      });
+    }
   }
 
   private async emitExecutionTerminal(
@@ -917,7 +1011,12 @@ function missingRequiredOutputs(work: WorkItem, artifacts: Artifact[]) {
   ));
 }
 
-function verifierProtocolError(raw: unknown, missionId: string, artifactReference: string): string | null {
+function verifierProtocolError(
+  raw: unknown,
+  missionId: string,
+  artifactReference: string,
+  allowedGapIds: Set<string>
+): string | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return `Verifier returned malformed result for ${artifactReference}`;
   }
@@ -941,7 +1040,57 @@ function verifierProtocolError(raw: unknown, missionId: string, artifactReferenc
   if (!["pass", "pass_with_warnings", "fail", "inconclusive"].includes(candidate.overall ?? "")) {
     return `Verifier returned unsupported overall status for ${artifactReference}`;
   }
+  if (candidate.gapAssessments !== undefined) {
+    if (!Array.isArray(candidate.gapAssessments)) {
+      return `Verifier returned malformed gap assessments for ${artifactReference}`;
+    }
+    for (const assessment of candidate.gapAssessments) {
+      if (!assessment || typeof assessment !== "object") {
+        return `Verifier returned malformed gap assessment for ${artifactReference}`;
+      }
+      if (typeof assessment.gapId !== "string" || !allowedGapIds.has(assessment.gapId)) {
+        return `Verifier assessed an unrelated or closed gap for ${artifactReference}`;
+      }
+      if (!["resolved", "still_open", "inconclusive"].includes(assessment.status)) {
+        return `Verifier returned unsupported gap assessment status for ${artifactReference}`;
+      }
+      if (!Array.isArray(assessment.evidenceRefs) || assessment.evidenceRefs.some(ref => typeof ref !== "string")) {
+        return `Verifier returned malformed gap evidence refs for ${artifactReference}`;
+      }
+      if (typeof assessment.confidence !== "number" || !Number.isFinite(assessment.confidence) || assessment.confidence < 0 || assessment.confidence > 1) {
+        return `Verifier returned invalid gap assessment confidence for ${artifactReference}`;
+      }
+      if (assessment.detail !== undefined && typeof assessment.detail !== "string") {
+        return `Verifier returned invalid gap assessment detail for ${artifactReference}`;
+      }
+    }
+  }
   return null;
+}
+
+function mergeGapEvidence(
+  aggregate: Map<string, GapEvidenceAggregate>,
+  verification: VerificationOutcome
+): void {
+  for (const assessment of verification.gapAssessments) {
+    let current = aggregate.get(assessment.gapId);
+    if (!current) {
+      current = {
+        statuses: new Set(),
+        verificationRefs: new Set(),
+        artifactRefs: new Set(),
+        evidenceRefs: new Set(),
+        details: []
+      };
+      aggregate.set(assessment.gapId, current);
+    }
+    current.statuses.add(assessment.status);
+    if (verification.verificationId) current.verificationRefs.add(verification.verificationId);
+    current.artifactRefs.add(verification.artifactRef);
+    for (const ref of verification.evidenceRefs) current.evidenceRefs.add(ref);
+    for (const ref of assessment.evidenceRefs) current.evidenceRefs.add(ref);
+    if (assessment.detail) current.details.push(assessment.detail);
+  }
 }
 
 function synthesizeFindings(work: WorkItem, verification: VerificationResult): Finding[] {
