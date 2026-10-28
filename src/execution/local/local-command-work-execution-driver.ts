@@ -31,11 +31,16 @@ export interface TrustedLocalCommandPlanner {
  */
 export class LocalCommandWorkExecutionDriver implements WorkExecutionDriver {
   readonly id = "local-command-work-execution-driver";
+  private readonly backend: LocalExecutionBackend;
+  private readonly planner: TrustedLocalCommandPlanner;
 
   constructor(
-    private readonly backend: LocalExecutionBackend,
-    private readonly planner: TrustedLocalCommandPlanner
-  ) {}
+    backend: LocalExecutionBackend,
+    planner: TrustedLocalCommandPlanner
+  ) {
+    this.backend = backend;
+    this.planner = planner;
+  }
 
   async execute(input: WorkExecutionInput): Promise<WorkExecutionOutcome> {
     const plan = await this.planner.plan(input);
