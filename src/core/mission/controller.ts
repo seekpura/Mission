@@ -13,6 +13,7 @@ import { AcceptanceEvaluator, type AcceptanceEvaluation } from "../acceptance/ac
 import { MissionReadModel } from "./mission-read-model.ts";
 import type { DeliberationProvider, CompletionChallenge, GapDiagnosis } from "../planning/deliberation-provider.ts";
 import { normalizeGapDiagnosis } from "../planning/repair-scope-policy.ts";
+import { RepairEnactmentPolicy } from "../planning/repair-enactment-policy.ts";
 
 export interface ControllerCycleInput {
   missionId: string;
@@ -40,6 +41,7 @@ export class MissionController {
   private readonly deliberation?: DeliberationProvider;
   private readonly concurrencyRetries: number;
   private readonly readModel: MissionReadModel;
+  private readonly repairEnactment = new RepairEnactmentPolicy();
 
   constructor(store: EventStore, dependencies: MissionControllerDependencies = {}) {
     this.store = store;
@@ -187,7 +189,7 @@ export class MissionController {
       const allWorkItems = await this.readModel.workItems(input.missionId);
       const relatedWorkItems = allWorkItems.filter(work => work.gapRefs.includes(blockingGap.id));
       const existingRepair = relatedWorkItems.find(work =>
-        !["succeeded", "invalidated", "superseded", "abandoned"].includes(work.status)
+        work.purpose === "repair" && !["succeeded", "invalidated", "superseded", "abandoned"].includes(work.status)
       );
       if (!existingRepair) {
         const findingIds = new Set(blockingGap.findingRefs);
@@ -241,10 +243,42 @@ export class MissionController {
             workItemsCreated.push(work.id);
           }
         } else {
-          const repair = this.repairWorkItem(state, blockingGap, diagnosis, priorRepairCount + 1);
+          const relatedWorkIds = new Set(relatedWorkItems.map(work => work.id));
+          const [invocationReceipts, capabilityNeeds] = await Promise.all([
+            this.readModel.invocationReceipts(input.missionId),
+            this.readModel.capabilityNeeds(input.missionId)
+          ]);
+          const enactment = this.repairEnactment.plan({
+            missionId: input.missionId,
+            gap: blockingGap,
+            diagnosis,
+            invocationReceipts: invocationReceipts.filter(receipt => relatedWorkIds.has(receipt.workItemId)),
+            capabilityNeeds,
+            repairSequence: priorRepairCount + 1
+          });
+          if (enactment.failedCapabilityRef) {
+            await this.emit(input.missionId, "capability.invalidated", {
+              id: enactment.failedCapabilityRef,
+              reason: diagnosis.rootCause,
+              gapId: blockingGap.id,
+              decisionId: decision.id
+            }, { type: "controller" }, `capability-invalidated:${blockingGap.id}:${enactment.failedCapabilityRef}`);
+          }
+          if (enactment.replacementNeed) {
+            await this.emit(input.missionId, "capability.need.created", { need: enactment.replacementNeed }, { type: "controller" }, `capability-need:${enactment.replacementNeed.id}`);
+          }
+          const repair = this.repairWorkItem(
+            state,
+            blockingGap,
+            diagnosis,
+            priorRepairCount + 1,
+            enactment.executionConstraints,
+            enactment.replacementNeed?.id
+          );
           await this.proposeWork(repair);
           workItemsCreated.push(repair.id);
         }
+        await this.emit(input.missionId, "decision.applied", { id: decision.id }, { type: "controller" }, `decision-applied:${decision.id}`);
         state = await this.state(input.missionId);
       }
     }
@@ -329,7 +363,14 @@ export class MissionController {
     };
   }
 
-  private repairWorkItem(state: MissionState, gap: Gap, diagnosis: GapDiagnosis, sequence: number): WorkItem {
+  private repairWorkItem(
+    state: MissionState,
+    gap: Gap,
+    diagnosis: GapDiagnosis,
+    sequence: number,
+    executionConstraints?: import("../domain/work-item.ts").WorkExecutionConstraints,
+    replacementNeedRef?: string
+  ): WorkItem {
     const now = new Date().toISOString();
     const id = sequence <= 1 ? `repair-${gap.id}` : `repair-${gap.id}-${sequence}`;
     return {
@@ -343,7 +384,8 @@ export class MissionController {
       inputArtifactRefs: [...gap.artifactRefs],
       expectedOutputs: [],
       localAcceptanceCriteria: [{ id: `resolve-${gap.id}`, description: `Gap ${gap.id} is resolved and independently verified`, priority: "required" }],
-      capabilityNeedRefs: [],
+      capabilityNeedRefs: replacementNeedRef ? [replacementNeedRef] : [],
+      executionConstraints,
       priority: gap.severity === "critical" ? 100 : gap.severity === "major" ? 80 : 50,
       graphRevision: state.graphRevision,
       createdBy: "replanner",

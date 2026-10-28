@@ -69,19 +69,24 @@ export class WorkExecutionRouter {
   }
 
   select(work: WorkItem, capabilities: CapabilityDescriptor[]): ExecutionRoute {
-    const single = capabilities.length === 1 ? capabilities[0] : undefined;
+    const excluded = new Set(work.executionConstraints?.excludeCapabilityRefs ?? []);
+    const usable = capabilities.filter(capability => !excluded.has(capability.id));
+    const single = usable.length === 1 ? usable[0] : undefined;
+    const alternatives: ExecutionRoute[] = [];
     if (single && single.hostNative && ["tool", "mcp"].includes(single.kind) && single.metadata?.executionMode !== "agent-assisted") {
-      return routeFor("host_capability", single, `Single host-native ${single.kind} can directly satisfy the work`);
+      alternatives.push(routeFor("host_capability", single, `Single host-native ${single.kind} can directly satisfy the work`));
     }
     if (single && single.hostNative && single.kind === "workflow" && single.metadata?.executionMode === "direct") {
-      return routeFor("host_capability", single, "Host workflow explicitly declares direct execution");
+      alternatives.push(routeFor("host_capability", single, "Host workflow explicitly declares direct execution"));
     }
     if (single && !single.hostNative && single.kind === "cli" && single.invocationRef && single.metadata?.directProtocol === "worker-envelope-stdio") {
-      return routeFor("local_cli", single, "Mission-local CLI declares the worker-envelope stdio protocol");
+      alternatives.push(routeFor("local_cli", single, "Mission-local CLI declares the worker-envelope stdio protocol"));
     }
-    return routeFor("host_agent", undefined, capabilities.length > 1
+    alternatives.push(routeFor("host_agent", single?.kind === "agent" ? single : undefined, usable.length > 1
       ? "Multiple capabilities require agent composition"
-      : single ? `${single.kind} capability requires agent-assisted execution` : "No direct capability route is available");
+      : single ? `${single.kind} capability requires agent-assisted execution` : "No direct capability route is available"));
+    const avoided = new Set(work.executionConstraints?.avoidRouteKinds ?? []);
+    return alternatives.find(route => !avoided.has(route.kind)) ?? alternatives[alternatives.length - 1]!;
   }
 
   async cancel(executionId: string): Promise<boolean> {

@@ -82,6 +82,7 @@ export interface ExecutionResult {
   executionId: string;
   state: "succeeded" | "failed" | "partial" | "cancelled" | "timed_out" | "lost";
   exitCode?: number;
+  executorRef?: string;
   producedFiles: ProducedFile[];
   committedArtifactRefs: string[];
   runtimeObservationRef?: string;

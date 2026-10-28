@@ -1,4 +1,6 @@
 import type { Artifact } from "../domain/artifact.ts";
+import type { CapabilityNeed } from "../domain/capability.ts";
+import type { InvocationReceipt } from "../domain/invocation.ts";
 import type { AcceptanceContract, Requirement } from "../domain/mission.ts";
 import type { Evidence, Finding, Gap, VerificationResult } from "../domain/verification.ts";
 import type { WorkItem } from "../domain/work-item.ts";
@@ -131,6 +133,29 @@ export class MissionReadModel {
   async evidence(missionId: string): Promise<Evidence[]> {
     if (this.projections) return this.projections.listEvidence(missionId);
     return (await this.store.list(missionId)).filter(e => e.type === "evidence.created").map(e => ((e.payload as any).evidence ?? e.payload) as Evidence);
+  }
+
+  async invocationReceipts(missionId: string): Promise<InvocationReceipt[]> {
+    if (this.projections) return this.projections.listInvocationReceipts(missionId);
+    return (await this.store.list(missionId))
+      .filter(event => event.type === "execution.invocation.recorded")
+      .map(event => (((event.payload as any).receipt ?? event.payload) as InvocationReceipt));
+  }
+
+  async capabilityNeeds(missionId: string): Promise<CapabilityNeed[]> {
+    if (this.projections) return this.projections.listCapabilityNeeds(missionId);
+    const needs = new Map<string, CapabilityNeed>();
+    for (const event of await this.store.list(missionId)) {
+      const payload = event.payload as any;
+      if (event.type === "capability.need.created") {
+        const need = (payload.need ?? payload) as CapabilityNeed;
+        needs.set(need.id, { ...need, missionId, status: need.status ?? "checking-installed" });
+      }
+      if (event.type === "capability.need.updated" && payload.id && needs.has(payload.id)) {
+        Object.assign(needs.get(payload.id)!, { status: payload.status, resolvedCapabilityRef: payload.resolvedCapabilityRef });
+      }
+    }
+    return [...needs.values()];
   }
 
   async verifications(missionId: string): Promise<VerificationResult[]> {

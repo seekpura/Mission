@@ -151,7 +151,10 @@ export class MissionOrchestrator {
       permissionEnvelope: { filesystemRead: [workspace.root], filesystemWrite: [workspace.root], network: "allow", networkHosts: [], allowedEnvKeys: [], subprocess: true, packageInstall: false, secrets: "deny", hostMutation: false },
       timeoutPolicy: { hardTimeoutMs: 30 * 60 * 1000 },
       retryPolicy: { runtimeRetries: 0 },
-      sideEffectPolicy: { externalWrites: "approval", destructiveWrites: "approval", irreversibleActions: "approval", idempotencyRequired: true }
+      sideEffectPolicy: { externalWrites: "approval", destructiveWrites: "approval", irreversibleActions: "approval", idempotencyRequired: true },
+      preferredExecutorRefs: work.assignedExecutorId ? [work.assignedExecutorId] : undefined,
+      excludeExecutorRefs: work.executionConstraints?.excludeExecutorRefs,
+      forceFreshAgent: work.executionConstraints?.forceFreshAgent
     };
 
     try {
@@ -171,14 +174,14 @@ export class MissionOrchestrator {
       writeExecutionRecoveryManifest(workspace.root, {
         schemaVersion: 1, missionId: work.missionId, workItemId: work.id, attemptId, executionId,
         route: selectedRoute.kind, routeReason: selectedRoute.reason, capabilityRefs: capabilities.map(capability => capability.id),
-        targetRef: selectedRoute.capability?.id, approvalRef, result: result.state, sideEffects: result.sideEffects, envelope,
+        targetRef: result.executorRef ?? selectedRoute.capability?.id, approvalRef, result: result.state, sideEffects: result.sideEffects, envelope,
         startedAt: result.startedAt, endedAt: result.endedAt, writtenAt: new Date().toISOString()
       });
       const receipt: InvocationReceipt = {
         id: `invocation-${executionId}`,
         missionId: work.missionId, workItemId: work.id, attemptId, executionId,
         route: selectedRoute.kind, routeReason: selectedRoute.reason, capabilityRefs: capabilities.map(capability => capability.id),
-        targetRef: selectedRoute.capability?.id, idempotencyKey: `${work.missionId}:${work.id}:${attemptId}`, approvalRef,
+        targetRef: result.executorRef ?? selectedRoute.capability?.id, idempotencyKey: `${work.missionId}:${work.id}:${attemptId}`, approvalRef,
         sideEffects: result.sideEffects, result: result.state, startedAt: result.startedAt, endedAt: result.endedAt, createdAt: new Date().toISOString()
       };
       await this.controller.emit(work.missionId, "execution.invocation.recorded", { receipt }, { type: "system" }, `invocation:${executionId}`);

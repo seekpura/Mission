@@ -31,7 +31,10 @@ export class HostAgentExecutionBackend {
       workItemId: handle.request.workItemId,
       context: handle.request.context,
       allowedCapabilityRefs: handle.request.capabilityRefs,
-      workspaceRoot: handle.request.workspaceRoot
+      workspaceRoot: handle.request.workspaceRoot,
+      preferredExecutorRefs: handle.request.preferredExecutorRefs,
+      excludeExecutorRefs: handle.request.excludeExecutorRefs,
+      forceFreshAgent: handle.request.forceFreshAgent
     });
     this.active.set(handle.id, this.observe(handle));
   }
@@ -67,6 +70,7 @@ export class HostAgentExecutionBackend {
     return {
       executionId: handle.id,
       state: this.cancelled.has(handle.id) ? "cancelled" : failure ? "failed" : "succeeded",
+      executorRef: handle.agent.nativeRef ?? handle.agent.id,
       producedFiles: [],
       committedArtifactRefs: [],
       runtimeObservationRef: completedPayload === undefined ? undefined : JSON.stringify(completedPayload),
