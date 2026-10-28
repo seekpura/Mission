@@ -115,14 +115,14 @@ test("durable read models isolate identical Mission-local ids by mission_id", as
     const workRows = database.db.prepare(
       "SELECT mission_id, id FROM rm_work_items WHERE id = ? ORDER BY mission_id"
     ).all("shared-work") as Array<{ mission_id: string; id: string }>;
-    assert.deepEqual(workRows, [
+    assert.deepEqual(workRows.map(row => ({ mission_id: row.mission_id, id: row.id })), [
       { mission_id: "mission-a", id: "shared-work" },
       { mission_id: "mission-b", id: "shared-work" }
     ]);
     const artifactRows = database.db.prepare(
       "SELECT mission_id, id, version FROM rm_artifacts WHERE id = ? AND version = 1 ORDER BY mission_id"
     ).all("deliverable") as Array<{ mission_id: string; id: string; version: number }>;
-    assert.deepEqual(artifactRows, [
+    assert.deepEqual(artifactRows.map(row => ({ mission_id: row.mission_id, id: row.id, version: row.version })), [
       { mission_id: "mission-a", id: "deliverable", version: 1 },
       { mission_id: "mission-b", id: "deliverable", version: 1 }
     ]);
