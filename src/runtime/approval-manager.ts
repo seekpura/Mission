@@ -33,6 +33,7 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
   private readonly store: EventStore;
   private readonly timeoutMs: number;
   private readonly pending = new Map<string, PendingApproval>();
+  private disposed = false;
 
   constructor(store: EventStore, options: RuntimeApprovalManagerOptions = {}) {
     this.store = store;
@@ -79,6 +80,7 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
       reason?: string;
     }
   ): Promise<RuntimeApprovalRecord> {
+    if (this.disposed) throw new Error("RuntimeApprovalManager is disposed");
     const current = (await this.list(missionId)).find(record => record.id === approvalId);
     if (!current) throw new Error(`Unknown approval request: ${approvalId}`);
     if (current.status !== "pending") return current;
@@ -170,6 +172,16 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
     return stale.length;
   }
 
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const [id, pending] of this.pending) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.resolve({ approved: false, scope: "once" });
+      this.pending.delete(id);
+    }
+  }
+
   private async createAndWait(input: {
     missionId: string;
     kind: RuntimeApprovalKind;
@@ -178,6 +190,7 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
     details: Record<string, unknown>;
     timeoutReason: string;
   }): Promise<ApprovalResult> {
+    if (this.disposed) return { approved: false, scope: "once" };
     const id = `approval:${randomUUID()}`;
     const requestedAt = new Date().toISOString();
     const record: RuntimeApprovalRecord = {
@@ -204,13 +217,15 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
       throw error;
     }
 
-    if (this.pending.has(id)) {
+    if (this.pending.has(id) && !this.disposed) {
       pending.timer = setTimeout(() => {
         void this.decide(record.missionId, record.id, {
           approved: false,
           scope: "once",
           actor: "system:approval-timeout",
           reason: input.timeoutReason
+        }).catch(error => {
+          if (!this.disposed) console.error(`[RuntimeApprovalManager] timeout decision failed: ${error instanceof Error ? error.message : String(error)}`);
         });
       }, this.timeoutMs);
     }
