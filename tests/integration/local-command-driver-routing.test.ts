@@ -143,7 +143,12 @@ test("LocalCommandWorkExecutionDriver rejects plans without explicit trusted-hos
 
 class RecordingDriver implements WorkExecutionDriver {
   calls = 0;
-  constructor(readonly id: string) {}
+  readonly id: string;
+
+  constructor(id: string) {
+    this.id = id;
+  }
+
   async execute(input: WorkExecutionInput): Promise<WorkExecutionOutcome> {
     this.calls += 1;
     const now = new Date().toISOString();
