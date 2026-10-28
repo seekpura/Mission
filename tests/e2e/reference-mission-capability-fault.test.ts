@@ -42,7 +42,8 @@ function work(
   missionId: string,
   id: string,
   gapRefs: string[],
-  capabilityNeedRefs: string[]
+  capabilityNeedRefs: string[],
+  supersedesWorkItemRefs: string[] = []
 ): WorkItem {
   const now = new Date().toISOString();
   return {
@@ -63,6 +64,7 @@ function work(
       priority: "critical"
     }],
     capabilityNeedRefs: [...capabilityNeedRefs],
+    ...(supersedesWorkItemRefs.length > 0 ? { supersedesWorkItemRefs: [...supersedesWorkItemRefs] } : {}),
     priority: 100,
     graphRevision: 0,
     createdBy: "planner",
@@ -123,7 +125,8 @@ class CapabilityFallbackPlanner implements DeliberationProvider {
         input.state.missionId,
         "keynote-safe-fallback",
         input.openGaps.map(gap => gap.id).sort(),
-        []
+        [],
+        ["keynote-with-motion"]
       )]
     };
   }
@@ -259,7 +262,11 @@ test("Reference Mission replans around failed capability acquisition instead of 
     assert.equal(state.status, "completed");
     assert.deepEqual(state.blockingGapIds, []);
     assert.deepEqual(state.openGapIds, []);
+    assert.deepEqual(state.blockedWorkItemIds, []);
     assert.deepEqual(state.finalArtifactRefs, ["keynote@1"]);
+    const completedJournal = await reader.journal(missionId);
+    assert.equal(completedJournal.workItems.get("keynote-with-motion")?.status, "superseded");
+    assert.equal(completedJournal.workItems.get("keynote-safe-fallback")?.status, "succeeded");
 
     const after = await events.list(missionId);
     const blockedIndex = after.findIndex(event => event.type === "work.blocked");
@@ -268,13 +275,20 @@ test("Reference Mission replans around failed capability acquisition instead of 
     const fallbackIndex = after.findIndex((event, index) =>
       index > diagnosisIndex && event.type === "work.created" && (event.payload as { id?: string }).id === "keynote-safe-fallback"
     );
-    const resolvedIndex = after.findIndex((event, index) => index > fallbackIndex && event.type === "gap.resolved");
+    const supersededIndex = after.findIndex((event, index) =>
+      index > fallbackIndex && event.type === "work.updated" &&
+      (event.payload as { id?: string; status?: string; supersededByWorkItemId?: string }).id === "keynote-with-motion" &&
+      (event.payload as { status?: string }).status === "superseded" &&
+      (event.payload as { supersededByWorkItemId?: string }).supersededByWorkItemId === "keynote-safe-fallback"
+    );
+    const resolvedIndex = after.findIndex((event, index) => index > supersededIndex && event.type === "gap.resolved");
     const completedIndex = after.findIndex((event, index) => index > resolvedIndex && event.type === "mission.completed");
     assert.ok(blockedIndex >= 0);
     assert.ok(gapIndex > blockedIndex);
     assert.ok(diagnosisIndex > gapIndex);
     assert.ok(fallbackIndex > diagnosisIndex);
-    assert.ok(resolvedIndex > fallbackIndex);
+    assert.ok(supersededIndex > fallbackIndex);
+    assert.ok(resolvedIndex > supersededIndex);
     assert.ok(completedIndex > resolvedIndex);
   } finally {
     database.close();
