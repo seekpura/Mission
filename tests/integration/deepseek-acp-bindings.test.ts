@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -6,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { DeepSeekHarnessAdapter } from "../../src/hosts/deepseek/deepseek-host-adapter.ts";
 import { DeepSeekAcpProcessBindings } from "../../src/hosts/deepseek/acp-process-bindings.ts";
+import type { HostMcpServer } from "../../src/hosts/deepseek/host-adapter.ts";
 
 const fixture = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -109,6 +111,91 @@ test("DeepSeek ACP binding resumes the same native session after the original AC
     assert.equal((resumedEvents[0]?.payload as { resumed?: boolean })?.resumed, true);
     assert.equal(resumedEvents.some(event => event.type === "message"), true);
     assert.equal(resumedEvents.some(event => event.type === "tool"), true);
+    assert.equal(resumedEvents.at(-1)?.type, "completed");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("DeepSeek ACP binding forwards the exact trusted MCP declarations on session new and resume", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "mission-dsh-mcp-"));
+  const approvalHandler = async () => ({ approved: true, scope: "once" as const });
+  const mcpServers: HostMcpServer[] = [
+    {
+      transport: "stdio",
+      name: "local_tools",
+      command: process.execPath,
+      args: ["/absolute/fake-mcp-server.mjs", "--fixture"],
+      env: [{ name: "MCP_TEST_TOKEN", value: "fixture-secret" }]
+    },
+    {
+      transport: "http",
+      name: "remote_tools",
+      url: "https://mcp.example.test/api",
+      headers: [{ name: "Authorization", value: "Bearer fixture-secret" }]
+    }
+  ];
+  const expectedWire = [
+    {
+      name: "local_tools",
+      command: process.execPath,
+      args: ["/absolute/fake-mcp-server.mjs", "--fixture"],
+      env: [{ name: "MCP_TEST_TOKEN", value: "fixture-secret" }]
+    },
+    {
+      type: "http",
+      name: "remote_tools",
+      url: "https://mcp.example.test/api",
+      headers: [{ name: "Authorization", value: "Bearer fixture-secret" }]
+    }
+  ];
+
+  try {
+    const firstAdapter = new DeepSeekHarnessAdapter(new DeepSeekAcpProcessBindings({
+      binary: process.execPath,
+      argsPrefix: [fixture],
+      approvalHandler
+    }));
+    const handle = await firstAdapter.createAgent({
+      missionId: "mission-acp-mcp",
+      workItemId: "work-mcp",
+      context: { disconnectForRecovery: true, objective: "exercise MCP delivery" },
+      allowedCapabilityRefs: ["trusted-mcp:local-tools", "trusted-mcp:remote-tools"],
+      workspaceRoot: workspace,
+      mcpServers
+    });
+
+    const firstEvents = [];
+    for await (const event of firstAdapter.observeAgent(handle)) firstEvents.push(event);
+    assert.equal(firstEvents.at(-1)?.type, "failed");
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(workspace, ".fake-acp-last-new.json"), "utf8")),
+      expectedWire
+    );
+
+    const secondAdapter = new DeepSeekHarnessAdapter(new DeepSeekAcpProcessBindings({
+      binary: process.execPath,
+      argsPrefix: [fixture],
+      approvalHandler
+    }));
+    const resumed = await secondAdapter.resumeAgent({
+      missionId: "mission-acp-mcp",
+      workItemId: "work-mcp",
+      handleId: handle.id,
+      nativeRef: handle.nativeRef!,
+      context: { disconnectForRecovery: true, objective: "exercise MCP delivery" },
+      allowedCapabilityRefs: ["trusted-mcp:local-tools", "trusted-mcp:remote-tools"],
+      workspaceRoot: workspace,
+      mcpServers
+    });
+    assert.equal(resumed.status, "resumed");
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(workspace, ".fake-acp-last-resume.json"), "utf8")),
+      expectedWire
+    );
+    if (resumed.status !== "resumed") return;
+    const resumedEvents = [];
+    for await (const event of secondAdapter.observeAgent(resumed.handle)) resumedEvents.push(event);
     assert.equal(resumedEvents.at(-1)?.type, "completed");
   } finally {
     await rm(workspace, { recursive: true, force: true });
