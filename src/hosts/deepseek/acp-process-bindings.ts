@@ -17,7 +17,8 @@ import type {
   HostAgentResumeResult,
   HostCapabilityInvocation,
   HostCapabilityResult,
-  HostDescriptor
+  HostDescriptor,
+  HostMcpServer
 } from "./host-adapter.ts";
 import type { DeepSeekBindings } from "./deepseek-host-adapter.ts";
 
@@ -103,7 +104,10 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
 
     try {
       const initialized = await initialize(connection);
-      const session = await connection.agent.buildSession(workspaceRoot).start();
+      const session = await connection.agent.buildSession({
+        cwd: workspaceRoot,
+        mcpServers: toAcpMcpServers(request.mcpServers ?? [])
+      }).start();
       const sessionId = String(session.sessionId);
       const handle: HostAgentHandle = { id: randomUUID(), nativeRef: sessionId };
       const running: RunningAgent = {
@@ -126,7 +130,8 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
         nativeSessionId: sessionId,
         workspaceRoot,
         transport: "acp-v1",
-        resumed: false
+        resumed: false,
+        mcpServerNames: (request.mcpServers ?? []).map(server => server.name)
       }));
 
       void this.runNewSessionPrompt(running, compilePrompt(request));
@@ -172,7 +177,7 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
         await connection.agent.request(acp.methods.agent.session.resume, {
           sessionId: request.nativeRef,
           cwd: workspaceRoot,
-          mcpServers: []
+          mcpServers: toAcpMcpServers(request.mcpServers ?? [])
         });
       } catch (error) {
         connection.close(error);
@@ -207,7 +212,8 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
         nativeSessionId: request.nativeRef,
         workspaceRoot,
         transport: "acp-v1",
-        resumed: true
+        resumed: true,
+        mcpServerNames: (request.mcpServers ?? []).map(server => server.name)
       }));
 
       void this.runResumedSessionPrompt(running, compileRecoveryPrompt(request));
@@ -443,6 +449,22 @@ function supportsSessionCapability(
 ): boolean {
   const sessionCapabilities = initialized.agentCapabilities.sessionCapabilities;
   return Boolean(sessionCapabilities && capability in sessionCapabilities);
+}
+
+function toAcpMcpServers(servers: readonly HostMcpServer[]): acp.McpServer[] {
+  return servers.map(server => server.transport === "stdio"
+    ? {
+        name: server.name,
+        command: server.command,
+        args: [...server.args],
+        env: server.env.map(entry => ({ name: entry.name, value: entry.value }))
+      }
+    : {
+        type: "http" as const,
+        name: server.name,
+        url: server.url,
+        headers: server.headers.map(entry => ({ name: entry.name, value: entry.value }))
+      });
 }
 
 function compilePrompt(request: AgentCreateRequest): string {
