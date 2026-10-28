@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,6 +68,23 @@ class WritingHost implements HostAdapter {
   }
   async invokeHostCapability(_request: HostCapabilityInvocation): Promise<HostCapabilityResult> { return { ok: true }; }
   async requestUserApproval(_request: ApprovalRequest): Promise<ApprovalResult> { return { approved: true, scope: "once" }; }
+}
+
+class HangingHost extends WritingHost {
+  cancelled = false;
+
+  constructor() {
+    super(() => ({ outputs: [] }));
+  }
+
+  override async cancelAgent(_handle: HostAgentHandle): Promise<void> {
+    this.cancelled = true;
+  }
+
+  override async *observeAgent(_handle: HostAgentHandle): AsyncIterable<HostAgentEvent> {
+    yield { type: "started", payload: {}, at: new Date().toISOString() };
+    await new Promise<void>(() => {});
+  }
 }
 
 function executionInput() {
@@ -198,6 +215,51 @@ test("HostAgentWorkExecutionDriver rejects output paths that escape the Mission 
     );
 
     await assert.rejects(driver.execute(executionInput()), /escapes workspace/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("HostAgentWorkExecutionDriver rejects symlink outputs that resolve outside the workspace", {
+  skip: process.platform === "win32"
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), "mission-host-driver-symlink-"));
+  try {
+    const host = new WritingHost(workspaceRoot => {
+      const outside = join(root, "outside.txt");
+      writeFileSync(outside, "outside", "utf8");
+      symlinkSync(outside, join(workspaceRoot, "linked.txt"));
+      return {
+        outputs: [{ path: "linked.txt", logicalName: "deliverable", type: "file" }]
+      };
+    });
+    const driver = new HostAgentWorkExecutionDriver(
+      host,
+      new WorkspaceManager(join(root, "workspaces")),
+      new FileArtifactStore(join(root, "artifact-store"))
+    );
+
+    await assert.rejects(driver.execute(executionInput()), /escapes workspace/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("HostAgentWorkExecutionDriver cancels and returns timed_out when a host never terminates", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mission-host-driver-timeout-"));
+  try {
+    const host = new HangingHost();
+    const driver = new HostAgentWorkExecutionDriver(
+      host,
+      new WorkspaceManager(join(root, "workspaces")),
+      new FileArtifactStore(join(root, "artifact-store")),
+      { hardTimeoutMs: 1_000 }
+    );
+
+    const outcome = await driver.execute(executionInput());
+    assert.equal(outcome.result.state, "timed_out");
+    assert.equal(host.cancelled, true);
+    assert.deepEqual(outcome.artifacts, []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
