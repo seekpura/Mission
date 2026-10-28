@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WorkItem } from "../../core/domain/work-item.ts";
+import type { Artifact } from "../../core/domain/artifact.ts";
 import type { CapabilityDescriptor } from "../../core/domain/capability.ts";
 import type { MissionController } from "../../core/mission/controller.ts";
 import type { MissionProjectionReader } from "../../core/events/projection-store.ts";
@@ -123,9 +124,12 @@ export class MissionOrchestrator {
         }
       }
 
-      const ready = (await this.projections.listWorkItems(missionId))
+      const allReady = (await this.projections.listWorkItems(missionId))
         .filter(work => work.status === "ready")
         .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt));
+      if (allReady.length === 0) return;
+      const dependencyArtifacts = await this.projections.listArtifacts(missionId);
+      const ready = allReady.filter(work => artifactDependenciesSatisfied(work, dependencyArtifacts));
       if (ready.length === 0) return;
       const maxDispatch = budgetAssessment && this.budget
         ? this.budget.effectiveConcurrency(this.maxConcurrency, budgetAssessment)
@@ -363,4 +367,23 @@ export class MissionOrchestrator {
       });
     }
   }
+}
+
+function artifactDependenciesSatisfied(work: WorkItem, artifacts: Artifact[]): boolean {
+  const dependencies = work.artifactDependencies ?? [];
+  if (dependencies.length === 0) return true;
+  return dependencies.every(dependency => {
+    const matches = artifacts.filter(artifact => artifact.logicalName === dependency.logicalName
+      && (!dependency.type || artifact.type === dependency.type)
+      && !["invalid", "superseded"].includes(artifact.status));
+    if (matches.length === 0) return false;
+    const latest = matches.sort((a, b) => b.version - a.version)[0]!;
+    return artifactStatusMeets(latest.status, dependency.minimumStatus ?? "verified");
+  });
+}
+
+function artifactStatusMeets(status: Artifact["status"], minimum: "candidate" | "verified" | "final"): boolean {
+  const rank: Record<Artifact["status"], number> = { working: 0, candidate: 1, verified: 2, integrated: 3, final: 4, invalid: -1, superseded: -1 };
+  const required = minimum === "candidate" ? 1 : minimum === "verified" ? 2 : 4;
+  return rank[status] >= required;
 }

@@ -376,7 +376,8 @@ export class MissionController {
       }
     }
 
-    if (this.deliberation && (this.shouldPlanFrontier(state) || (input.trigger === "user_steering" && state.blockingGapIds.length === 0))) {
+    const acceptanceBeforePlanning = await this.acceptanceEvaluation(input.missionId);
+    if (this.deliberation && !acceptanceBeforePlanning.satisfied && (this.shouldPlanFrontier(state) || (input.trigger === "user_steering" && state.blockingGapIds.length === 0))) {
       const frontier = await this.deliberation.planFrontier({
         state,
         userGoal: await this.readModel.userGoal(input.missionId),
@@ -428,8 +429,7 @@ export class MissionController {
       && state.readyWorkItemIds.length === 0
       && state.activeWorkItemIds.length === 0
       && state.verifyingWorkItemIds.length === 0
-      && state.activeExecutionIds.length === 0
-      && state.finalArtifactRefs.length === 0;
+      && state.activeExecutionIds.length === 0;
   }
 
   private decisionForDiagnosis(missionId: string, gap: Gap, diagnosis: GapDiagnosis): MissionDecision {
