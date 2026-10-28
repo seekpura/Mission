@@ -287,3 +287,36 @@ CREATE TABLE IF NOT EXISTS rm_capabilities (
   updated_at TEXT NOT NULL,
   PRIMARY KEY(mission_id, id)
 );
+
+CREATE TABLE IF NOT EXISTS rm_capability_trust (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  capability_id TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_trust_capability ON rm_capability_trust(mission_id, capability_id, recorded_at);
+
+CREATE TABLE IF NOT EXISTS rm_capability_cost (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  capability_id TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_cost_capability ON rm_capability_cost(mission_id, capability_id, recorded_at);
+
+CREATE TABLE IF NOT EXISTS rm_capability_audit (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  capability_id TEXT,
+  decision TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_audit_capability ON rm_capability_audit(mission_id, capability_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_audit_decision ON rm_capability_audit(mission_id, decision, recorded_at);

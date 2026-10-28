@@ -3,8 +3,10 @@ import type {
   CapabilityCandidate,
   CapabilityDescriptor,
   CapabilityNeed,
-  RiskLevel
+  RiskLevel,
+  SecurityAssessment
 } from "../domain/capability.ts";
+import type { CapabilitySourceIdentity } from "../domain/capability-ledger.ts";
 import { PolicyEngine, type PolicyDecision } from "../policy/policy-engine.ts";
 import { StaticSecurityScanner } from "./static-security-scanner.ts";
 import { MissionCapabilityOverlay } from "./mission-capability-overlay.ts";
@@ -17,6 +19,7 @@ import type {
   AcquisitionReceiptStatus,
   AcquisitionReceiptStore
 } from "./acquisition-receipt.ts";
+import type { TrustedCapabilityCache, TrustedCapabilityCacheHit } from "./trusted-capability-cache.ts";
 
 export interface AcquisitionApprovalRequest {
   missionId: string;
@@ -41,6 +44,7 @@ export interface CapabilityAcquisitionTransactionOptions {
   activator: MaterializedCapabilityActivator;
   overlay: MissionCapabilityOverlay;
   receiptStore: AcquisitionReceiptStore;
+  trustedCache?: TrustedCapabilityCache;
   scanner?: StaticSecurityScanner;
   policy?: PolicyEngine;
   approvalBroker?: AcquisitionApprovalBroker;
@@ -63,8 +67,11 @@ export class CapabilityAcquisitionError extends Error {
 
 /**
  * Executes the external-capability admission chain as one auditable transaction:
- * immutable materialization -> static scan -> need/policy gate -> optional user
- * approval -> isolated smoke -> mission-local activation -> receipt -> overlay.
+ * immutable materialization -> exact trusted-cache lookup OR static scan ->
+ * current need/policy gate -> per-Mission approval -> isolated smoke when cache
+ * evidence is unavailable -> mission-local activation -> immutable receipt ->
+ * overlay. Trusted cache never reuses approval; only byte-identical validation
+ * evidence and the minimal already-activated bundle are reusable.
  */
 export class CapabilityAcquisitionTransaction {
   private readonly materializer: CapabilityMaterializer;
@@ -73,6 +80,7 @@ export class CapabilityAcquisitionTransaction {
   private readonly activator: MaterializedCapabilityActivator;
   private readonly overlay: MissionCapabilityOverlay;
   private readonly receiptStore: AcquisitionReceiptStore;
+  private readonly trustedCache?: TrustedCapabilityCache;
   private readonly scanner: StaticSecurityScanner;
   private readonly policy: PolicyEngine;
   private readonly approvalBroker?: AcquisitionApprovalBroker;
@@ -84,6 +92,7 @@ export class CapabilityAcquisitionTransaction {
     this.activator = options.activator;
     this.overlay = options.overlay;
     this.receiptStore = options.receiptStore;
+    this.trustedCache = options.trustedCache;
     this.scanner = options.scanner ?? new StaticSecurityScanner();
     this.policy = options.policy ?? new PolicyEngine();
     this.approvalBroker = options.approvalBroker;
@@ -108,88 +117,51 @@ export class CapabilityAcquisitionTransaction {
         contentHash: materialized.contentHash,
         status: "inspecting"
       };
+      const identity = sourceIdentity(pinnedCandidate, materialized);
+
+      let cacheHit: TrustedCapabilityCacheHit | undefined;
+      let cacheLookupFailure: string | undefined;
+      if (this.trustedCache) {
+        try {
+          cacheHit = await this.trustedCache.find(identity);
+        } catch (error) {
+          cacheLookupFailure = error instanceof Error ? error.message : String(error);
+        }
+      }
+
+      if (cacheHit) {
+        return await this.activateTrustedCache({
+          candidate: pinnedCandidate,
+          need,
+          materialized,
+          identity,
+          cacheHit
+        });
+      }
+
       const security = this.scanner.scan(pinnedCandidate, materialized.root);
       const policy = this.policy.evaluateSecurity(security);
+      await this.assertRiskAndPolicy({
+        candidate: pinnedCandidate,
+        need,
+        materialized,
+        security,
+        policy,
+        cache: cacheLookupFailure
+          ? { status: "lookup_failed", reason: cacheLookupFailure }
+          : { status: "miss" }
+      });
 
-      if (!riskWithinLimit(security.overall, need.maxRisk)) {
-        const receipt = this.receipt({
-          candidate: pinnedCandidate,
-          need,
-          materialized,
-          security,
-          policy,
-          status: "rejected",
-          reason: `Candidate risk ${security.overall} exceeds need maxRisk ${need.maxRisk}`
-        });
-        await this.receiptStore.save(receipt);
-        throw new CapabilityAcquisitionError(receipt.reason!, receipt);
-      }
-
-      if (policy.action === "deny") {
-        const receipt = this.receipt({
-          candidate: pinnedCandidate,
-          need,
-          materialized,
-          security,
-          policy,
-          status: "rejected",
-          reason: policy.reason
-        });
-        await this.receiptStore.save(receipt);
-        throw new CapabilityAcquisitionError(policy.reason, receipt);
-      }
-
-      let approval: AcquisitionReceipt["approval"];
-      if (policy.action === "require_approval") {
-        if (!this.approvalBroker) {
-          const receipt = this.receipt({
-            candidate: pinnedCandidate,
-            need,
-            materialized,
-            security,
-            policy,
-            status: "approval_rejected",
-            reason: "High-risk acquisition requires an approval broker"
-          });
-          await this.receiptStore.save(receipt);
-          throw new CapabilityAcquisitionError(receipt.reason!, receipt);
-        }
-
-        const decision = await this.approvalBroker.requestApproval({
-          missionId: need.missionId,
-          candidateId: pinnedCandidate.id,
-          capabilityNeedId: need.id,
-          title: `Approve external capability: ${pinnedCandidate.name}`,
-          reason: policy.reason,
-          details: {
-            sourceUri: pinnedCandidate.sourceUri,
-            resolvedRevision: materialized.resolvedRevision,
-            contentHash: materialized.contentHash,
-            securityOverall: security.overall,
-            findings: security.findings,
-            requestedPermissions: security.requestedPermissions
-          }
-        });
-        approval = {
-          approved: decision.approved,
-          ...(decision.actor ? { actor: decision.actor } : {}),
-          decidedAt: new Date().toISOString()
-        };
-        if (!decision.approved) {
-          const receipt = this.receipt({
-            candidate: pinnedCandidate,
-            need,
-            materialized,
-            security,
-            policy,
-            approval,
-            status: "approval_rejected",
-            reason: "User approval rejected external capability activation"
-          });
-          await this.receiptStore.save(receipt);
-          throw new CapabilityAcquisitionError(receipt.reason!, receipt);
-        }
-      }
+      const approval = await this.requireApproval({
+        candidate: pinnedCandidate,
+        need,
+        materialized,
+        security,
+        policy,
+        cache: cacheLookupFailure
+          ? { status: "lookup_failed", reason: cacheLookupFailure }
+          : { status: "miss" }
+      });
 
       sandbox = this.sandboxManager.createFromDirectory(materialized.root);
       let smoke: AcquisitionReceipt["smoke"];
@@ -208,6 +180,9 @@ export class CapabilityAcquisitionTransaction {
           security,
           policy,
           approval,
+          cache: cacheLookupFailure
+            ? { status: "lookup_failed", reason: cacheLookupFailure }
+            : { status: "miss" },
           status: "smoke_failed",
           reason: `Isolated capability smoke execution failed: ${reason}`
         });
@@ -224,6 +199,9 @@ export class CapabilityAcquisitionTransaction {
           policy,
           approval,
           smoke,
+          cache: cacheLookupFailure
+            ? { status: "lookup_failed", reason: cacheLookupFailure }
+            : { status: "miss" },
           status: "smoke_failed",
           reason: smoke.timedOut
             ? "Isolated capability smoke test timed out"
@@ -235,13 +213,13 @@ export class CapabilityAcquisitionTransaction {
 
       let capability: CapabilityDescriptor;
       try {
-        capability = await this.activator.activate({
+        capability = withProvenance(await this.activator.activate({
           candidate: { ...pinnedCandidate, status: "verified" },
           need,
           materialized,
           sandboxRoot: sandbox.candidateRoot,
           security
-        });
+        }), identity, "external");
         assertActivatedCapability(capability, need, materialized);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -253,11 +231,36 @@ export class CapabilityAcquisitionTransaction {
           policy,
           approval,
           smoke,
+          cache: cacheLookupFailure
+            ? { status: "lookup_failed", reason: cacheLookupFailure }
+            : { status: "miss" },
           status: "activation_failed",
           reason: `Mission-local capability activation failed: ${reason}`
         });
         await this.receiptStore.save(receipt);
         throw new CapabilityAcquisitionError(receipt.reason!, receipt);
+      }
+
+      let cache: AcquisitionReceipt["cache"] = cacheLookupFailure
+        ? { status: "lookup_failed", reason: cacheLookupFailure }
+        : { status: "miss" };
+      if (this.trustedCache) {
+        try {
+          const stored = await this.trustedCache.store({
+            identity,
+            candidate: pinnedCandidate,
+            capability,
+            security,
+            policy,
+            smoke
+          });
+          cache = { status: "stored", cacheKey: stored.cacheKey };
+        } catch (error) {
+          cache = {
+            status: "store_failed",
+            reason: error instanceof Error ? error.message : String(error)
+          };
+        }
       }
 
       const receipt = this.receipt({
@@ -268,6 +271,7 @@ export class CapabilityAcquisitionTransaction {
         policy,
         approval,
         smoke,
+        cache,
         activatedCapability: capability,
         status: "activated"
       });
@@ -280,14 +284,164 @@ export class CapabilityAcquisitionTransaction {
     }
   }
 
+  private async activateTrustedCache(input: {
+    candidate: CapabilityCandidate;
+    need: CapabilityNeed;
+    materialized: MaterializedCapability;
+    identity: CapabilitySourceIdentity;
+    cacheHit: TrustedCapabilityCacheHit;
+  }): Promise<CapabilityAcquisitionOutcome> {
+    // Cached security findings are evidence about exact bytes. Rebind only the
+    // per-discovery candidate identity so the new Mission receipt cannot point
+    // at a previous Mission's transient candidate id.
+    const security: SecurityAssessment = {
+      ...structuredClone(input.cacheHit.record.security),
+      candidateId: input.candidate.id
+    };
+    const policy = this.policy.evaluateSecurity(security);
+    const cache: AcquisitionReceipt["cache"] = {
+      status: "reused",
+      cacheKey: input.cacheHit.record.cacheKey
+    };
+    await this.assertRiskAndPolicy({ ...input, security, policy, cache });
+    const approval = await this.requireApproval({ ...input, security, policy, cache });
+
+    let capability: CapabilityDescriptor;
+    try {
+      capability = withProvenance(await this.activator.activate({
+        candidate: { ...input.candidate, status: "verified" },
+        need: input.need,
+        materialized: input.materialized,
+        sandboxRoot: input.cacheHit.bundleRoot,
+        security
+      }), input.identity, "trusted-cache");
+      assertActivatedCapability(capability, input.need, input.materialized);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const receipt = this.receipt({
+        candidate: input.candidate,
+        need: input.need,
+        materialized: input.materialized,
+        security,
+        policy,
+        approval,
+        smoke: input.cacheHit.record.smoke,
+        cache,
+        status: "activation_failed",
+        reason: `Trusted-cache capability activation failed: ${reason}`
+      });
+      await this.receiptStore.save(receipt);
+      throw new CapabilityAcquisitionError(receipt.reason!, receipt);
+    }
+
+    const receipt = this.receipt({
+      candidate: input.candidate,
+      need: input.need,
+      materialized: input.materialized,
+      security,
+      policy,
+      approval,
+      smoke: input.cacheHit.record.smoke,
+      cache,
+      activatedCapability: capability,
+      status: "activated_from_trusted_cache"
+    });
+    await this.receiptStore.save(receipt);
+    this.overlay.activate(input.need.missionId, capability);
+    return { capability, receipt };
+  }
+
+  private async assertRiskAndPolicy(input: {
+    candidate: CapabilityCandidate;
+    need: CapabilityNeed;
+    materialized: MaterializedCapability;
+    security: SecurityAssessment;
+    policy: PolicyDecision;
+    cache?: AcquisitionReceipt["cache"];
+  }): Promise<void> {
+    if (!riskWithinLimit(input.security.overall, input.need.maxRisk)) {
+      const receipt = this.receipt({
+        ...input,
+        status: "rejected",
+        reason: `Candidate risk ${input.security.overall} exceeds need maxRisk ${input.need.maxRisk}`
+      });
+      await this.receiptStore.save(receipt);
+      throw new CapabilityAcquisitionError(receipt.reason!, receipt);
+    }
+    if (input.policy.action === "deny") {
+      const receipt = this.receipt({
+        ...input,
+        status: "rejected",
+        reason: input.policy.reason
+      });
+      await this.receiptStore.save(receipt);
+      throw new CapabilityAcquisitionError(input.policy.reason, receipt);
+    }
+  }
+
+  private async requireApproval(input: {
+    candidate: CapabilityCandidate;
+    need: CapabilityNeed;
+    materialized: MaterializedCapability;
+    security: SecurityAssessment;
+    policy: PolicyDecision;
+    cache?: AcquisitionReceipt["cache"];
+  }): Promise<AcquisitionReceipt["approval"] | undefined> {
+    if (input.policy.action !== "require_approval") return undefined;
+    if (!this.approvalBroker) {
+      const receipt = this.receipt({
+        ...input,
+        status: "approval_rejected",
+        reason: "Capability acquisition requires an approval broker"
+      });
+      await this.receiptStore.save(receipt);
+      throw new CapabilityAcquisitionError(receipt.reason!, receipt);
+    }
+
+    const decision = await this.approvalBroker.requestApproval({
+      missionId: input.need.missionId,
+      candidateId: input.candidate.id,
+      capabilityNeedId: input.need.id,
+      title: `Approve external capability: ${input.candidate.name}`,
+      reason: input.policy.reason,
+      details: {
+        sourceUri: input.candidate.sourceUri,
+        resolvedRevision: input.materialized.resolvedRevision,
+        contentHash: input.materialized.contentHash,
+        securityOverall: input.security.overall,
+        findings: input.security.findings,
+        requestedPermissions: input.security.requestedPermissions,
+        trustedCacheKey: input.cache?.status === "reused" ? input.cache.cacheKey : undefined,
+        trustedCacheReused: input.cache?.status === "reused"
+      }
+    });
+    const approval: NonNullable<AcquisitionReceipt["approval"]> = {
+      approved: decision.approved,
+      ...(decision.actor ? { actor: decision.actor } : {}),
+      decidedAt: new Date().toISOString()
+    };
+    if (!decision.approved) {
+      const receipt = this.receipt({
+        ...input,
+        approval,
+        status: "approval_rejected",
+        reason: "User approval rejected external capability activation"
+      });
+      await this.receiptStore.save(receipt);
+      throw new CapabilityAcquisitionError(receipt.reason!, receipt);
+    }
+    return approval;
+  }
+
   private receipt(input: {
     candidate: CapabilityCandidate;
     need: CapabilityNeed;
     materialized: MaterializedCapability;
-    security: ReturnType<StaticSecurityScanner["scan"]>;
+    security: SecurityAssessment;
     policy: PolicyDecision;
     approval?: AcquisitionReceipt["approval"];
     smoke?: AcquisitionReceipt["smoke"];
+    cache?: AcquisitionReceipt["cache"];
     activatedCapability?: CapabilityDescriptor;
     status: AcquisitionReceiptStatus;
     reason?: string;
@@ -306,12 +460,38 @@ export class CapabilityAcquisitionTransaction {
       policy: input.policy,
       ...(input.approval ? { approval: input.approval } : {}),
       ...(input.smoke ? { smoke: input.smoke } : {}),
+      ...(input.cache ? { cache: input.cache } : {}),
       ...(input.activatedCapability ? { activatedCapability: input.activatedCapability } : {}),
       status: input.status,
       ...(input.reason ? { reason: input.reason } : {}),
       createdAt: new Date().toISOString()
     };
   }
+}
+
+function sourceIdentity(candidate: CapabilityCandidate, materialized: MaterializedCapability): CapabilitySourceIdentity {
+  return {
+    sourceUri: candidate.sourceUri,
+    sourceType: candidate.sourceType,
+    resolvedRevision: materialized.resolvedRevision,
+    contentHash: materialized.contentHash
+  };
+}
+
+function withProvenance(
+  capability: CapabilityDescriptor,
+  identity: CapabilitySourceIdentity,
+  source: "external" | "trusted-cache"
+): CapabilityDescriptor {
+  return {
+    ...capability,
+    provenance: {
+      source,
+      sourceRef: identity.sourceUri,
+      revision: identity.resolvedRevision,
+      contentHash: identity.contentHash
+    }
+  };
 }
 
 function assertMaterialization(candidate: CapabilityCandidate, materialized: MaterializedCapability): void {
@@ -339,6 +519,9 @@ function assertActivatedCapability(
   if (capability.hostNative) throw new CapabilityAcquisitionError("Externally acquired capability cannot be hostNative");
   if (capability.revision !== materialized.resolvedRevision) {
     throw new CapabilityAcquisitionError(`Activated capability revision mismatch for need ${need.id}`);
+  }
+  if (capability.provenance?.revision !== materialized.resolvedRevision || capability.provenance?.contentHash !== materialized.contentHash) {
+    throw new CapabilityAcquisitionError(`Activated capability provenance mismatch for need ${need.id}`);
   }
 }
 

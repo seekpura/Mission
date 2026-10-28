@@ -202,8 +202,19 @@ export class SqliteReadModelProjector {
         return this.createCapabilityNeed(event);
       case "capability.activated":
         return this.createCapability(event);
+      case "capability.deactivated":
+      case "capability.revoked":
+        return this.removeCapabilityWithLifecycleLedger(event);
       case "capability.rejected":
         return this.removeCapability(event);
+      case "capability.resolution.recorded":
+        return this.createCapabilityResolution(event);
+      case "capability.trust.recorded":
+        return this.createCapabilityTrust(event);
+      case "capability.cost.recorded":
+        return this.createCapabilityCost(event);
+      case "capability.audit.recorded":
+        return this.createCapabilityAudit(event);
     }
   }
 
@@ -456,6 +467,73 @@ export class SqliteReadModelProjector {
       .run(event.missionId, capabilityId);
   }
 
+  private removeCapabilityWithLifecycleLedger(event: MissionEvent): void {
+    const payload = objectPayload(event);
+    const capabilityId = stringField(payload, "capabilityId");
+    this.db.prepare("DELETE FROM rm_capabilities WHERE mission_id = ? AND id = ?")
+      .run(event.missionId, capabilityId);
+    const audit = objectField(payload, "audit");
+    this.insertCapabilityAudit(event, audit);
+    if (event.type === "capability.revoked") {
+      const revokedTrust = objectField(payload, "revokedTrust");
+      this.insertCapabilityTrust(event, revokedTrust);
+    }
+  }
+
+  private createCapabilityResolution(event: MissionEvent): void {
+    const payload = objectPayload(event);
+    const trust = objectField(payload, "trust");
+    const cost = objectField(payload, "cost");
+    const audit = objectField(payload, "audit");
+    this.insertCapabilityTrust(event, trust);
+    this.insertCapabilityCost(event, cost);
+    this.insertCapabilityAudit(event, audit);
+  }
+
+  private createCapabilityTrust(event: MissionEvent): void {
+    this.insertCapabilityTrust(event, objectPayload(event));
+  }
+
+  private createCapabilityCost(event: MissionEvent): void {
+    this.insertCapabilityCost(event, objectPayload(event));
+  }
+
+  private createCapabilityAudit(event: MissionEvent): void {
+    this.insertCapabilityAudit(event, objectPayload(event));
+  }
+
+  private insertCapabilityTrust(event: MissionEvent, payload: Record<string, any>): void {
+    const id = stringField(payload, "id");
+    const capabilityId = stringField(payload, "capabilityId");
+    const recordedAt = typeof payload.recordedAt === "string" && payload.recordedAt ? payload.recordedAt : event.createdAt;
+    this.db.prepare(`
+      INSERT OR REPLACE INTO rm_capability_trust (mission_id, id, capability_id, data_json, recorded_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(event.missionId, id, capabilityId, JSON.stringify(payload), recordedAt);
+  }
+
+  private insertCapabilityCost(event: MissionEvent, payload: Record<string, any>): void {
+    const id = stringField(payload, "id");
+    const capabilityId = stringField(payload, "capabilityId");
+    const phase = stringField(payload, "phase");
+    const recordedAt = typeof payload.recordedAt === "string" && payload.recordedAt ? payload.recordedAt : event.createdAt;
+    this.db.prepare(`
+      INSERT OR REPLACE INTO rm_capability_cost (mission_id, id, capability_id, phase, data_json, recorded_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(event.missionId, id, capabilityId, phase, JSON.stringify(payload), recordedAt);
+  }
+
+  private insertCapabilityAudit(event: MissionEvent, payload: Record<string, any>): void {
+    const id = stringField(payload, "id");
+    const decision = stringField(payload, "decision");
+    const capabilityId = typeof payload.capabilityId === "string" && payload.capabilityId ? payload.capabilityId : null;
+    const recordedAt = typeof payload.recordedAt === "string" && payload.recordedAt ? payload.recordedAt : event.createdAt;
+    this.db.prepare(`
+      INSERT OR REPLACE INTO rm_capability_audit (mission_id, id, capability_id, decision, data_json, recorded_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(event.missionId, id, capabilityId, decision, JSON.stringify(payload), recordedAt);
+  }
+
   private upsertSimple(
     table: "rm_capability_needs" | "rm_capabilities",
     missionId: string,
@@ -495,6 +573,14 @@ function objectPayload(event: MissionEvent): Record<string, any> {
     throw new Error(`Event ${event.type} requires an object payload for read-model projection`);
   }
   return event.payload as Record<string, any>;
+}
+
+function objectField(value: Record<string, any>, field: string): Record<string, any> {
+  const result = value[field];
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error(`Missing ${field} object in read-model projection payload`);
+  }
+  return result as Record<string, any>;
 }
 
 function stringField(value: Record<string, any>, field: string): string {

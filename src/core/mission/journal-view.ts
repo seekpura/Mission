@@ -43,6 +43,8 @@ export function projectMissionJournal(missionId: string, events: MissionEvent[])
         if (capability) capabilities.set(capability.id, cloneCapability(capability));
         break;
       }
+      case "capability.deactivated":
+      case "capability.revoked":
       case "capability.rejected": {
         const payload = event.payload as { capabilityId?: string };
         if (payload.capabilityId) capabilities.delete(payload.capabilityId);
@@ -206,6 +208,7 @@ function asCapabilityNeed(payload: Partial<CapabilityNeed>, missionId: string): 
     urgency: payload.urgency,
     acquisitionAllowed: payload.acquisitionAllowed ?? false,
     maxRisk: payload.maxRisk,
+    ...(payload.policy ? { policy: cloneNeedPolicy(payload.policy) } : {}),
     requirementRefs: [...(payload.requirementRefs ?? [])],
     gapRefs: [...(payload.gapRefs ?? [])]
   };
@@ -213,7 +216,7 @@ function asCapabilityNeed(payload: Partial<CapabilityNeed>, missionId: string): 
 
 function asCapabilityDescriptor(payload: Partial<CapabilityDescriptor>): CapabilityDescriptor | undefined {
   if (!payload.id || !payload.kind || !payload.name || !payload.description || !payload.scope) return undefined;
-  return {
+  return cloneCapability({
     id: payload.id,
     kind: payload.kind,
     name: payload.name,
@@ -223,8 +226,16 @@ function asCapabilityDescriptor(payload: Partial<CapabilityDescriptor>): Capabil
     ...(payload.invocationRef ? { invocationRef: payload.invocationRef } : {}),
     permissions: [...(payload.permissions ?? [])],
     ...(payload.revision ? { revision: payload.revision } : {}),
-    scope: payload.scope
-  };
+    scope: payload.scope,
+    ...(payload.functions ? { functions: [...payload.functions] } : {}),
+    ...(payload.accepts ? { accepts: [...payload.accepts] } : {}),
+    ...(payload.produces ? { produces: [...payload.produces] } : {}),
+    ...(payload.constraints ? { constraints: structuredClone(payload.constraints) } : {}),
+    ...(payload.routing ? { routing: structuredClone(payload.routing) } : {}),
+    ...(payload.cost ? { cost: { ...payload.cost } } : {}),
+    ...(payload.native ? { native: structuredClone(payload.native) } : {}),
+    ...(payload.provenance ? { provenance: { ...payload.provenance } } : {})
+  });
 }
 
 function asWorkItem(payload: Partial<WorkItem>, missionId: string, at: string): WorkItem | undefined {
@@ -281,15 +292,36 @@ function cloneCapabilityNeed(need: CapabilityNeed): CapabilityNeed {
     requiredFunctions: [...need.requiredFunctions],
     desiredInputs: [...need.desiredInputs],
     desiredOutputs: [...need.desiredOutputs],
+    ...(need.policy ? { policy: cloneNeedPolicy(need.policy) } : {}),
     requirementRefs: [...need.requirementRefs],
     gapRefs: [...need.gapRefs]
+  };
+}
+
+function cloneNeedPolicy(policy: NonNullable<CapabilityNeed["policy"]>): NonNullable<CapabilityNeed["policy"]> {
+  return {
+    ...(policy.acceptableKinds ? { acceptableKinds: [...policy.acceptableKinds] } : {}),
+    ...(policy.requiredExecutionModes ? { requiredExecutionModes: [...policy.requiredExecutionModes] } : {}),
+    ...(policy.forbiddenPermissions ? { forbiddenPermissions: [...policy.forbiddenPermissions] } : {}),
+    ...(policy.acceptableProviders ? { acceptableProviders: [...policy.acceptableProviders] } : {}),
+    ...(policy.requiredNativeFeatures ? { requiredNativeFeatures: [...policy.requiredNativeFeatures] } : {}),
+    ...(policy.acceptableProvenanceSources ? { acceptableProvenanceSources: [...policy.acceptableProvenanceSources] } : {}),
+    ...(policy.maxMonetaryClass ? { maxMonetaryClass: policy.maxMonetaryClass } : {})
   };
 }
 
 function cloneCapability(capability: CapabilityDescriptor): CapabilityDescriptor {
   return {
     ...capability,
-    permissions: [...capability.permissions]
+    permissions: [...capability.permissions],
+    ...(capability.functions ? { functions: [...capability.functions] } : {}),
+    ...(capability.accepts ? { accepts: [...capability.accepts] } : {}),
+    ...(capability.produces ? { produces: [...capability.produces] } : {}),
+    ...(capability.constraints ? { constraints: structuredClone(capability.constraints) } : {}),
+    ...(capability.routing ? { routing: structuredClone(capability.routing) } : {}),
+    ...(capability.cost ? { cost: { ...capability.cost } } : {}),
+    ...(capability.native ? { native: structuredClone(capability.native) } : {}),
+    ...(capability.provenance ? { provenance: { ...capability.provenance } } : {})
   };
 }
 

@@ -9,7 +9,8 @@ export type AcquisitionReceiptStatus =
   | "approval_rejected"
   | "smoke_failed"
   | "activation_failed"
-  | "activated";
+  | "activated"
+  | "activated_from_trusted_cache";
 
 export interface AcquisitionReceipt {
   id: string;
@@ -25,6 +26,11 @@ export interface AcquisitionReceipt {
   policy: PolicyDecision;
   approval?: { approved: boolean; actor?: string; decidedAt: string };
   smoke?: CapabilitySmokeResult;
+  cache?: {
+    status: "miss" | "reused" | "stored" | "store_failed" | "lookup_failed";
+    cacheKey?: string;
+    reason?: string;
+  };
   activatedCapability?: CapabilityDescriptor;
   status: AcquisitionReceiptStatus;
   reason?: string;
