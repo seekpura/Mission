@@ -150,7 +150,7 @@ export class SqliteReadModelProjector {
         return this.updateWork(event, "invalidated");
       case "work.updated": {
         const payload = objectPayload(event);
-        return this.updateWork(event, stringField(payload, "status") as WorkStatus, payload.work);
+        return this.updateWork(event, typeof payload.status === "string" ? payload.status as WorkStatus : undefined, payload.work);
       }
       case "attempt.created":
         return this.createAttempt(event);
@@ -215,13 +215,18 @@ export class SqliteReadModelProjector {
     this.upsertWork(work, event.createdAt);
   }
 
-  private updateWork(event: MissionEvent, status: WorkStatus, patch?: unknown): void {
+  private updateWork(event: MissionEvent, status?: WorkStatus, patch?: unknown): void {
     const payload = objectPayload(event);
     const id = stringField(payload, "id");
     const current = this.readJson<WorkItem>("rm_work_items", event.missionId, id);
     if (!current) throw new Error(`Read-model WorkItem not found: ${event.missionId}/${id}`);
     const patchObject = patch && typeof patch === "object" && !Array.isArray(patch) ? patch as Partial<WorkItem> : {};
-    const next: WorkItem = { ...current, ...patchObject, status, updatedAt: event.createdAt };
+    const next: WorkItem = {
+      ...current,
+      ...patchObject,
+      ...(status ? { status } : {}),
+      updatedAt: event.createdAt
+    };
     this.upsertWork(next, event.createdAt);
   }
 
@@ -323,7 +328,7 @@ export class SqliteReadModelProjector {
   private updateArtifactStatus(event: MissionEvent, ref: string, status: ArtifactStatus): void {
     const parsed = parseArtifactRef(ref);
     const current = this.readArtifact(event.missionId, parsed.id, parsed.version);
-    if (!current) throw new Error(`Read-model Artifact not found: ${event.missionId}/${ref}`);
+    if (!current) return;
     this.upsertArtifact({ ...current, status }, event.createdAt);
   }
 
