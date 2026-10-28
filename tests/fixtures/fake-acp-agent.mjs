@@ -4,6 +4,8 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
 const statePath = join(process.cwd(), ".fake-acp-sessions.json");
+const newMcpPath = join(process.cwd(), ".fake-acp-last-new.json");
+const resumeMcpPath = join(process.cwd(), ".fake-acp-last-resume.json");
 const sessions = loadSessions();
 
 const input = Writable.toWeb(process.stdout);
@@ -16,6 +18,7 @@ acp
     protocolVersion: acp.PROTOCOL_VERSION,
     agentCapabilities: {
       loadSession: false,
+      mcpCapabilities: { http: true },
       sessionCapabilities: {
         resume: {},
         close: {}
@@ -24,7 +27,9 @@ acp
   }))
   .onRequest(acp.methods.agent.session.new, ({ params }) => {
     const sessionId = `fake-session-${process.pid}-${Date.now()}`;
-    sessions.set(sessionId, { cwd: params.cwd, cancelled: false });
+    const mcpServers = params.mcpServers ?? [];
+    sessions.set(sessionId, { cwd: params.cwd, cancelled: false, mcpServers });
+    writeFileSync(newMcpPath, `${JSON.stringify(mcpServers, null, 2)}\n`, "utf8");
     persistSessions();
     return { sessionId };
   })
@@ -32,7 +37,12 @@ acp
     const session = sessions.get(params.sessionId);
     if (!session) throw new Error(`unknown session ${params.sessionId}`);
     if (session.cwd !== params.cwd) throw new Error(`cwd mismatch for ${params.sessionId}`);
+    const mcpServers = params.mcpServers ?? [];
+    if (JSON.stringify(session.mcpServers ?? []) !== JSON.stringify(mcpServers)) {
+      throw new Error(`mcp mismatch for ${params.sessionId}`);
+    }
     session.cancelled = false;
+    writeFileSync(resumeMcpPath, `${JSON.stringify(mcpServers, null, 2)}\n`, "utf8");
     persistSessions();
     return {};
   })
