@@ -101,8 +101,8 @@ export class MissionController {
     await this.emit(work.missionId, "work.created", { id: work.id, status: work.status, workstreamId: work.workstreamId, work }, { type: work.createdBy === "verifier" ? "verifier" : "planner" }, `work-created:${work.id}`);
   }
 
-  async recordArtifact(missionId: string, artifact: Artifact, actorType: "worker" | "verifier" = "worker"): Promise<void> {
-    await this.emit(missionId, "artifact.created", { artifact }, { type: actorType }, `artifact-created:${artifact.id}:${artifact.version}`);
+  async recordArtifact(missionId: string, artifact: Artifact): Promise<void> {
+    await this.emit(missionId, "artifact.created", { artifact }, { type: "worker" }, `artifact-created:${artifact.id}:${artifact.version}`);
   }
 
   async recordVerification(missionId: string, verification: VerificationResult): Promise<void> {
@@ -258,22 +258,23 @@ export class MissionController {
 
   private decisionForDiagnosis(missionId: string, gap: Gap, diagnosis: { intervention: "retry" | "revise_work" | "replace_capability" | "replan_local" | "revise_strategy"; rootCause: string; confidence: number }): MissionDecision {
     const type: MissionDecision["type"] = diagnosis.intervention === "replace_capability" ? "replace_capability"
-      : diagnosis.intervention === "replan_local" ? "replan_graph"
+      : diagnosis.intervention === "replan_local" ? "replan_local"
       : diagnosis.intervention === "revise_strategy" ? "revise_strategy"
-      : diagnosis.intervention === "retry" ? "retry" : "revise_work";
+      : diagnosis.intervention === "retry" ? "retry"
+      : "revise_work";
     return {
-      id: `decision-${gap.id}-${randomUUID().slice(0, 8)}`,
+      id: randomUUID(),
       missionId,
       type,
-      targetRef: gap.id,
+      targetRefs: [gap.id],
       rationale: diagnosis.rootCause,
-      evidenceRefs: gap.findingRefs,
-      expectedImpact: `Resolve gap ${gap.id}`,
+      evidenceRefs: [],
+      gapRefs: [gap.id],
+      requirementRefs: [...gap.requirementRefs],
+      expectedImpact: `Resolve ${gap.severity} gap ${gap.id}`,
       confidence: diagnosis.confidence,
-      urgency: gap.severity === "critical" ? "critical" : "high",
-      reversible: true,
       requiresApproval: false,
-      status: "active",
+      status: "proposed",
       createdAt: new Date().toISOString()
     };
   }
@@ -281,46 +282,37 @@ export class MissionController {
   private repairWorkItem(state: MissionState, gap: Gap, rootCause: string): WorkItem {
     const now = new Date().toISOString();
     return {
-      id: `repair-${gap.id}-${state.graphRevision + 1}`,
+      id: `repair-${gap.id}`,
       missionId: state.missionId,
       purpose: "repair",
-      objective: `Resolve ${gap.description}. Root cause: ${rootCause}`,
+      objective: `Resolve gap: ${gap.description}. Diagnosed cause: ${rootCause}`,
       status: "ready",
-      requirementRefs: gap.requirementRefs,
+      requirementRefs: [...gap.requirementRefs],
       gapRefs: [gap.id],
-      inputArtifactRefs: gap.artifactRefs,
+      inputArtifactRefs: [...gap.artifactRefs],
       expectedOutputs: [],
-      localAcceptanceCriteria: [{ id: `repair-${gap.id}`, description: `Gap ${gap.id} is resolved and verified`, priority: "required" }],
+      localAcceptanceCriteria: [{ id: `resolve-${gap.id}`, description: `Gap ${gap.id} is resolved and independently verified`, priority: "required" }],
       capabilityNeedRefs: [],
-      priority: gap.severity === "critical" ? 100 : gap.severity === "major" ? 90 : 60,
-      graphRevision: state.graphRevision + 1,
+      priority: gap.severity === "critical" ? 100 : gap.severity === "major" ? 80 : 50,
+      graphRevision: state.graphRevision,
       createdBy: "replanner",
       createdAt: now,
       updatedAt: now
     };
   }
 
-  private async materializeCompletionObjections(missionId: string, state: MissionState, challenge: CompletionChallenge) {
-    let index = 0;
-    for (const objection of challenge.objections.filter(item => item.severity === "blocking")) {
-      const id = `completion-objection-${state.revision}-${++index}`;
+  private async materializeCompletionObjections(missionId: string, state: MissionState, challenge: CompletionChallenge): Promise<void> {
+    for (let index = 0; index < challenge.objections.length; index++) {
+      const objection = challenge.objections[index]!;
+      if (objection.severity !== "blocking") continue;
       await this.openGap(missionId, {
-        id,
-        severity: "critical",
+        id: `completion-${state.revision}-${index + 1}`,
+        severity: "major",
         description: objection.description,
+        blocking: true,
         category: "evidence",
         requirementRefs: objection.requirementRefs,
-        artifactRefs: objection.artifactRefs,
-        blocking: true
-      });
-    }
-    if (challenge.blockingObjection && index === 0) {
-      await this.openGap(missionId, {
-        id: `completion-objection-${state.revision}-generic`,
-        severity: "critical",
-        description: "Completion challenger reported a blocking objection without structured details",
-        category: "evidence",
-        blocking: true
+        artifactRefs: objection.artifactRefs
       });
     }
   }
