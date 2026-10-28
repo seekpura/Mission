@@ -35,4 +35,5 @@ export interface WorkExecutionDriver {
   id: string;
   execute(input: WorkExecutionInput): Promise<WorkExecutionOutcome>;
   recover?(input: WorkRecoveryInput): Promise<WorkExecutionOutcome>;
+  isActive?(executionId: string): boolean;
 }
