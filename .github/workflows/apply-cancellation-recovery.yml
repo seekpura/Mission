@@ -1,15 +1,11 @@
-name: Apply cancellation recovery batch
+name: Validate cancellation recovery batch
 on:
   push:
     branches: [build/cancellation-recovery]
-    paths:
-      - scripts/apply-cancellation-recovery.sh
-      - scripts/fix-cancellation-recovery.sh
-      - .github/workflows/apply-cancellation-recovery.yml
 permissions:
-  contents: write
+  contents: read
 jobs:
-  apply:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,21 +14,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Apply, capture verification, and publish diagnostics
+      - name: Validate applied batch
         run: |
-          awk '/^npm test$/{exit} {print}' scripts/apply-cancellation-recovery.sh | bash
-          bash scripts/fix-cancellation-recovery.sh
-          set +e
-          npm test > .cancellation-recovery-test.log 2>&1
-          TEST_CODE=$?
-          npm run smoke >> .cancellation-recovery-test.log 2>&1
-          SMOKE_CODE=$?
-          git diff --check >> .cancellation-recovery-test.log 2>&1
-          DIFF_CODE=$?
-          set -e
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src tests .cancellation-recovery-test.log
-          git commit -m 'build: apply cancellation recovery batch with diagnostics'
-          git push origin HEAD:build/cancellation-recovery
-          if [ "$TEST_CODE" -ne 0 ] || [ "$SMOKE_CODE" -ne 0 ] || [ "$DIFF_CODE" -ne 0 ]; then exit 1; fi
+          npm test
+          npm run smoke
+          git diff --check
