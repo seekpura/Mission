@@ -155,12 +155,20 @@ function controlResponse(workItemId: string): unknown {
   if (workItemId.startsWith("control:verify-")) {
     return {
       overall: "pass",
-      checkResults: [{
-        id: "mission-goal",
-        status: "pass",
-        detail: "The candidate artifact satisfies the requested deliverable contract.",
-        evidenceRefs: ["evidence:scripted-independent-review"]
-      }],
+      checkResults: [
+        {
+          id: "generic-requirement-coverage",
+          status: "pass",
+          detail: "The candidate artifact satisfies the WorkItem requirement and acceptance contract.",
+          evidenceRefs: ["evidence:scripted-independent-review"]
+        },
+        {
+          id: "generic-content-quality",
+          status: "pass",
+          detail: "The scripted deliverable is internally consistent and usable for the requested purpose.",
+          evidenceRefs: ["evidence:scripted-independent-review"]
+        }
+      ],
       evidenceRefs: ["evidence:scripted-independent-review"],
       gapAssessments: []
     };
