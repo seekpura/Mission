@@ -17,10 +17,11 @@ jobs:
           node-version: 22
       - name: Apply and verify selective steering
         run: |
-          chmod +x scripts/apply-steering-impact.sh scripts/fix-steering-anchor.sh
+          chmod +x scripts/apply-steering-impact.sh scripts/fix-steering-anchor.sh scripts/fix-steering-read-model.sh
           ./scripts/fix-steering-anchor.sh add
           ./scripts/apply-steering-impact.sh
           ./scripts/fix-steering-anchor.sh remove
+          ./scripts/fix-steering-read-model.sh
           npm test
           npm run smoke
           git diff --check
