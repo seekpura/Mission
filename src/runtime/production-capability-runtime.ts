@@ -77,6 +77,17 @@ export function createProductionAgentSkillCapabilityRuntime(
   const hostCapabilities: HostCapabilitySource = {
     async listHostCapabilities() {
       return (await options.host.snapshotEnvironment()).capabilities;
+    },
+    async snapshotHostCapabilities() {
+      const snapshot = await options.host.snapshotEnvironment();
+      return {
+        revision: snapshot.revision,
+        host: snapshot.host,
+        capabilities: snapshot.capabilities,
+        shellAvailable: snapshot.shellAvailable,
+        filesystemAvailable: snapshot.filesystemAvailable,
+        browserAvailable: snapshot.browserAvailable
+      };
     }
   };
 
