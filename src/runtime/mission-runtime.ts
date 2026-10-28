@@ -32,6 +32,8 @@ import { VerificationContinuationService } from "./orchestration/verification-co
 import type { SecureAcquisitionService } from "../core/capabilities/secure-acquisition-service.ts";
 import { KnowledgeStalenessManager } from "../core/knowledge/knowledge-staleness-manager.ts";
 import { WorkerKnowledgeIngestor } from "../core/knowledge/worker-knowledge-ingestor.ts";
+import { BudgetManager } from "../core/budget/budget-manager.ts";
+import type { MissionBudget } from "../core/domain/budget.ts";
 
 export interface MissionRuntimeOptions {
   dbPath?: string;
@@ -57,6 +59,7 @@ export class MissionRuntime {
   readonly recovery?: ExecutionRecoveryManager;
   readonly inspection?: ArtifactInspectionService;
   readonly knowledge: KnowledgeStalenessManager;
+  readonly budget: BudgetManager;
 
   constructor(options: MissionRuntimeOptions = {}) {
     const rootDir = options.rootDir ?? join(process.cwd(), ".mission");
@@ -74,6 +77,7 @@ export class MissionRuntime {
     this.workspaces = new WorkspaceManager(rootDir);
     this.artifacts = new FileArtifactStore(rootDir);
     this.knowledge = new KnowledgeStalenessManager({ controller: this.controller, projections: this.projections });
+    this.budget = new BudgetManager({ controller: this.controller, events: this.events, projections: this.projections });
     if (options.host) {
       const hostAgentBackend = new HostAgentExecutionBackend(options.host);
       const executionRouter = new WorkExecutionRouter({
@@ -121,6 +125,7 @@ export class MissionRuntime {
         executionRouter,
         knowledgeIngestor: new WorkerKnowledgeIngestor({ knowledge: this.knowledge, projections: this.projections }),
         knowledge: this.knowledge,
+        budget: this.budget,
         options: { maxConcurrency: options.maxConcurrency }
       });
     }
@@ -149,6 +154,11 @@ export class MissionRuntime {
     await this.controller.runControllerCycle({ missionId, trigger: "user_steering" });
     this.orchestrator?.wake(missionId);
     return result;
+  }
+
+  async configureBudget(budget: MissionBudget): Promise<void> {
+    await this.budget.configure(budget);
+    this.orchestrator?.wake(budget.missionId);
   }
 
   async cancelExecution(missionId: string, executionId: string): Promise<boolean> {
