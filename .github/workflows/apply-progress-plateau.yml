@@ -17,8 +17,9 @@ jobs:
           node-version: 22
       - name: Apply and verify progress plateau engine
         run: |
-          chmod +x scripts/fix-progress-patch-anchor.sh scripts/apply-progress-plateau.sh
+          chmod +x scripts/fix-progress-patch-anchor.sh scripts/fix-progress-host-anchor.sh scripts/apply-progress-plateau.sh
           ./scripts/fix-progress-patch-anchor.sh
+          ./scripts/fix-progress-host-anchor.sh
           ./scripts/apply-progress-plateau.sh
           npm test
           npm run smoke
