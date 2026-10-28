@@ -68,6 +68,21 @@ export interface CapabilityDescriptor {
   provenance?: CapabilityProvenance;
 }
 
+/**
+ * Optional hard policy declared for a CapabilityNeed. These fields do not
+ * select a capability by themselves; they constrain the live host capability
+ * graph before semantic scoring. Omitted fields preserve legacy behavior.
+ */
+export interface CapabilityNeedPolicy {
+  acceptableKinds?: CapabilityKind[];
+  requiredExecutionModes?: CapabilityExecutionMode[];
+  forbiddenPermissions?: string[];
+  acceptableProviders?: string[];
+  requiredNativeFeatures?: string[];
+  acceptableProvenanceSources?: CapabilityProvenance["source"][];
+  maxMonetaryClass?: Exclude<CapabilityCostClass, "unknown">;
+}
+
 export interface CapabilityNeed {
   id: string;
   missionId: string;
@@ -79,6 +94,7 @@ export interface CapabilityNeed {
   urgency: "blocking" | "high-value" | "optional-improvement";
   acquisitionAllowed: boolean;
   maxRisk: RiskLevel;
+  policy?: CapabilityNeedPolicy;
   requirementRefs: string[];
   gapRefs: string[];
 }
