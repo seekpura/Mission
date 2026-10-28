@@ -10,6 +10,7 @@ import type { MissionOrchestrator } from "../runtime/orchestration/mission-orche
 export interface MissionApiOptions {
   projections?: MissionProjectionReader;
   orchestrator?: MissionOrchestrator;
+  steer?: (missionId: string, message: string) => Promise<unknown>;
 }
 
 export function createMissionApi(controller: MissionController, events: EventStore, options: MissionApiOptions = {}) {
@@ -46,11 +47,15 @@ export function createMissionApi(controller: MissionController, events: EventSto
         if (req.method === "GET" && parts.length === 2) return json(res, 200, await controller.state(missionId));
         if (req.method === "POST" && parts[2] === "steer") {
           const body = await readJson(req);
-          const state = await controller.steer(missionId, body.message ?? "");
-          await controller.runControllerCycle({ missionId, trigger: "user_steering" });
-          options.orchestrator?.wake(missionId);
+          const result = options.steer
+            ? await options.steer(missionId, body.message ?? "")
+            : await controller.steer(missionId, body.message ?? "");
+          if (!options.steer) {
+            await controller.runControllerCycle({ missionId, trigger: "user_steering" });
+            options.orchestrator?.wake(missionId);
+          }
           await publish(missionId);
-          return json(res, 200, state);
+          return json(res, 200, result);
         }
         if (req.method === "GET" && parts[2] === "activity") return json(res, 200, await events.list(missionId));
         if (req.method === "GET" && parts[2] === "acceptance") return json(res, 200, {

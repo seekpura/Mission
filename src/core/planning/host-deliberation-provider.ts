@@ -4,6 +4,7 @@ import type { AcceptanceContract, MissionSpec, Requirement, RequiredArtifact, Re
 import type { CapabilityNeed } from "../domain/capability.ts";
 import type { WorkItem, WorkPurpose } from "../domain/work-item.ts";
 import type { DeliberationProvider, StrategyProposal, FrontierProposal, GapDiagnosis, CompletionChallenge, MissionInterpretation } from "./deliberation-provider.ts";
+import type { SteeringInterpretation } from "../domain/steering.ts";
 
 export interface HostDeliberationOptions {
   capabilityRefs?: string[];
@@ -83,6 +84,65 @@ Create an acceptance contract that captures the actual end goal, not implementat
       createdAt: now
     };
     return { missionSpec, acceptanceContract };
+  }
+
+  async interpretSteering(input: Parameters<NonNullable<DeliberationProvider["interpretSteering"]>>[0]): Promise<SteeringInterpretation> {
+    const value = await this.askJson(input.missionId, "steering", `
+You are the Mission Runtime Steering Interpreter.
+User steering: ${input.message}
+Current MissionSpec: ${JSON.stringify(input.missionSpec)}
+Current AcceptanceContract: ${JSON.stringify(input.acceptanceContract)}
+Current work: ${JSON.stringify(input.workItems.map(work => ({ id: work.id, status: work.status, purpose: work.purpose, objective: work.objective, requirementRefs: work.requirementRefs, inputArtifactRefs: work.inputArtifactRefs, expectedOutputs: work.expectedOutputs })))}
+Current artifacts: ${JSON.stringify(input.artifacts.map(artifact => ({ ref: `${artifact.id}@${artifact.version}`, logicalName: artifact.logicalName, status: artifact.status, sourceArtifactRefs: artifact.sourceArtifactRefs })))}
+Classify pure operational messages such as "continue", "resume", or simple sequencing as kind=operational. They must not rewrite the mission.
+For semantic changes, return only the smallest scope affected. Do not invalidate unrelated work. If the user changes required deliverables or completion criteria, return a complete revisedAcceptanceContract; otherwise omit it.
+Return ONLY JSON: {
+  "kind":"operational|semantic",
+  "reason":string,
+  "confidence":number,
+  "specPatch":{"objective"?:string,"intent"?:string,"requestedOutputs"?:string[],"constraints"?:string[],"preferences"?:string[],"sourceRefs"?:string[]} | null,
+  "revisedAcceptanceContract":{"requirements":[{"id":string,"description":string,"type":"functional|content|visual|technical|evidence|experience|compliance","priority":"critical|required|preferred","verification":"artifact|test|review|evidence|runtime|human"}],"requiredArtifacts":[{"logicalName":string,"type":string,"description":string,"requirementRefs":string[]}],"requiredValidations":[{"id":string,"description":string,"level":"structural|functional|quality|integration|mission","requirementRefs":string[]}],"criticalFailureConditions":string[]} | null,
+  "affectedRequirementRefs":string[],
+  "affectedWorkItemRefs":string[],
+  "affectedArtifactRefs":string[],
+  "strategyImpact":"none|local|global"
+}.
+`);
+    const kind = value.kind === "semantic" ? "semantic" as const : "operational" as const;
+    const rawPatch = value.specPatch && typeof value.specPatch === "object" ? value.specPatch : undefined;
+    const specPatch = rawPatch ? {
+      objective: typeof rawPatch.objective === "string" ? rawPatch.objective : undefined,
+      intent: typeof rawPatch.intent === "string" ? rawPatch.intent : undefined,
+      requestedOutputs: Array.isArray(rawPatch.requestedOutputs) ? stringArray(rawPatch.requestedOutputs) : undefined,
+      constraints: Array.isArray(rawPatch.constraints) ? stringArray(rawPatch.constraints) : undefined,
+      preferences: Array.isArray(rawPatch.preferences) ? stringArray(rawPatch.preferences) : undefined,
+      sourceRefs: Array.isArray(rawPatch.sourceRefs) ? stringArray(rawPatch.sourceRefs) : undefined
+    } : undefined;
+    const rawContract = value.revisedAcceptanceContract;
+    const revisedAcceptanceContract = rawContract && typeof rawContract === "object" ? {
+      requirements: arrayValue(rawContract.requirements).map((raw: any, index) => ({
+        id: stringValue(raw?.id, `steer-R${index + 1}`), description: stringValue(raw?.description, `Steered requirement ${index + 1}`),
+        type: requirementType(raw?.type), priority: requirementPriority(raw?.priority), verification: requirementVerification(raw?.verification),
+        status: "unverified" as const, evidenceRefs: []
+      })),
+      requiredArtifacts: arrayValue(rawContract.requiredArtifacts).map((raw: any, index) => ({
+        logicalName: stringValue(raw?.logicalName, `deliverable-${index + 1}`), type: typeof raw?.type === "string" ? raw.type : undefined,
+        description: typeof raw?.description === "string" ? raw.description : undefined, requirementRefs: stringArray(raw?.requirementRefs)
+      })),
+      requiredValidations: arrayValue(rawContract.requiredValidations).map((raw: any, index) => ({
+        id: stringValue(raw?.id, `steer-validation-${index + 1}`), description: stringValue(raw?.description, `Validate steered output ${index + 1}`),
+        level: validationLevel(raw?.level), requirementRefs: stringArray(raw?.requirementRefs), runtime: runtimeValidation(raw?.runtime), integration: integrationValidation(raw?.integration)
+      })),
+      criticalFailureConditions: stringArray(rawContract.criticalFailureConditions),
+      completionPolicy: { requireAllCritical: true, requireAllRequired: true, allowPreferredOpen: true }
+    } : undefined;
+    return {
+      kind, reason: stringValue(value.reason, kind === "operational" ? "Operational steering" : input.message),
+      confidence: clamp01(numberValue(value.confidence, 0.7)), specPatch, revisedAcceptanceContract,
+      affectedRequirementRefs: stringArray(value.affectedRequirementRefs), affectedWorkItemRefs: stringArray(value.affectedWorkItemRefs),
+      affectedArtifactRefs: stringArray(value.affectedArtifactRefs),
+      strategyImpact: value.strategyImpact === "global" ? "global" : value.strategyImpact === "local" ? "local" : "none"
+    };
   }
 
   async composeStrategy(input: Parameters<DeliberationProvider["composeStrategy"]>[0]): Promise<StrategyProposal> {

@@ -74,9 +74,7 @@ export function apply(ctx: Context): void {
     },
     output: stringOutput(),
     async execute(args) {
-      await runtime.controller.steer(args.mission_id, args.message);
-      await runtime.controller.runControllerCycle({ missionId: args.mission_id, trigger: "user_steering" });
-      runtime.orchestrator?.wake(args.mission_id);
+      await runtime.steer(args.mission_id, args.message);
       await runtime.checkpoint(args.mission_id);
       return missionView(runtime, args.mission_id);
     }

@@ -1,7 +1,7 @@
 import type { Artifact } from "../domain/artifact.ts";
 import type { CapabilityNeed } from "../domain/capability.ts";
 import type { InvocationReceipt } from "../domain/invocation.ts";
-import type { AcceptanceContract, Requirement } from "../domain/mission.ts";
+import type { AcceptanceContract, MissionSpec, Requirement } from "../domain/mission.ts";
 import type { Evidence, Finding, Gap, VerificationResult } from "../domain/verification.ts";
 import type { WorkItem } from "../domain/work-item.ts";
 import type { EventStore } from "../events/event-store.ts";
@@ -77,6 +77,19 @@ export class MissionReadModel {
     return (await this.store.list(missionId))
       .filter(event => event.type === "finding.created")
       .map(event => (((event.payload as any).finding ?? event.payload) as Finding));
+  }
+
+  async missionSpec(missionId: string): Promise<MissionSpec | null> {
+    if (this.projections) return this.projections.getMissionSpec(missionId);
+    const events = await this.store.list(missionId);
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i]!;
+      if (event.type !== "mission.spec.revised") continue;
+      const payload = event.payload as any;
+      const spec = payload.spec ?? payload;
+      return { missionId, revision: spec.revision ?? 1, objective: spec.objective ?? "", intent: spec.intent, requestedOutputs: spec.requestedOutputs ?? [], constraints: spec.constraints ?? [], preferences: spec.preferences ?? [], sourceRefs: spec.sourceRefs ?? [], createdAt: spec.createdAt ?? event.createdAt };
+    }
+    return null;
   }
 
   async acceptanceContract(missionId: string): Promise<AcceptanceContract | null> {
