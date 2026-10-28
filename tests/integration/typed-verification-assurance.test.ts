@@ -6,12 +6,31 @@ import { join } from "node:path";
 import { MissionRuntime } from "../../src/runtime/mission-runtime.ts";
 import { FakeHostAdapter } from "../../src/hosts/fake/fake-host-adapter.ts";
 import { ArtifactAssurancePipeline } from "../../src/runtime/orchestration/artifact-assurance-pipeline.ts";
+import { ArtifactInspectionService } from "../../src/runtime/orchestration/artifact-inspection-service.ts";
+import { InspectionProviderRegistry } from "../../src/core/inspection/inspection-registry.ts";
+import type { InspectionProvider } from "../../src/core/inspection/inspection-provider.ts";
 import { ProfiledVerifier } from "../../src/core/verification/profiled-verifier.ts";
 import { VerificationPlanner } from "../../src/core/verification/verification-planner.ts";
 import { VerifierRegistry } from "../../src/core/verification/verifier-registry.ts";
 import { DeterministicFileCheckExecutor } from "../../src/core/verification/deterministic-file-check-executor.ts";
 import { HostReviewCheckExecutor } from "../../src/core/verification/host-review-check-executor.ts";
 import type { AcceptanceContract, Requirement } from "../../src/core/domain/mission.ts";
+
+class FakePresentationInspectionProvider implements InspectionProvider {
+  id = "fake-presentation-renderer";
+  version = "1";
+  supports(artifact: any, request: any): boolean { return artifact.type === "presentation" && request.kind === "page-render"; }
+  async inspect(artifact: any, _request: any, context: any) {
+    const path = join(context.outputDir, "slide-1.png");
+    writeFileSync(path, "rendered-slide-pixels", "utf8");
+    return {
+      providerId: this.id,
+      providerVersion: this.version,
+      sourceArtifactRef: `${artifact.id}@${artifact.version}`,
+      products: [{ kind: "page-render" as const, path, type: "image" as const, logicalSuffix: "slide-1", mimeType: "image/png" }]
+    };
+  }
+}
 
 function acceptance(missionId: string) {
   const requirement: Requirement = { id: "r-visual", description: "Deck has strong visual hierarchy", type: "visual", priority: "required", verification: "review", status: "unverified", evidenceRefs: [] };
@@ -42,20 +61,50 @@ test("artifact assurance refuses to promote visual requirements when perceptual 
   runtime.close();
 });
 
-test("independent host reviewer evidence can satisfy a linked visual requirement", async () => {
+test("presentation reviewer cannot pass perceptual verification without derived renders", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mission-review-no-render-"));
+  const host = new FakeHostAdapter([], { agentResponder: () => ({ status: "pass", detail: "I would pass anything", confidence: 1 }) });
+  const { runtime, requirement, workspace, work, envelope } = await prepare(root, host, "m-review-no-render");
+  const verifier = new ProfiledVerifier(new VerificationPlanner(), new VerifierRegistry([new DeterministicFileCheckExecutor(), new HostReviewCheckExecutor(host)]));
+  const pipeline = new ArtifactAssurancePipeline({ controller: runtime.controller, projections: runtime.projections, artifacts: runtime.artifacts, verifier });
+  const result = await pipeline.process(work, "attempt-v", workspace.root, envelope);
+  assert.equal(result.ok, false);
+  assert.equal((await runtime.projections.listRequirements("m-review-no-render")).find(item => item.id === requirement.id)?.status, "unverified");
+  assert.equal(host.agentRequests.length, 0, "reviewer must not be asked to infer presentation appearance from a PPTX path");
+  runtime.close();
+});
+
+test("independent host reviewer can satisfy visual requirement only after a derived slide render exists", async () => {
   const root = mkdtempSync(join(tmpdir(), "mission-review-pass-"));
   const host = new FakeHostAdapter([], { agentResponder: request => {
-    const kind = (request.context as any)?.kind;
-    if (kind === "verification-review") return { status: "pass", detail: "Hierarchy is clear at presentation scale", confidence: 0.9 };
+    const context = request.context as any;
+    if (context?.kind === "verification-review") {
+      assert.equal(context.inspectionArtifacts.length, 1);
+      assert.equal(context.inspectionArtifacts[0].type, "image");
+      assert.ok(context.inspectionArtifacts[0].sourceArtifactRefs.includes("deck@1"));
+      return { status: "pass", detail: "Rendered slide hierarchy is clear at presentation scale", confidence: 0.9 };
+    }
     return {};
   }});
   const { runtime, requirement, workspace, work, envelope } = await prepare(root, host, "m-review-pass");
   const verifier = new ProfiledVerifier(new VerificationPlanner(), new VerifierRegistry([new DeterministicFileCheckExecutor(), new HostReviewCheckExecutor(host)]));
-  const pipeline = new ArtifactAssurancePipeline({ controller: runtime.controller, projections: runtime.projections, artifacts: runtime.artifacts, verifier });
+  const inspectionService = new ArtifactInspectionService({
+    controller: runtime.controller,
+    artifacts: runtime.artifacts,
+    workspaces: runtime.workspaces,
+    registry: new InspectionProviderRegistry([new FakePresentationInspectionProvider()])
+  });
+  const pipeline = new ArtifactAssurancePipeline({ controller: runtime.controller, projections: runtime.projections, artifacts: runtime.artifacts, verifier, inspectionService });
   const result = await pipeline.process(work, "attempt-v", workspace.root, envelope);
   assert.equal(result.ok, true);
   const projected = (await runtime.projections.listRequirements("m-review-pass")).find(item => item.id === requirement.id);
   assert.equal(projected?.status, "satisfied");
   assert.ok((projected?.evidenceRefs.length ?? 0) > 0);
+  const artifacts = await runtime.projections.listArtifacts("m-review-pass");
+  const inspectionArtifact = artifacts.find(item => item.logicalName.startsWith("__inspection__"));
+  assert.ok(inspectionArtifact);
+  assert.deepEqual(inspectionArtifact?.sourceArtifactRefs, ["deck@1"]);
+  const state = await runtime.controller.state("m-review-pass");
+  assert.deepEqual(state.finalArtifactRefs, ["deck@1"]);
   runtime.close();
 });
