@@ -15,6 +15,7 @@ jobs:
       - name: Apply and verify budget enforcement
         run: |
           bash scripts/apply-budget-enforcement.sh
+          bash scripts/fix-budget-config-wake.sh
           npm test
           npm run smoke
           git diff --check
