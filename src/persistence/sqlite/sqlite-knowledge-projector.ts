@@ -31,6 +31,7 @@ export class SqliteKnowledgeProjector {
         if (!row) return;
         const source = JSON.parse(row.data_json) as SourceRecord;
         source.status = payload.status;
+        if (payload.supersededBy) source.supersededBy = payload.supersededBy;
         source.metadata = { ...(source.metadata ?? {}), lastStatusReason: payload.reason, lastStatusAt: event.createdAt };
         db.prepare("UPDATE sources SET status = ?, data_json = ?, updated_at = ? WHERE id = ? AND mission_id = ?")
           .run(source.status, JSON.stringify(source), event.createdAt, source.id, event.missionId);
