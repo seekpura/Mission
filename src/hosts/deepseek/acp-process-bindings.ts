@@ -23,6 +23,7 @@ export interface DeepSeekAcpProcessOptions {
   binary?: string;
   argsPrefix?: string[];
   env?: NodeJS.ProcessEnv;
+  cancelGraceMs?: number;
   approvalHandler?: (request: ApprovalRequest) => Promise<ApprovalResult>;
 }
 
@@ -41,6 +42,7 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
   private readonly binary: string;
   private readonly argsPrefix: string[];
   private readonly env: NodeJS.ProcessEnv;
+  private readonly cancelGraceMs: number;
   private readonly approvalHandler?: (request: ApprovalRequest) => Promise<ApprovalResult>;
   private readonly running = new Map<string, RunningAgent>();
 
@@ -48,6 +50,7 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
     this.binary = options.binary ?? "dsh";
     this.argsPrefix = [...(options.argsPrefix ?? [])];
     this.env = { ...process.env, ...(options.env ?? {}) };
+    this.cancelGraceMs = Math.max(0, options.cancelGraceMs ?? 1_500);
     this.approvalHandler = options.approvalHandler;
   }
 
@@ -153,7 +156,7 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
       const detail = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to create DeepSeek Harness ACP agent: ${detail}${stderr ? `\n${stderr}` : ""}`);
     } finally {
-      if (!runningRef && child.exitCode !== null) child.kill();
+      if (!runningRef && child.exitCode === null) child.kill();
     }
   }
 
@@ -169,13 +172,16 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
   async cancelAgent(handle: HostAgentHandle): Promise<void> {
     const running = this.requireRunning(handle);
     if (running.finished) return;
-    try {
-      await running.connection.agent.notify(acp.methods.agent.session.cancel, {
-        sessionId: running.session.sessionId
-      });
-    } finally {
-      if (running.child.exitCode === null) running.child.kill();
-    }
+
+    await running.connection.agent.notify(acp.methods.agent.session.cancel, {
+      sessionId: running.session.sessionId
+    });
+
+    if (running.finished) return;
+    const fallback = setTimeout(() => {
+      if (!running.finished && running.child.exitCode === null) running.child.kill();
+    }, this.cancelGraceMs);
+    fallback.unref();
   }
 
   async *observeAgent(handle: HostAgentHandle): AsyncIterable<HostAgentEvent> {
