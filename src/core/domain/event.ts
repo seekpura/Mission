@@ -54,6 +54,7 @@ export type MissionEventType =
   | "capability.candidate.sandboxed"
   | "capability.acquisition.receipt"
   | "capability.activated"
+  | "capability.invalidated"
   | "capability.rejected"
   | "approval.requested"
   | "approval.decided"
