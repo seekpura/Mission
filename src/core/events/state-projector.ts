@@ -9,6 +9,7 @@ export function initialMissionState(missionId: string): MissionState {
     missionSpecRevision: 0,
     acceptanceRevision: 0,
     strategyRevision: null,
+    strategyAppliedSteeringSequence: 0,
     graphRevision: 0,
     environmentSnapshotRevision: 0,
     activeWorkstreamIds: [],
@@ -75,9 +76,17 @@ export function applyMissionEvent(state: MissionState, event: MissionEvent): Mis
       state.acceptanceRevision = (event.payload as { revision: number }).revision;
       break;
     case "strategy.created":
-    case "strategy.revised":
-      state.strategyRevision = (event.payload as { revision: number }).revision;
+    case "strategy.revised": {
+      const payload = event.payload as { revision: number; appliedSteeringSequence?: number };
+      state.strategyRevision = payload.revision;
+      if (typeof payload.appliedSteeringSequence === "number" && Number.isInteger(payload.appliedSteeringSequence) && payload.appliedSteeringSequence >= 0) {
+        state.strategyAppliedSteeringSequence = Math.max(
+          state.strategyAppliedSteeringSequence ?? 0,
+          payload.appliedSteeringSequence
+        );
+      }
       break;
+    }
     case "graph.revised":
       state.graphRevision = (event.payload as { revision: number }).revision;
       break;
