@@ -1,4 +1,5 @@
 import type { MissionEvent } from "../../core/domain/event.ts";
+import type { InvocationReceipt } from "../../core/domain/invocation.ts";
 import type { AcceptanceContract, MissionSpec, MissionState, Requirement } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
 import type { Evidence, Gap, VerificationResult } from "../../core/domain/verification.ts";
@@ -57,6 +58,7 @@ export class SqliteProjectionStore implements MissionProjectionReader, MissionPr
     db.prepare("DELETE FROM capability_needs WHERE mission_id = ?").run(missionId);
     db.prepare("DELETE FROM capability_candidates WHERE mission_id = ?").run(missionId);
     db.prepare("DELETE FROM acquisition_receipts WHERE mission_id = ?").run(missionId);
+    db.prepare("DELETE FROM invocation_receipts WHERE mission_id = ?").run(missionId);
     for (const event of events) this.apply(event);
   }
 
@@ -112,6 +114,12 @@ export class SqliteProjectionStore implements MissionProjectionReader, MissionPr
     const rows = this.database.db.prepare("SELECT data_json FROM acquisition_receipts WHERE mission_id = ? ORDER BY created_at ASC")
       .all(missionId) as Array<{ data_json: string }>;
     return rows.map(row => JSON.parse(row.data_json) as AcquisitionReceipt);
+  }
+
+  async listInvocationReceipts(missionId: string): Promise<InvocationReceipt[]> {
+    const rows = this.database.db.prepare("SELECT data_json FROM invocation_receipts WHERE mission_id = ? ORDER BY created_at ASC")
+      .all(missionId) as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as InvocationReceipt);
   }
 
   async listVerificationResults(missionId: string): Promise<VerificationResult[]> {

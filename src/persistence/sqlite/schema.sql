@@ -247,3 +247,16 @@ CREATE TABLE IF NOT EXISTS acquisition_receipts (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_acquisition_receipts_need ON acquisition_receipts(mission_id, need_id, created_at);
+
+
+CREATE TABLE IF NOT EXISTS invocation_receipts (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  work_item_id TEXT NOT NULL,
+  execution_id TEXT NOT NULL,
+  route TEXT NOT NULL,
+  result TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_invocation_receipts_mission ON invocation_receipts(mission_id, created_at);
