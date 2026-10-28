@@ -19,6 +19,7 @@ export interface ExecutionRoute {
   sideEffectPolicy: SideEffectPolicy;
   resourceRequest: ResourceRequest;
   requiresApproval: boolean;
+  cancellable: boolean;
 }
 
 export interface RoutedExecutionInput {
@@ -47,6 +48,7 @@ export class WorkExecutionRouter {
   private readonly resources: ResourceManager;
   private readonly artifactLeases: ArtifactLeaseManager;
   private readonly audit?: ExecutionAuditObserver;
+  private readonly active = new Map<string, { cancel?: () => Promise<void>; settled: Promise<void> }>();
 
   constructor(input: {
     host: HostAdapter;
@@ -80,6 +82,20 @@ export class WorkExecutionRouter {
     return routeFor("host_agent", undefined, capabilities.length > 1
       ? "Multiple capabilities require agent composition"
       : single ? `${single.kind} capability requires agent-assisted execution` : "No direct capability route is available");
+  }
+
+  async cancel(executionId: string): Promise<boolean> {
+    const active = this.active.get(executionId);
+    if (!active?.cancel) return false;
+    await active.cancel();
+    await active.settled;
+    this.resources.releaseOwner(executionId);
+    this.artifactLeases.releaseOwner(executionId);
+    return true;
+  }
+
+  async recover(executionId: string): Promise<"running" | "lost"> {
+    return this.active.has(executionId) ? "running" : "lost";
   }
 
   async execute(input: RoutedExecutionInput): Promise<RoutedExecutionResult> {
@@ -121,7 +137,7 @@ export class WorkExecutionRouter {
   private async executeAgent(input: RoutedExecutionInput): Promise<ExecutionResult> {
     const handle = await this.agents.allocate(input.baseRequest);
     await this.agents.start(handle);
-    return this.agents.collect(handle);
+    return this.track(input.baseRequest.executionId, () => this.agents.cancel(handle), this.agents.collect(handle));
   }
 
   private async executeHostCapability(input: RoutedExecutionInput, route: ExecutionRoute): Promise<ExecutionResult> {
@@ -143,7 +159,7 @@ export class WorkExecutionRouter {
     };
     const handle = await this.hostCapabilities.allocate(request);
     await this.hostCapabilities.start(handle);
-    return this.hostCapabilities.collect(handle);
+    return this.track(input.baseRequest.executionId, undefined, this.hostCapabilities.collect(handle));
   }
 
   private async executeLocalCli(input: RoutedExecutionInput, route: ExecutionRoute): Promise<ExecutionResult> {
@@ -164,7 +180,14 @@ export class WorkExecutionRouter {
     };
     const handle = await this.local.allocate(request);
     await this.local.start(handle);
-    return this.local.collect(handle);
+    return this.track(input.baseRequest.executionId, () => this.local.cancel(handle), this.local.collect(handle));
+  }
+
+  private async track(executionId: string, cancel: (() => Promise<void>) | undefined, collected: Promise<ExecutionResult>): Promise<ExecutionResult> {
+    const settled = collected.then(() => undefined, () => undefined);
+    this.active.set(executionId, { cancel, settled });
+    try { return await collected; }
+    finally { this.active.delete(executionId); }
   }
 }
 
@@ -178,6 +201,7 @@ function routeFor(kind: ExecutionRouteKind, capability: CapabilityDescriptor | u
     capability,
     reason,
     requiresApproval,
+    cancellable: kind === "host_agent" || kind === "local_cli",
     resourceRequest: { exclusiveResources },
     sideEffectPolicy: {
       externalWrites: "deny",

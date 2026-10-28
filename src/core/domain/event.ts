@@ -24,6 +24,7 @@ export type MissionEventType =
   | "attempt.completed"
   | "execution.created"
   | "execution.started"
+  | "execution.cancel.requested"
   | "execution.route.selected"
   | "execution.invocation.recorded"
   | "execution.completed"

@@ -126,7 +126,7 @@ export class MissionOrchestrator {
       outputProtocol: workerProtocolInstruction(workspace.root)
     };
 
-    const selectedRoute: ExecutionRoute = this.executionRouter?.select(work, capabilities) ?? { kind: "host_agent", reason: "legacy host-agent route", sideEffectPolicy: { externalWrites: "approval", destructiveWrites: "approval", irreversibleActions: "approval", idempotencyRequired: true }, resourceRequest: {}, requiresApproval: false };
+    const selectedRoute: ExecutionRoute = this.executionRouter?.select(work, capabilities) ?? { kind: "host_agent", reason: "legacy host-agent route", cancellable: true, sideEffectPolicy: { externalWrites: "approval", destructiveWrites: "approval", irreversibleActions: "approval", idempotencyRequired: true }, resourceRequest: {}, requiresApproval: false };
     await this.controller.emit(work.missionId, "attempt.created", { id: attemptId, workItemId: work.id, executorId: selectedRoute.kind, contextPacketId: contextPacket.id }, { type: "controller" }, `attempt:${attemptId}`);
     await this.controller.emit(work.missionId, "work.started", { id: work.id }, { type: "controller" }, `work-started:${work.id}:${attemptId}`);
     await this.controller.emit(work.missionId, "execution.created", { id: executionId, workItemId: work.id, attemptId, executorType: selectedRoute.kind, routeReason: selectedRoute.reason }, { type: "controller" }, `execution-created:${executionId}`);
@@ -173,7 +173,13 @@ export class MissionOrchestrator {
         sideEffects: result.sideEffects, result: result.state, startedAt: result.startedAt, endedAt: result.endedAt, createdAt: new Date().toISOString()
       };
       await this.controller.emit(work.missionId, "execution.invocation.recorded", { receipt }, { type: "system" }, `invocation:${executionId}`);
-      await this.controller.emit(work.missionId, result.state === "succeeded" ? "execution.completed" : "execution.failed", { id: executionId, result }, { type: "host" }, `execution-settled:${executionId}`);
+      const settledEvent = result.state === "succeeded" ? "execution.completed" : result.state === "cancelled" ? "execution.cancelled" : "execution.failed";
+      await this.controller.emit(work.missionId, settledEvent, { id: executionId, result }, { type: "host" }, `execution-settled:${executionId}`);
+      if (result.state === "cancelled") {
+        await this.controller.emit(work.missionId, "attempt.completed", { id: attemptId, workItemId: work.id, status: "cancelled", reason: "Execution cancelled" }, { type: "controller" }, `attempt-completed:${attemptId}`);
+        await this.controller.emit(work.missionId, "work.updated", { id: work.id, status: "waiting", reason: "Execution cancelled; awaiting reschedule or user direction" }, { type: "controller" }, `work-cancelled:${work.id}:${attemptId}`);
+        return;
+      }
       const envelope = parseWorkerOutput(result.runtimeObservationRef);
       if (result.state !== "succeeded" || envelope?.status === "failed") {
         await this.failWork(work, attemptId, envelope?.summary ?? `Host execution ended as ${result.state}`);

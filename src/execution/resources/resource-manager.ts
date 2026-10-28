@@ -11,9 +11,7 @@ export class ResourceManager {
   async acquire(ownerId: string, resources: string[]): Promise<ResourceLease> {
     const requested = [...new Set(resources)].sort();
     if (requested.length === 0) return { ownerId, resources: [], release() {} };
-    while (!this.canAcquire(ownerId, requested)) {
-      await new Promise<void>(resolve => this.waiters.push(resolve));
-    }
+    while (!this.canAcquire(ownerId, requested)) await new Promise<void>(resolve => this.waiters.push(resolve));
     for (const resource of requested) this.holders.set(resource, ownerId);
     let released = false;
     return {
@@ -22,16 +20,25 @@ export class ResourceManager {
       release: () => {
         if (released) return;
         released = true;
-        for (const resource of requested) {
-          if (this.holders.get(resource) === ownerId) this.holders.delete(resource);
-        }
-        const waiters = this.waiters.splice(0);
-        for (const waiter of waiters) waiter();
+        for (const resource of requested) if (this.holders.get(resource) === ownerId) this.holders.delete(resource);
+        this.wakeWaiters();
       }
     };
   }
 
+  releaseOwner(ownerId: string): void {
+    for (const [resource, owner] of [...this.holders.entries()]) if (owner === ownerId) this.holders.delete(resource);
+    this.wakeWaiters();
+  }
+
+  isHeld(resource: string): boolean { return this.holders.has(resource); }
+
   private canAcquire(ownerId: string, resources: string[]): boolean {
     return resources.every(resource => !this.holders.has(resource) || this.holders.get(resource) === ownerId);
+  }
+
+  private wakeWaiters(): void {
+    const waiters = this.waiters.splice(0);
+    for (const waiter of waiters) waiter();
   }
 }
