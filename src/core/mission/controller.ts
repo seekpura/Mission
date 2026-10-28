@@ -813,13 +813,9 @@ export class MissionController {
     need: CapabilityNeed | undefined,
     reason: string
   ): Promise<void> {
-    await this.emit(
-      missionId,
-      "work.blocked",
-      { id: work.id, reason, capabilityNeedRef: needRef },
-      { type: "controller" },
-      `work-blocked:capability:${work.id}:${needRef}`
-    );
+    // A first-class blocking Gap is the durable completion authority. Persist it
+    // before changing Work state so a crash can never leave an unrepresented
+    // capability blocker that later becomes ambiguous during restart recovery.
     await this.openGap(missionId, {
       id: `capability-gap:${work.id}:${needRef}`,
       severity: "major",
@@ -829,6 +825,13 @@ export class MissionController {
       requirementRefs: unique([...work.requirementRefs, ...(need?.requirementRefs ?? [])]),
       artifactRefs: work.inputArtifactRefs
     });
+    await this.emit(
+      missionId,
+      "work.blocked",
+      { id: work.id, reason, capabilityNeedRef: needRef },
+      { type: "controller" },
+      `work-blocked:capability:${work.id}:${needRef}`
+    );
   }
 
   private async verifyArtifact(
@@ -1079,7 +1082,11 @@ function completionGateEligible(state: MissionState): boolean {
   if (state.status === "completed") return false;
   if (state.blockingGapIds.length > 0) return false;
   if (state.readyWorkItemIds.length > 0 || state.activeWorkItemIds.length > 0) return false;
-  if (state.blockedWorkItemIds.length > 0 || state.verifyingWorkItemIds.length > 0) return false;
+  // Blocked Work is a historical execution path, not a second completion
+  // authority. Every capability block is represented first by a durable
+  // blocking Gap; once that Gap is independently resolved, a verified fallback
+  // may legitimately complete the Mission without reviving the old Work path.
+  if (state.verifyingWorkItemIds.length > 0) return false;
   if (state.activeExecutionIds.length > 0 || state.pendingApprovalIds.length > 0) return false;
   return state.finalArtifactRefs.length > 0;
 }
