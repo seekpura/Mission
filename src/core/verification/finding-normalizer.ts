@@ -38,8 +38,7 @@ function artifactId(ref?: string): string {
 function normalizeText(value: string): string {
   return value
     .toLowerCase()
-    .replace(/\b(?:slide|page|frame|row|line)\s*#?\d+\b/g, "$1")
-    .replace(/\b\d+(?:\.\d+)?\b/g, "#")
+    .replace(/\b(slide|page|frame|row|line)\s*#?\d+\b/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
 }
