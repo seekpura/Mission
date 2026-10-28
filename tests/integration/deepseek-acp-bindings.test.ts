@@ -58,6 +58,63 @@ test("DeepSeek ACP binding runs initialize/session/prompt/update/permission/stop
   }
 });
 
+test("DeepSeek ACP binding resumes the same native session after the original ACP process disconnects", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "mission-dsh-resume-"));
+  const approvalHandler = async () => ({ approved: true, scope: "once" as const });
+
+  try {
+    const firstAdapter = new DeepSeekHarnessAdapter(new DeepSeekAcpProcessBindings({
+      binary: process.execPath,
+      argsPrefix: [fixture],
+      approvalHandler
+    }));
+    const handle = await firstAdapter.createAgent({
+      missionId: "mission-acp-resume",
+      workItemId: "work-resume",
+      context: { disconnectForRecovery: true, objective: "continue after reconnect" },
+      allowedCapabilityRefs: ["deepseek-harness.acp-agent"],
+      workspaceRoot: workspace
+    });
+
+    const firstEvents = [];
+    for await (const event of firstAdapter.observeAgent(handle)) firstEvents.push(event);
+    assert.equal(firstEvents[0]?.type, "started");
+    assert.equal(firstEvents.at(-1)?.type, "failed");
+    assert.match(handle.nativeRef ?? "", /^fake-session-/);
+
+    const secondAdapter = new DeepSeekHarnessAdapter(new DeepSeekAcpProcessBindings({
+      binary: process.execPath,
+      argsPrefix: [fixture],
+      approvalHandler
+    }));
+    const resumed = await secondAdapter.resumeAgent({
+      missionId: "mission-acp-resume",
+      workItemId: "work-resume",
+      handleId: handle.id,
+      nativeRef: handle.nativeRef!,
+      context: { disconnectForRecovery: true, objective: "continue after reconnect" },
+      allowedCapabilityRefs: ["deepseek-harness.acp-agent"],
+      workspaceRoot: workspace
+    });
+
+    assert.equal(resumed.status, "resumed");
+    if (resumed.status !== "resumed") return;
+    assert.equal(resumed.handle.id, handle.id);
+    assert.equal(resumed.handle.nativeRef, handle.nativeRef);
+
+    const resumedEvents = [];
+    for await (const event of secondAdapter.observeAgent(resumed.handle)) resumedEvents.push(event);
+
+    assert.equal(resumedEvents[0]?.type, "started");
+    assert.equal((resumedEvents[0]?.payload as { resumed?: boolean })?.resumed, true);
+    assert.equal(resumedEvents.some(event => event.type === "message"), true);
+    assert.equal(resumedEvents.some(event => event.type === "tool"), true);
+    assert.equal(resumedEvents.at(-1)?.type, "completed");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("DeepSeek ACP binding prefers protocol cancellation before process fallback", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "mission-dsh-cancel-"));
 
