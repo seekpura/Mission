@@ -1,0 +1,14 @@
+{
+  "name": "@mission-runtime/dsh-live-launcher-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-cmdline": "*"
+  }
+}
