@@ -1,0 +1,32 @@
+name: Apply finding gap pipeline
+on:
+  push:
+    branches: [build/finding-gap-clustering]
+    paths:
+      - scripts/apply-finding-gap-pipeline.sh
+      - .github/workflows/apply-finding-gap-pipeline.yml
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/finding-gap-clustering
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply and verify
+        run: |
+          bash scripts/apply-finding-gap-pipeline.sh
+          npm test
+          npm run smoke
+          git diff --check
+      - name: Commit patched runtime
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/runtime/orchestration/artifact-assurance-pipeline.ts
+          git commit -m 'build: route verification findings through gap clustering'
+          git push origin HEAD:build/finding-gap-clustering
