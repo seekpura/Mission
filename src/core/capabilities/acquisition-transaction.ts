@@ -291,7 +291,13 @@ export class CapabilityAcquisitionTransaction {
     identity: CapabilitySourceIdentity;
     cacheHit: TrustedCapabilityCacheHit;
   }): Promise<CapabilityAcquisitionOutcome> {
-    const security = structuredClone(input.cacheHit.record.security);
+    // Cached security findings are evidence about exact bytes. Rebind only the
+    // per-discovery candidate identity so the new Mission receipt cannot point
+    // at a previous Mission's transient candidate id.
+    const security: SecurityAssessment = {
+      ...structuredClone(input.cacheHit.record.security),
+      candidateId: input.candidate.id
+    };
     const policy = this.policy.evaluateSecurity(security);
     const cache: AcquisitionReceipt["cache"] = {
       status: "reused",
