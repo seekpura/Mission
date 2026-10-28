@@ -1,5 +1,6 @@
 export type CapabilityKind = "skill" | "tool" | "mcp" | "agent" | "runtime" | "library" | "cli" | "application" | "workflow";
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
+export type CapabilityNeedStatus = "checking-installed" | "discovering" | "evaluating" | "acquiring" | "available" | "unresolved";
 
 export interface CapabilityDescriptor {
   id: string;
@@ -11,7 +12,10 @@ export interface CapabilityDescriptor {
   invocationRef?: string;
   permissions: string[];
   revision?: string;
+  contentHash?: string;
+  sourceUri?: string;
   scope: "host" | "mission" | "trusted-cache";
+  metadata?: Record<string, unknown>;
 }
 
 export interface CapabilityNeed {
@@ -27,6 +31,8 @@ export interface CapabilityNeed {
   maxRisk: RiskLevel;
   requirementRefs: string[];
   gapRefs: string[];
+  status?: CapabilityNeedStatus;
+  resolvedCapabilityRef?: string;
 }
 
 export interface CapabilityCandidate {
@@ -39,6 +45,14 @@ export interface CapabilityCandidate {
   resolvedRevision?: string;
   contentHash?: string;
   status: "discovered" | "inspecting" | "rejected" | "quarantined" | "verified" | "activated";
+  metadata?: Record<string, unknown>;
+}
+
+export interface MaterializedCapabilityCandidate {
+  candidate: CapabilityCandidate;
+  root: string;
+  resolvedRevision: string;
+  contentHash: string;
 }
 
 export interface SecurityFinding {
@@ -54,4 +68,28 @@ export interface SecurityAssessment {
   findings: SecurityFinding[];
   requestedPermissions: string[];
   recommendedAction: "sandbox" | "approval_required" | "reject";
+}
+
+export interface SandboxAssessment {
+  candidateId: string;
+  passed: boolean;
+  mode: "instruction" | "node-cli" | "generic";
+  observations: string[];
+  invocationRef?: string;
+  error?: string;
+}
+
+export interface AcquisitionReceipt {
+  id: string;
+  missionId: string;
+  capabilityNeedRef: string;
+  candidateId: string;
+  sourceUri: string;
+  resolvedRevision: string;
+  contentHash: string;
+  security: SecurityAssessment;
+  sandbox: SandboxAssessment;
+  capabilityRef?: string;
+  status: "activated" | "rejected" | "approval_required" | "failed";
+  createdAt: string;
 }

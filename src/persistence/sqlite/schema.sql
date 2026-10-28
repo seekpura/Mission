@@ -211,3 +211,39 @@ CREATE TABLE IF NOT EXISTS capabilities (
   data_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS capability_needs (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  urgency TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_capability_needs_mission_status ON capability_needs(mission_id, status, urgency);
+
+CREATE TABLE IF NOT EXISTS capability_candidates (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  need_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  source_uri TEXT NOT NULL,
+  revision TEXT,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_capability_candidates_need ON capability_candidates(mission_id, need_id, status);
+
+CREATE TABLE IF NOT EXISTS acquisition_receipts (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  need_id TEXT NOT NULL,
+  candidate_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_acquisition_receipts_need ON acquisition_receipts(mission_id, need_id, created_at);

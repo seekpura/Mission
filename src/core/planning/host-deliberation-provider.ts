@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { HostAdapter } from "../../hosts/deepseek/host-adapter.ts";
 import type { AcceptanceContract, MissionSpec, Requirement, RequiredArtifact, RequiredValidation } from "../domain/mission.ts";
+import type { CapabilityNeed } from "../domain/capability.ts";
 import type { WorkItem, WorkPurpose } from "../domain/work-item.ts";
 import type { DeliberationProvider, StrategyProposal, FrontierProposal, GapDiagnosis, CompletionChallenge, MissionInterpretation } from "./deliberation-provider.ts";
 
@@ -108,8 +109,8 @@ Open gaps: ${JSON.stringify(input.openGaps)}
 Acceptance contract: ${JSON.stringify(input.acceptanceContract ?? null)}
 Requirements: ${JSON.stringify(input.requirements ?? [])}
 Plan ONLY the next useful execution frontier, not the entire mission. Prefer 1-4 meaningful work items. Do not create tiny coordination tasks.
-Return ONLY JSON: {"graphRevision":number,"workItems":[{"id":string,"purpose":"exploration|production|verification|repair|acquisition|integration","objective":string,"requirementRefs":string[],"gapRefs":string[],"inputArtifactRefs":string[],"capabilityNeedRefs":string[],"priority":number,"expectedOutputs":[{"logicalName":string,"type":string,"required":boolean}]}]}.
-When a work item produces a required deliverable, use the exact requiredArtifacts.logicalName and attach its requirementRefs. Use purpose=exploration when the direction is still uncertain and there is no stronger requirement/gap linkage.
+Return ONLY JSON: {"graphRevision":number,"capabilityNeeds":[{"id":string,"objective":string,"requiredFunctions":string[],"desiredInputs":string[],"desiredOutputs":string[],"purpose":"production|verification|research|integration","urgency":"blocking|high-value|optional-improvement","acquisitionAllowed":boolean,"maxRisk":"low|medium|high","requirementRefs":string[],"gapRefs":string[]}],"workItems":[{"id":string,"purpose":"exploration|production|verification|repair|acquisition|integration","objective":string,"requirementRefs":string[],"gapRefs":string[],"inputArtifactRefs":string[],"capabilityNeedRefs":string[],"priority":number,"expectedOutputs":[{"logicalName":string,"type":string,"required":boolean}]}]}.
+Only create a CapabilityNeed when the current environment may not already provide a required function. A WorkItem capabilityNeedRefs must reference ids from capabilityNeeds. When a work item produces a required deliverable, use the exact requiredArtifacts.logicalName and attach its requirementRefs. Use purpose=exploration when the direction is still uncertain and there is no stronger requirement/gap linkage.
 `);
     const now = new Date().toISOString();
     const nextRevision = Math.max(input.state.graphRevision + 1, numberValue(value.graphRevision, input.state.graphRevision + 1));
@@ -142,7 +143,22 @@ When a work item produces a required deliverable, use the exact requiredArtifact
         updatedAt: now
       };
     });
-    return { workItems, graphRevision: nextRevision };
+    const capabilityNeeds: CapabilityNeed[] = arrayValue(value.capabilityNeeds).slice(0, 8).map((raw: any, index) => ({
+        id: stringValue(raw?.id, `need-${nextRevision}-${index + 1}`),
+        missionId: input.state.missionId,
+        objective: stringValue(raw?.objective, "Provide a capability required by the current frontier"),
+        requiredFunctions: stringArray(raw?.requiredFunctions),
+        desiredInputs: stringArray(raw?.desiredInputs),
+        desiredOutputs: stringArray(raw?.desiredOutputs),
+        purpose: capabilityPurpose(raw?.purpose),
+        urgency: capabilityUrgency(raw?.urgency),
+        acquisitionAllowed: raw?.acquisitionAllowed !== false,
+        maxRisk: capabilityRisk(raw?.maxRisk),
+        requirementRefs: stringArray(raw?.requirementRefs),
+        gapRefs: stringArray(raw?.gapRefs),
+        status: "checking-installed"
+      }));
+      return { workItems, capabilityNeeds, graphRevision: nextRevision };
   }
 
   async diagnoseGap(input: Parameters<DeliberationProvider["diagnoseGap"]>[0]): Promise<GapDiagnosis> {
@@ -230,3 +246,7 @@ function requirementType(value: unknown): Requirement["type"] { const allowed = 
 function requirementPriority(value: unknown): Requirement["priority"] { return value === "critical" || value === "preferred" ? value : "required"; }
 function requirementVerification(value: unknown): Requirement["verification"] { const allowed = ["artifact","test","review","evidence","runtime","human"] as const; return (allowed as readonly unknown[]).includes(value) ? value as Requirement["verification"] : "evidence"; }
 function validationLevel(value: unknown): RequiredValidation["level"] { const allowed = ["structural","functional","quality","integration","mission"] as const; return (allowed as readonly unknown[]).includes(value) ? value as RequiredValidation["level"] : undefined; }
+
+function capabilityPurpose(value: unknown): CapabilityNeed["purpose"] { return ["production","verification","research","integration"].includes(String(value)) ? value as CapabilityNeed["purpose"] : "production"; }
+function capabilityUrgency(value: unknown): CapabilityNeed["urgency"] { return ["blocking","high-value","optional-improvement"].includes(String(value)) ? value as CapabilityNeed["urgency"] : "blocking"; }
+function capabilityRisk(value: unknown): CapabilityNeed["maxRisk"] { return ["low","medium","high"].includes(String(value)) ? value as CapabilityNeed["maxRisk"] : "medium"; }

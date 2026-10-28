@@ -29,7 +29,8 @@ export class AgentSkillsDiscoveryProvider implements CapabilityDiscoveryProvider
       description: result.description,
       candidateKind: "skill",
       resolvedRevision: result.revision,
-      status: "discovered"
+      status: "discovered",
+      metadata: { skillName: result.name, discoveryProvider: "agent-skills" }
     }));
   }
 }
