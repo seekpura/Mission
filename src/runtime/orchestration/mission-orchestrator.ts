@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { WorkItem } from "../../core/domain/work-item.ts";
+import type { CapabilityDescriptor } from "../../core/domain/capability.ts";
 import type { MissionController } from "../../core/mission/controller.ts";
 import type { MissionProjectionReader } from "../../core/events/projection-store.ts";
 import { ContextCompiler } from "../../core/context/context-compiler.ts";
 import { parseWorkerOutput, workerProtocolInstruction, type WorkerOutputEnvelope } from "../../core/execution/worker-output.ts";
 import { ArtifactAssurancePipeline } from "./artifact-assurance-pipeline.ts";
 import { HostAgentExecutionBackend, type HostAgentExecutionRequest } from "../../execution/host/host-agent-execution-backend.ts";
+import type { CapabilityCoordinator } from "./capability-coordinator.ts";
 import type { WorkspaceManager } from "../../execution/workspace/workspace-manager.ts";
 import type { FileArtifactStore } from "../../execution/artifacts/artifact-store.ts";
 import type { Verifier } from "../../core/verification/verifier.ts";
@@ -26,6 +28,7 @@ export class MissionOrchestrator {
   private readonly maxConcurrency: number;
   private readonly maxCyclesPerWake: number;
   private readonly assurance: ArtifactAssurancePipeline;
+  private readonly capabilityCoordinator?: CapabilityCoordinator;
   private readonly running = new Map<string, Promise<void>>();
   private readonly rerunRequested = new Set<string>();
 
@@ -37,6 +40,7 @@ export class MissionOrchestrator {
     artifacts: FileArtifactStore;
     verifier: Verifier;
     contextCompiler?: ContextCompiler;
+    capabilityCoordinator?: CapabilityCoordinator;
     options?: MissionOrchestratorOptions;
   }) {
     this.controller = input.controller;
@@ -48,6 +52,7 @@ export class MissionOrchestrator {
     this.contextCompiler = input.contextCompiler ?? new ContextCompiler();
     this.maxConcurrency = Math.max(1, input.options?.maxConcurrency ?? 4);
     this.maxCyclesPerWake = Math.max(1, input.options?.maxCyclesPerWake ?? 64);
+    this.capabilityCoordinator = input.capabilityCoordinator;
     this.assurance = new ArtifactAssurancePipeline({ controller: input.controller, projections: input.projections, artifacts: input.artifacts, verifier: input.verifier });
   }
 
@@ -76,13 +81,24 @@ export class MissionOrchestrator {
         .filter(work => work.status === "ready")
         .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt));
       if (ready.length === 0) return;
-      const batch = ready.slice(0, this.maxConcurrency);
-      await Promise.all(batch.map(work => this.executeWork(work)));
+      const dispatchable: Array<{ work: WorkItem; capabilities: CapabilityDescriptor[] }> = [];
+      for (const work of ready) {
+        if (dispatchable.length >= this.maxConcurrency) break;
+        if (work.purpose === "acquisition") { dispatchable.push({ work, capabilities: [] }); continue; }
+        const preparation = this.capabilityCoordinator ? await this.capabilityCoordinator.prepare(work) : { status: "ready" as const, capabilities: [], missingNeeds: [] };
+        if (preparation.status === "ready") dispatchable.push({ work, capabilities: preparation.capabilities });
+      }
+      if (dispatchable.length === 0) continue;
+      await Promise.all(dispatchable.map(item => this.executeWork(item.work, item.capabilities)));
     }
     await this.controller.emit(missionId, "mission.status.changed", { status: "plateau", reason: "orchestrator cycle budget exhausted" }, { type: "system" }, `plateau:cycle-budget:${missionId}`);
   }
 
-  private async executeWork(work: WorkItem): Promise<void> {
+  private async executeWork(work: WorkItem, capabilities: CapabilityDescriptor[] = []): Promise<void> {
+    if (work.purpose === "acquisition") {
+      await this.executeAcquisitionWork(work);
+      return;
+    }
     const state = await this.controller.state(work.missionId);
     const attemptId = `attempt-${work.id}-${randomUUID().slice(0, 8)}`;
     const executionId = `execution-${work.id}-${randomUUID().slice(0, 8)}`;
@@ -94,12 +110,13 @@ export class MissionOrchestrator {
       workItem: work,
       requirementRefs: work.requirementRefs,
       artifactRefs: knownArtifacts.map(a => `${a.id}@${a.version}`),
-      capabilityRefs: []
+      capabilityRefs: capabilities.map(capability => capability.id)
     });
     const workerContext = {
       contextPacket,
       requirements: requirements.filter(r => work.requirementRefs.includes(r.id)),
       expectedOutputs: work.expectedOutputs,
+      capabilities,
       workspaceRoot: workspace.root,
       outputProtocol: workerProtocolInstruction(workspace.root)
     };
@@ -118,7 +135,7 @@ export class MissionOrchestrator {
       context: workerContext,
       inputArtifactRefs: work.inputArtifactRefs,
       expectedOutputs: work.expectedOutputs,
-      capabilityRefs: [],
+      capabilityRefs: capabilities.map(capability => capability.id),
       workspaceRoot: workspace.root,
       workspacePolicy: { type: "filesystem", lifecycle: "ephemeral" },
       isolationPolicy: { level: "host", networkIsolation: false, filesystemIsolation: false, processIsolation: false, secretIsolation: true },
@@ -154,6 +171,29 @@ export class MissionOrchestrator {
       await this.controller.emit(work.missionId, "execution.failed", { id: executionId, error: error instanceof Error ? error.message : String(error) }, { type: "host" }, `execution-settled:${executionId}`);
       await this.failWork(work, attemptId, error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private async executeAcquisitionWork(work: WorkItem): Promise<void> {
+    const attemptId = `attempt-${work.id}-${randomUUID().slice(0, 8)}`;
+    const executionId = `execution-${work.id}-${randomUUID().slice(0, 8)}`;
+    await this.controller.emit(work.missionId, "attempt.created", { id: attemptId, workItemId: work.id, executorId: "capability-acquisition", contextPacketId: "internal" }, { type: "controller" }, `attempt:${attemptId}`);
+    await this.controller.emit(work.missionId, "work.started", { id: work.id }, { type: "controller" }, `work-started:${work.id}:${attemptId}`);
+    await this.controller.emit(work.missionId, "execution.created", { id: executionId, workItemId: work.id, attemptId, backend: "capability-acquisition" }, { type: "controller" }, `execution-created:${executionId}`);
+    await this.controller.emit(work.missionId, "execution.started", { id: executionId }, { type: "system" }, `execution-started:${executionId}`);
+    if (!this.capabilityCoordinator) {
+      await this.controller.emit(work.missionId, "execution.failed", { id: executionId, error: "Capability acquisition service is not configured" }, { type: "system" }, `execution-settled:${executionId}`);
+      await this.failWork(work, attemptId, "Capability acquisition service is not configured");
+      return;
+    }
+    const outcome = await this.capabilityCoordinator.executeAcquisition(work);
+    if (!outcome.ok) {
+      await this.controller.emit(work.missionId, "execution.failed", { id: executionId, error: outcome.reason }, { type: "system" }, `execution-settled:${executionId}`);
+      await this.failWork(work, attemptId, outcome.reason);
+      return;
+    }
+    await this.controller.emit(work.missionId, "execution.completed", { id: executionId, capabilityRef: outcome.capability?.id }, { type: "system" }, `execution-settled:${executionId}`);
+    await this.controller.emit(work.missionId, "attempt.completed", { id: attemptId, workItemId: work.id, status: "succeeded", capabilityRefs: outcome.capability ? [outcome.capability.id] : [] }, { type: "system" }, `attempt-completed:${attemptId}`);
+    await this.controller.emit(work.missionId, "work.completed", { id: work.id, summary: outcome.reason }, { type: "system" }, `work-completed:${work.id}:${attemptId}`);
   }
 
   private async failWork(work: WorkItem, attemptId: string, reason: string): Promise<void> {

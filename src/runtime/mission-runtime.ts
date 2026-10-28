@@ -12,6 +12,8 @@ import { WorkspaceManager } from "../execution/workspace/workspace-manager.ts";
 import { FileArtifactStore } from "../execution/artifacts/artifact-store.ts";
 import { BasicFileVerifier } from "../core/verification/basic-file-verifier.ts";
 import { MissionOrchestrator } from "./orchestration/mission-orchestrator.ts";
+import { CapabilityCoordinator } from "./orchestration/capability-coordinator.ts";
+import type { SecureAcquisitionService } from "../core/capabilities/secure-acquisition-service.ts";
 
 export interface MissionRuntimeOptions {
   dbPath?: string;
@@ -20,6 +22,7 @@ export interface MissionRuntimeOptions {
   deliberation?: DeliberationProvider;
   host?: HostAdapter;
   maxConcurrency?: number;
+  acquisition?: SecureAcquisitionService;
 }
 
 export class MissionRuntime {
@@ -55,6 +58,7 @@ export class MissionRuntime {
         workspaces: this.workspaces,
         artifacts: this.artifacts,
         verifier: new BasicFileVerifier(),
+        capabilityCoordinator: new CapabilityCoordinator({ controller: this.controller, projections: this.projections, host: options.host, acquisition: options.acquisition }),
         options: { maxConcurrency: options.maxConcurrency }
       });
     }

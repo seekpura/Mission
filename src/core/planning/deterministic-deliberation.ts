@@ -29,7 +29,7 @@ export class DeterministicDeliberationProvider implements DeliberationProvider {
     return { framing: input.userGoal, approach: "progressive", workstreams: [], revision: 1 };
   }
   async planFrontier(input: any): Promise<FrontierProposal> {
-    return { workItems: [], graphRevision: input.state.graphRevision + 1 };
+    return { workItems: [], capabilityNeeds: [], graphRevision: input.state.graphRevision + 1 };
   }
   async diagnoseGap(input: any): Promise<GapDiagnosis> {
     return { gapId: input.gap.id, rootCause: input.gap.description, intervention: "revise_work", confidence: 0.8 };

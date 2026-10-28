@@ -1,4 +1,5 @@
 import type { Artifact } from "../../core/domain/artifact.ts";
+import type { AcquisitionReceipt, CapabilityCandidate, CapabilityDescriptor, CapabilityNeed } from "../../core/domain/capability.ts";
 import type { MissionEvent } from "../../core/domain/event.ts";
 import type { AcceptanceContract, MissionSpec, Requirement } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
@@ -200,13 +201,71 @@ export class SqliteEntityProjector {
         if (payload.id) db.prepare("UPDATE approvals SET status = ?, result_json = ?, decided_at = ? WHERE id = ? AND mission_id = ?")
           .run(payload.approved ? "approved" : "rejected", JSON.stringify(payload), event.createdAt, payload.id, event.missionId);
         return;
+      case "capability.need.created": {
+        const need = (payload.need ?? payload) as CapabilityNeed;
+        if (!need?.id) return;
+        const normalized: CapabilityNeed = { ...need, missionId: event.missionId, status: need.status ?? "checking-installed" };
+        db.prepare(`INSERT INTO capability_needs (id, mission_id, status, urgency, data_json, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET status = excluded.status, urgency = excluded.urgency, data_json = excluded.data_json, updated_at = excluded.updated_at`)
+          .run(normalized.id, event.missionId, normalized.status, normalized.urgency, JSON.stringify(normalized), event.createdAt, event.createdAt);
+        return;
+      }
+      case "capability.need.updated": {
+        const row = db.prepare("SELECT data_json FROM capability_needs WHERE id = ? AND mission_id = ?").get(payload.id, event.missionId) as { data_json: string } | undefined;
+        if (!row) return;
+        const need = JSON.parse(row.data_json) as CapabilityNeed;
+        if (payload.status) need.status = payload.status;
+        if (payload.resolvedCapabilityRef) need.resolvedCapabilityRef = payload.resolvedCapabilityRef;
+        db.prepare("UPDATE capability_needs SET status = ?, data_json = ?, updated_at = ? WHERE id = ? AND mission_id = ?")
+          .run(need.status ?? "unresolved", JSON.stringify(need), event.createdAt, need.id, event.missionId);
+        return;
+      }
+      case "capability.candidate.discovered":
+      case "capability.candidate.materialized":
+      case "capability.candidate.scanned":
+      case "capability.candidate.sandboxed":
+      case "capability.rejected": {
+        const candidate = (payload.candidate ?? payload) as CapabilityCandidate;
+        const candidateId = candidate?.id ?? payload.candidateId;
+        if (!candidateId) return;
+        const existing = db.prepare("SELECT data_json FROM capability_candidates WHERE id = ?").get(candidateId) as { data_json: string } | undefined;
+        const current = existing ? JSON.parse(existing.data_json) : {};
+        const merged = { ...current, ...candidate, ...payload, id: candidateId };
+        const status = event.type === "capability.rejected" ? "rejected"
+          : event.type === "capability.candidate.materialized" ? "quarantined"
+          : event.type === "capability.candidate.sandboxed" && payload.sandbox?.passed ? "verified"
+          : merged.status ?? "discovered";
+        merged.status = status;
+        db.prepare(`INSERT INTO capability_candidates (id, mission_id, need_id, status, source_type, source_uri, revision, data_json, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET status = excluded.status, revision = excluded.revision, data_json = excluded.data_json, updated_at = excluded.updated_at`)
+          .run(candidateId, event.missionId, payload.needId ?? merged.needId ?? "", status, merged.sourceType ?? "other", merged.sourceUri ?? "", merged.resolvedRevision ?? null, JSON.stringify(merged), event.createdAt, event.createdAt);
+        return;
+      }
+      case "capability.acquisition.receipt": {
+        const receipt = (payload.receipt ?? payload) as AcquisitionReceipt;
+        if (!receipt?.id) return;
+        db.prepare(`INSERT OR REPLACE INTO acquisition_receipts (id, mission_id, need_id, candidate_id, status, data_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+          .run(receipt.id, event.missionId, receipt.capabilityNeedRef, receipt.candidateId, receipt.status, JSON.stringify(receipt), receipt.createdAt ?? event.createdAt);
+        return;
+      }
       case "capability.activated": {
-        const capability = payload.capability ?? payload;
+        const capability = (payload.capability ?? payload) as CapabilityDescriptor;
         if (!capability?.id) return;
         db.prepare(`INSERT INTO capabilities (id, mission_id, scope, kind, status, source_uri, revision, data_json, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET status = excluded.status, revision = excluded.revision, data_json = excluded.data_json`)
-          .run(capability.id, event.missionId, capability.scope ?? "mission", capability.kind ?? "tool", capability.status ?? "available", capability.sourceUri ?? null, capability.revision ?? null, JSON.stringify(capability), event.createdAt);
+          .run(capability.id, event.missionId, capability.scope ?? "mission", capability.kind ?? "tool", capability.available === false ? "unavailable" : "available", capability.sourceUri ?? null, capability.revision ?? null, JSON.stringify(capability), event.createdAt);
+        if (payload.needId) {
+          const needRow = db.prepare("SELECT data_json FROM capability_needs WHERE id = ? AND mission_id = ?").get(payload.needId, event.missionId) as { data_json: string } | undefined;
+          if (needRow) {
+            const need = JSON.parse(needRow.data_json) as CapabilityNeed;
+            need.status = "available"; need.resolvedCapabilityRef = capability.id;
+            db.prepare("UPDATE capability_needs SET status = 'available', data_json = ?, updated_at = ? WHERE id = ? AND mission_id = ?")
+              .run(JSON.stringify(need), event.createdAt, need.id, event.missionId);
+          }
+        }
         return;
       }
     }

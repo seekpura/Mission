@@ -3,6 +3,7 @@ import type { AcceptanceContract, MissionSpec, MissionState, Requirement } from 
 import type { WorkItem } from "../../core/domain/work-item.ts";
 import type { Evidence, Gap, VerificationResult } from "../../core/domain/verification.ts";
 import type { Artifact } from "../../core/domain/artifact.ts";
+import type { AcquisitionReceipt, CapabilityDescriptor, CapabilityNeed } from "../../core/domain/capability.ts";
 import { applyMissionEvent, initialMissionState } from "../../core/events/state-projector.ts";
 import type { MissionProjectionReader, MissionProjectionWriter } from "../../core/events/projection-store.ts";
 import type { MissionDatabase } from "./database.ts";
@@ -53,6 +54,9 @@ export class SqliteProjectionStore implements MissionProjectionReader, MissionPr
     db.prepare("DELETE FROM decisions WHERE mission_id = ?").run(missionId);
     db.prepare("DELETE FROM approvals WHERE mission_id = ?").run(missionId);
     db.prepare("DELETE FROM capabilities WHERE mission_id = ?").run(missionId);
+    db.prepare("DELETE FROM capability_needs WHERE mission_id = ?").run(missionId);
+    db.prepare("DELETE FROM capability_candidates WHERE mission_id = ?").run(missionId);
+    db.prepare("DELETE FROM acquisition_receipts WHERE mission_id = ?").run(missionId);
     for (const event of events) this.apply(event);
   }
 
@@ -90,6 +94,24 @@ export class SqliteProjectionStore implements MissionProjectionReader, MissionPr
     const rows = this.database.db.prepare("SELECT metadata_json FROM artifacts WHERE mission_id = ? ORDER BY logical_name ASC, version ASC")
       .all(missionId) as Array<{ metadata_json: string }>;
     return rows.map(row => JSON.parse(row.metadata_json) as Artifact);
+  }
+
+  async listCapabilityNeeds(missionId: string): Promise<CapabilityNeed[]> {
+    const rows = this.database.db.prepare("SELECT data_json FROM capability_needs WHERE mission_id = ? ORDER BY created_at ASC")
+      .all(missionId) as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as CapabilityNeed);
+  }
+
+  async listCapabilities(missionId: string): Promise<CapabilityDescriptor[]> {
+    const rows = this.database.db.prepare("SELECT data_json FROM capabilities WHERE mission_id = ? ORDER BY created_at ASC")
+      .all(missionId) as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as CapabilityDescriptor);
+  }
+
+  async listAcquisitionReceipts(missionId: string): Promise<AcquisitionReceipt[]> {
+    const rows = this.database.db.prepare("SELECT data_json FROM acquisition_receipts WHERE mission_id = ? ORDER BY created_at ASC")
+      .all(missionId) as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as AcquisitionReceipt);
   }
 
   async listVerificationResults(missionId: string): Promise<VerificationResult[]> {

@@ -211,6 +211,9 @@ export class MissionController {
       if (frontier.graphRevision > state.graphRevision) {
         await this.emit(input.missionId, "graph.revised", { revision: frontier.graphRevision }, { type: "planner" }, `graph:${input.missionId}:${frontier.graphRevision}`);
       }
+      for (const need of frontier.capabilityNeeds ?? []) {
+        await this.emit(input.missionId, "capability.need.created", { need }, { type: "planner" }, `capability-need:${need.id}`);
+      }
       for (const work of frontier.workItems) {
         await this.proposeWork(work);
         workItemsCreated.push(work.id);
