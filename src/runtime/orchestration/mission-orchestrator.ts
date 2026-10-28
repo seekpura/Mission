@@ -12,6 +12,7 @@ import type { WorkspaceManager } from "../../execution/workspace/workspace-manag
 import type { FileArtifactStore } from "../../execution/artifacts/artifact-store.ts";
 import type { Verifier } from "../../core/verification/verifier.ts";
 import type { WorkExecutionRouter, ExecutionRoute } from "./executor-router.ts";
+import type { InvocationReceipt } from "../../core/domain/invocation.ts";
 
 export interface MissionOrchestratorOptions {
   maxConcurrency?: number;
@@ -129,6 +130,7 @@ export class MissionOrchestrator {
     await this.controller.emit(work.missionId, "attempt.created", { id: attemptId, workItemId: work.id, executorId: selectedRoute.kind, contextPacketId: contextPacket.id }, { type: "controller" }, `attempt:${attemptId}`);
     await this.controller.emit(work.missionId, "work.started", { id: work.id }, { type: "controller" }, `work-started:${work.id}:${attemptId}`);
     await this.controller.emit(work.missionId, "execution.created", { id: executionId, workItemId: work.id, attemptId, executorType: selectedRoute.kind, routeReason: selectedRoute.reason }, { type: "controller" }, `execution-created:${executionId}`);
+    await this.controller.emit(work.missionId, "execution.route.selected", { executionId, workItemId: work.id, attemptId, route: selectedRoute.kind, reason: selectedRoute.reason, capabilityRefs: capabilities.map(capability => capability.id), targetRef: selectedRoute.capability?.id }, { type: "controller" }, `execution-route:${executionId}`);
 
     const request: HostAgentExecutionRequest = {
       executionId,
@@ -153,14 +155,24 @@ export class MissionOrchestrator {
     try {
       await this.controller.emit(work.missionId, "execution.started", { id: executionId, executorType: selectedRoute.kind }, { type: "host" }, `execution-started:${executionId}`);
       let result;
+      let approvalRef: string | undefined;
       if (this.executionRouter) {
-        const routed = await this.executionRouter.execute({ work, capabilities, baseRequest: request });
+        const routed = await this.executionRouter.execute({ work, capabilities, baseRequest: request, route: selectedRoute });
         result = routed.result;
+        approvalRef = routed.approvalRef;
       } else {
         const handle = await this.hostBackend.allocate(request);
         await this.hostBackend.start(handle);
         result = await this.hostBackend.collect(handle);
       }
+      const receipt: InvocationReceipt = {
+        id: `invocation-${executionId}`,
+        missionId: work.missionId, workItemId: work.id, attemptId, executionId,
+        route: selectedRoute.kind, routeReason: selectedRoute.reason, capabilityRefs: capabilities.map(capability => capability.id),
+        targetRef: selectedRoute.capability?.id, idempotencyKey: `${work.missionId}:${work.id}:${attemptId}`, approvalRef,
+        sideEffects: result.sideEffects, result: result.state, startedAt: result.startedAt, endedAt: result.endedAt, createdAt: new Date().toISOString()
+      };
+      await this.controller.emit(work.missionId, "execution.invocation.recorded", { receipt }, { type: "system" }, `invocation:${executionId}`);
       await this.controller.emit(work.missionId, result.state === "succeeded" ? "execution.completed" : "execution.failed", { id: executionId, result }, { type: "host" }, `execution-settled:${executionId}`);
       const envelope = parseWorkerOutput(result.runtimeObservationRef);
       if (result.state !== "succeeded" || envelope?.status === "failed") {

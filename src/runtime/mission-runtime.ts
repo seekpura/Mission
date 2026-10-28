@@ -59,7 +59,11 @@ export class MissionRuntime {
         host: options.host,
         agents: hostAgentBackend,
         hostCapabilities: new HostCapabilityExecutionBackend(options.host),
-        local: new LocalExecutionBackend(this.workspaces, this.artifacts)
+        local: new LocalExecutionBackend(this.workspaces, this.artifacts),
+        audit: {
+          approvalRequested: payload => this.controller.emit(payload.missionId, "approval.requested", payload, { type: "controller" }, `approval-request:${payload.id}`),
+          approvalDecided: payload => this.controller.emit(payload.missionId, "approval.decided", payload, { type: "user" }, `approval-decision:${payload.id}`)
+        }
       });
       this.orchestrator = new MissionOrchestrator({
         controller: this.controller,

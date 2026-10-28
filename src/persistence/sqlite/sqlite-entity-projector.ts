@@ -1,6 +1,7 @@
 import type { Artifact } from "../../core/domain/artifact.ts";
 import type { AcquisitionReceipt, CapabilityCandidate, CapabilityDescriptor, CapabilityNeed } from "../../core/domain/capability.ts";
 import type { MissionEvent } from "../../core/domain/event.ts";
+import type { InvocationReceipt } from "../../core/domain/invocation.ts";
 import type { AcceptanceContract, MissionSpec, Requirement } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
 import type { Evidence, Gap, VerificationResult } from "../../core/domain/verification.ts";
@@ -201,6 +202,15 @@ export class SqliteEntityProjector {
         if (payload.id) db.prepare("UPDATE approvals SET status = ?, result_json = ?, decided_at = ? WHERE id = ? AND mission_id = ?")
           .run(payload.approved ? "approved" : "rejected", JSON.stringify(payload), event.createdAt, payload.id, event.missionId);
         return;
+      case "execution.invocation.recorded": {
+        const receipt = (payload.receipt ?? payload) as InvocationReceipt;
+        if (!receipt?.id) return;
+        db.prepare(`INSERT OR REPLACE INTO invocation_receipts
+          (id, mission_id, work_item_id, execution_id, route, result, data_json, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)` )
+          .run(receipt.id, event.missionId, receipt.workItemId, receipt.executionId, receipt.route, receipt.result, JSON.stringify(receipt), receipt.createdAt ?? event.createdAt);
+        return;
+      }
       case "capability.need.created": {
         const need = (payload.need ?? payload) as CapabilityNeed;
         if (!need?.id) return;

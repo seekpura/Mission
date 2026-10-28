@@ -23,6 +23,7 @@ export interface ExecutionRoute {
 
 export interface RoutedExecutionInput {
   work: WorkItem;
+  route?: ExecutionRoute;
   capabilities: CapabilityDescriptor[];
   baseRequest: HostAgentExecutionRequest;
 }
@@ -30,6 +31,12 @@ export interface RoutedExecutionInput {
 export interface RoutedExecutionResult {
   route: ExecutionRoute;
   result: ExecutionResult;
+  approvalRef?: string;
+}
+
+export interface ExecutionAuditObserver {
+  approvalRequested?(payload: { id: string; missionId: string; workItemId: string; executionId: string; scope: "once"; capabilityId?: string; route: ExecutionRouteKind }): Promise<void> | void;
+  approvalDecided?(payload: { id: string; missionId: string; workItemId: string; executionId: string; approved: boolean; scope?: "once" | "mission" | "revision" | "host" }): Promise<void> | void;
 }
 
 export class WorkExecutionRouter {
@@ -39,6 +46,7 @@ export class WorkExecutionRouter {
   private readonly local: LocalExecutionBackend;
   private readonly resources: ResourceManager;
   private readonly artifactLeases: ArtifactLeaseManager;
+  private readonly audit?: ExecutionAuditObserver;
 
   constructor(input: {
     host: HostAdapter;
@@ -47,6 +55,7 @@ export class WorkExecutionRouter {
     local: LocalExecutionBackend;
     resources?: ResourceManager;
     artifactLeases?: ArtifactLeaseManager;
+    audit?: ExecutionAuditObserver;
   }) {
     this.host = input.host;
     this.agents = input.agents;
@@ -54,6 +63,7 @@ export class WorkExecutionRouter {
     this.local = input.local;
     this.resources = input.resources ?? new ResourceManager();
     this.artifactLeases = input.artifactLeases ?? new ArtifactLeaseManager();
+    this.audit = input.audit;
   }
 
   select(work: WorkItem, capabilities: CapabilityDescriptor[]): ExecutionRoute {
@@ -73,24 +83,35 @@ export class WorkExecutionRouter {
   }
 
   async execute(input: RoutedExecutionInput): Promise<RoutedExecutionResult> {
-    const route = this.select(input.work, input.capabilities);
+    const route = input.route ?? this.select(input.work, input.capabilities);
     const ownerId = input.baseRequest.executionId;
     const resourceLease = await this.resources.acquire(ownerId, route.resourceRequest.exclusiveResources ?? []);
     const artifactLease = await this.artifactLeases.acquireWrite(ownerId, input.work.expectedOutputs.map(output => output.logicalName));
+    let approvalRef: string | undefined;
     try {
       if (route.requiresApproval) {
+        approvalRef = `approval-execution-${input.baseRequest.executionId}`;
+        await this.audit?.approvalRequested?.({
+          id: approvalRef, missionId: input.work.missionId, workItemId: input.work.id, executionId: input.baseRequest.executionId, scope: "once", capabilityId: route.capability?.id, route: route.kind
+        });
         const approval = await this.host.requestUserApproval({
           missionId: input.work.missionId,
           title: `Allow ${route.capability?.name ?? route.kind}`,
           reason: `Execution may perform ${String(route.capability?.metadata?.sideEffectClass ?? "external")} side effects`,
-          details: { workItemId: input.work.id, capabilityId: route.capability?.id, route: route.kind }
+          details: { approvalId: approvalRef, workItemId: input.work.id, capabilityId: route.capability?.id, route: route.kind }
+        });
+        await this.audit?.approvalDecided?.({
+          id: approvalRef, missionId: input.work.missionId, workItemId: input.work.id, executionId: input.baseRequest.executionId, approved: approval.approved, scope: approval.scope
         });
         if (!approval.approved) throw new Error(`Execution approval denied for ${route.capability?.id ?? route.kind}`);
         route.sideEffectPolicy = approvedPolicy(route.sideEffectPolicy);
       }
-      if (route.kind === "host_capability") return { route, result: await this.executeHostCapability(input, route) };
-      if (route.kind === "local_cli") return { route, result: await this.executeLocalCli(input, route) };
-      return { route, result: await this.executeAgent(input) };
+      const result = route.kind === "host_capability"
+        ? await this.executeHostCapability(input, route)
+        : route.kind === "local_cli"
+          ? await this.executeLocalCli(input, route)
+          : await this.executeAgent(input);
+      return { route, result, approvalRef };
     } finally {
       artifactLease.release();
       resourceLease.release();
