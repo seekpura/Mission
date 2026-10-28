@@ -19,6 +19,39 @@ export class KnowledgeStalenessManager {
     await this.controller.emit(truth.missionId, "truth.added", { truth }, { type: "worker" }, `truth:${truth.id}`);
   }
 
+  async supersedeSource(missionId: string, sourceId: string, replacementSourceId: string): Promise<void> {
+    if (sourceId === replacementSourceId) throw new Error("A source cannot supersede itself");
+    const sources = await this.projections.listSources(missionId);
+    const source = sources.find(item => item.id === sourceId);
+    const replacement = sources.find(item => item.id === replacementSourceId);
+    if (!source) throw new Error(`Unknown source to supersede: ${sourceId}`);
+    if (!replacement) throw new Error(`Unknown replacement source: ${replacementSourceId}`);
+    if (replacement.status !== "active") throw new Error(`Replacement source must be active: ${replacementSourceId}`);
+    await this.controller.emit(missionId, "source.status.changed", {
+      id: sourceId,
+      status: "superseded",
+      supersededBy: replacementSourceId,
+      reason: `Superseded by refreshed source ${replacementSourceId}`
+    }, { type: "controller" }, `source-superseded:${sourceId}:${replacementSourceId}`);
+  }
+
+  async supersedeTruth(missionId: string, truthId: string, replacementTruthId: string): Promise<void> {
+    if (truthId === replacementTruthId) throw new Error("A truth cannot supersede itself");
+    const truths = await this.projections.listTruths(missionId);
+    const truth = truths.find(item => item.id === truthId);
+    const replacement = truths.find(item => item.id === replacementTruthId);
+    if (!truth) throw new Error(`Unknown truth to supersede: ${truthId}`);
+    if (!replacement) throw new Error(`Unknown replacement truth: ${replacementTruthId}`);
+    if (replacement.status !== "active" || replacement.confidence !== "verified" || replacement.sourceRefs.length === 0) {
+      throw new Error(`Replacement truth must be active, sourced and verified: ${replacementTruthId}`);
+    }
+    await this.controller.emit(missionId, "truth.superseded", {
+      id: truthId,
+      supersededBy: replacementTruthId,
+      reason: `Superseded by refreshed truth ${replacementTruthId}`
+    }, { type: "controller" }, `truth-superseded:${truthId}:${replacementTruthId}`);
+  }
+
   async markSourceStatus(missionId: string, sourceId: string, status: SourceStatus, reason: string): Promise<{
     truthRefs: string[];
     artifactRefs: string[];
@@ -127,6 +160,7 @@ export class KnowledgeStalenessManager {
 }
 
 function truthStatusForSource(status: SourceStatus): TruthStatus {
+  if (status === "superseded") return "superseded";
   return status === "unavailable" ? "invalidated" : "stale";
 }
 
