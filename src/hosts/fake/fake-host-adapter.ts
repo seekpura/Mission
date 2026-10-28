@@ -14,7 +14,7 @@ import type {
   HostCapabilityInvocation,
   HostCapabilityResult,
   HostDescriptor
-} from "../deepseek/host-adapter.ts";
+} from "../host-adapter.ts";
 
 export class FakeHostAdapter implements HostAdapter {
   readonly capabilities: CapabilityDescriptor[];
