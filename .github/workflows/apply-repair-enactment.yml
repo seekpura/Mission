@@ -1,0 +1,31 @@
+name: Apply repair enactment
+on:
+  push:
+    branches: [build/repair-enactment]
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply patch and verify
+        run: |
+          chmod +x scripts/apply-repair-enactment.sh
+          ./scripts/apply-repair-enactment.sh
+          npm test
+          npm run smoke
+          git diff --check
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests
+          git commit -m 'feat: enact executor and capability replacement' || exit 0
+          git push origin HEAD:build/repair-enactment
