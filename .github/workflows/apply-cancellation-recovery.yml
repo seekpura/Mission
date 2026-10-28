@@ -4,6 +4,7 @@ on:
     branches: [build/cancellation-recovery]
     paths:
       - scripts/apply-cancellation-recovery.sh
+      - scripts/fix-cancellation-recovery.sh
       - .github/workflows/apply-cancellation-recovery.yml
 permissions:
   contents: write
@@ -18,7 +19,12 @@ jobs:
         with:
           node-version: 22
       - name: Apply and verify
-        run: bash scripts/apply-cancellation-recovery.sh
+        run: |
+          awk '/^npm test$/{exit} {print}' scripts/apply-cancellation-recovery.sh | bash
+          bash scripts/fix-cancellation-recovery.sh
+          npm test
+          npm run smoke
+          git diff --check
       - name: Commit batch
         run: |
           git config user.name 'github-actions[bot]'
