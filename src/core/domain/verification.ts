@@ -67,6 +67,8 @@ export interface VerificationCheckResult {
   priority?: "critical" | "required" | "preferred";
   category?: VerificationCheck["category"];
   requirementRefs?: string[];
+  cacheKey?: string;
+  reusedFromVerificationId?: string;
 }
 
 export interface VerificationResult {
@@ -80,6 +82,8 @@ export interface VerificationResult {
   checkResults: VerificationCheckResult[];
   findingRefs: string[];
   evidenceRefs: string[];
+  cacheKey?: string;
+  reusedCheckCount?: number;
   createdAt: string;
 }
 
