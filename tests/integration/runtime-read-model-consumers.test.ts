@@ -22,7 +22,12 @@ function schemaPath() {
 
 class NoReplayEventStore implements EventStore {
   listCalls = 0;
-  constructor(private readonly delegate: EventStore) {}
+  private readonly delegate: EventStore;
+
+  constructor(delegate: EventStore) {
+    this.delegate = delegate;
+  }
+
   append<T>(event: Omit<MissionEvent<T>, "sequence">, expectedSequence: number): Promise<MissionEvent<T>> {
     return this.delegate.append(event, expectedSequence);
   }
@@ -47,9 +52,15 @@ class VerifierTransport implements HostJsonTransport {
   requests: HostJsonRequest[] = [];
   async request(input: HostJsonRequest): Promise<unknown> {
     this.requests.push(input);
+    const profile = (input.input as { verificationProfile?: { checks?: Array<{ id?: string }> } }).verificationProfile;
+    const checks = profile?.checks ?? [];
     return {
       overall: "pass",
-      checkResults: [{ id: "mission-goal", status: "pass", evidenceRefs: ["evidence:artifact-content"] }],
+      checkResults: checks.map(check => ({
+        id: check.id,
+        status: "pass",
+        evidenceRefs: ["evidence:artifact-content"]
+      })),
       evidenceRefs: ["evidence:artifact-content"],
       gapAssessments: []
     };
@@ -147,6 +158,7 @@ test("host planner and independent verifier read Mission context without replayi
     });
     assert.equal(result.level, "mission");
     assert.equal(result.overall, "pass");
+    assert.equal(result.verificationProfileId, "generic-mission-review-v1");
     assert.equal(noReplay.listCalls, 0);
     assert.equal((verifierTransport.requests[0]!.input as { userGoal?: string }).userGoal,
       "prove planner and verifier continuity from durable current views");
