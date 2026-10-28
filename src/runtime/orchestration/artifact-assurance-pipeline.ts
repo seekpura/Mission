@@ -58,7 +58,14 @@ export class ArtifactAssurancePipeline {
       const contract = await this.projections.getAcceptanceContract(work.missionId);
       const requirements = await this.projections.listRequirements(work.missionId);
       const missionArtifacts = await this.projections.listArtifacts(work.missionId);
-      const verification = await this.verifier.verify(artifact, { acceptanceContract: contract, requirements, explicitRequirementRefs: output.requirementRefs ?? [], artifacts: missionArtifacts });
+      const priorVerifications = await this.projections.listVerificationResults(work.missionId);
+      const verification = await this.verifier.verify(artifact, {
+        acceptanceContract: contract,
+        requirements,
+        explicitRequirementRefs: output.requirementRefs ?? [],
+        artifacts: missionArtifacts,
+        priorVerifications
+      });
       await this.controller.recordVerification(work.missionId, verification);
       if (verification.overall === "fail" || verification.overall === "inconclusive") {
         const finding = this.verificationFinding(artifact, verification);

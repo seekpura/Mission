@@ -9,4 +9,8 @@ export class VerifierRegistry {
   resolve(check: VerificationCheck, artifact: Artifact): VerificationCheckExecutor | undefined {
     return this.executors.find(executor => executor.supports(check, artifact));
   }
+  identity(check: VerificationCheck, artifact: Artifact): string {
+    const executor = this.resolve(check, artifact);
+    return executor ? `${executor.id}@${executor.cacheVersion ?? "1"}` : "none";
+  }
 }

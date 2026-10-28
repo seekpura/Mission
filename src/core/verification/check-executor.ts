@@ -8,6 +8,7 @@ export interface VerificationCheckExecutorContext {
 
 export interface VerificationCheckExecutor {
   id: string;
+  cacheVersion?: string;
   supports(check: VerificationCheck, artifact: Artifact): boolean;
   execute(artifact: Artifact, check: VerificationCheck, context: VerificationCheckExecutorContext): Promise<VerificationCheckResult>;
 }
