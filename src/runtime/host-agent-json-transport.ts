@@ -75,9 +75,8 @@ export class HostAgentJsonTransport implements HostJsonTransport {
       }
       return parseFramedJson(observation.text);
     } finally {
-      if (handle && !this.retainWorkspaces) {
-        // Host observation has already terminated at this point. Removing the
-        // control workspace cannot affect a still-running turn.
+      if (!this.retainWorkspaces) {
+        if (handle) await safeCancelIfStillRunning(this.host, handle);
         await rm(workspace, { recursive: true, force: true });
       }
     }
@@ -197,6 +196,10 @@ function stringifyFailure(payload: unknown): string {
 
 async function safeCancel(host: HostAdapter, handle: HostAgentHandle): Promise<void> {
   try { await host.cancelAgent(handle); } catch { /* preserve the primary control failure */ }
+}
+
+async function safeCancelIfStillRunning(host: HostAdapter, handle: HostAgentHandle): Promise<void> {
+  try { await host.cancelAgent(handle); } catch { /* completed/unknown handles are safe to ignore during cleanup */ }
 }
 
 function safeSegment(value: string): string {
