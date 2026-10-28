@@ -1,0 +1,106 @@
+name: agent06-type-debt-fixes
+
+on:
+  push:
+    branches:
+      - feat/production-typecheck-schema-gates
+    paths:
+      - .github/workflows/agent06-type-debt-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/production-typecheck-schema-gates
+          fetch-depth: 0
+      - name: Apply bounded strict-type fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly one match, found {count}: {old!r}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace_once(
+              'src/hosts/codex/codex-app-server-host-adapter.ts',
+              'import { buildHostCapabilityGraph } from "../../core/capabilities/capability-graph.ts";\n',
+              'import { buildHostCapabilityGraph } from "../../core/capabilities/capability-graph.ts";\nimport type { CapabilityDescriptor } from "../../core/domain/capability.ts";\n'
+          )
+          replace_once(
+              'src/hosts/codex/codex-app-server-host-adapter.ts',
+              '    const capabilities = [\n',
+              '    const capabilities: CapabilityDescriptor[] = [\n'
+          )
+          replace_once(
+              'src/hosts/deepseek/acp-process-bindings.ts',
+              '  const sessionCapabilities = initialized.agentCapabilities.sessionCapabilities;\n',
+              '  const sessionCapabilities = initialized.agentCapabilities?.sessionCapabilities;\n'
+          )
+          replace_once('src/runtime/agent-skill-runtime.ts', '      let stdout = Buffer.alloc(0);\n', '      let stdout: Buffer = Buffer.alloc(0);\n')
+          replace_once('src/runtime/agent-skill-runtime.ts', '      let stderr = Buffer.alloc(0);\n', '      let stderr: Buffer = Buffer.alloc(0);\n')
+          replace_once(
+              'src/runtime/github-capability-client.ts',
+              '    return { path, sha, type: entry.type, mode, size };\n',
+              '    return { path, sha, type: entry.type, mode, size } satisfies NormalizedTreeEntry;\n'
+          )
+          replace_once(
+              'src/runtime/host-deliberation-provider.ts',
+              '      const severity = nonEmptyString(objection.severity, `completion challenge.objections[${index}].severity`);\n',
+              '      const severity = nonEmptyString(objection.severity, `completion challenge.objections[${index}].severity`) as "blocking" | "non_blocking";\n'
+          )
+          replace_once(
+              'tests/integration/capability-ledger-read-model.test.ts',
+              '      cost: { monetaryClass: "free", latencyClass: "instant", metered: false },\n',
+              '      cost: { monetaryClass: "negligible", latencyClass: "local", metered: false },\n'
+          )
+          replace_once(
+              'tests/integration/capability-runtime-loop.test.ts',
+              '  restoreMissionCapabilities(_missionId: string, capabilities: Iterable<CapabilityDescriptor>): void {\n    this.restored.splice(0, this.restored.length, ...capabilities);\n  }\n\n  async ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult> {\n',
+              '  restoreMissionCapabilities(_missionId: string, capabilities: Iterable<CapabilityDescriptor>): void {\n    this.restored.splice(0, this.restored.length, ...capabilities);\n  }\n\n  deactivateMissionCapability(_missionId: string, _capabilityId: string): void {}\n\n  async ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult> {\n'
+          )
+          replace_once(
+              'tests/unit/capability-ledger-runtime.test.ts',
+              '    urgency: "high",\n',
+              '    urgency: "high-value",\n'
+          )
+          replace_once(
+              'tests/unit/trusted-capability-cache.test.ts',
+              '    requestedPermissions: [],\n    requiredSecrets: []\n',
+              '    requestedPermissions: [],\n    recommendedAction: "sandbox"\n'
+          )
+          replace_once(
+              'scripts/check-schema-compat.ts',
+              '  assert.deepEqual(mission, { status: "active", revision: 7 }, "Migration changed persisted mission sentinel data");\n',
+              '  assert.deepEqual(mission ? { ...mission } : mission, { status: "active", revision: 7 }, "Migration changed persisted mission sentinel data");\n'
+          )
+          replace_once(
+              'scripts/check-schema-compat.ts',
+              '    event,\n    { type: "mission.created", payload_json: "{}" },\n',
+              '    event ? { ...event } : event,\n    { type: "mission.created", payload_json: "{}" },\n'
+          )
+          replace_once(
+              'scripts/check-schema-compat.ts',
+              '    readModel,\n    { user_goal: "preserve me", event_sequence: 1 },\n',
+              '    readModel ? { ...readModel } : readModel,\n    { user_goal: "preserve me", event_sequence: 1 },\n'
+          )
+          PY
+      - name: Commit fixes and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/agent06-type-debt-fixes.yml
+          git add src tests scripts
+          git diff --cached --check
+          git commit -m "fix: resolve strict typecheck debt exposed by CI"
+          git push origin HEAD:feat/production-typecheck-schema-gates
