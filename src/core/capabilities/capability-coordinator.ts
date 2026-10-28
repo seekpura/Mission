@@ -28,6 +28,10 @@ export interface CapabilityEnsureAttempt {
 
 export interface CapabilityResolutionEvidence {
   provenanceSource: CapabilityProvenance["source"] | "unknown";
+  sourceType?: string;
+  sourceUri?: string;
+  resolvedRevision?: string;
+  contentHash?: string;
   acquisitionReceiptId?: string;
   acquisitionStatus?: string;
   candidateId?: string;
@@ -88,15 +92,21 @@ export class CapabilityCoordinator implements CapabilityRuntime {
   async ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult> {
     const existing = await this.resolveExisting(need);
     if (existing.status === "resolved" && existing.capability) {
+      const capability = existing.capability;
+      const provenance = capability.provenance;
       return {
         status: "resolved",
-        capability: existing.capability,
+        capability,
         source: "host-or-overlay",
         attempts: [],
         reason: existing.reason,
         evidence: {
-          provenanceSource: existing.capability.provenance?.source
-            ?? (existing.capability.hostNative ? "host" : existing.capability.scope === "trusted-cache" ? "trusted-cache" : "mission")
+          provenanceSource: provenance?.source
+            ?? (capability.hostNative ? "host" : capability.scope === "trusted-cache" ? "trusted-cache" : "mission"),
+          ...(capability.hostNative ? { sourceType: "host" } : {}),
+          ...(provenance?.sourceRef ? { sourceUri: provenance.sourceRef } : {}),
+          ...(provenance?.revision ? { resolvedRevision: provenance.revision } : capability.revision ? { resolvedRevision: capability.revision } : {}),
+          ...(provenance?.contentHash ? { contentHash: provenance.contentHash } : {})
         }
       };
     }
@@ -141,6 +151,10 @@ export class CapabilityCoordinator implements CapabilityRuntime {
             : `Acquired ${acquired.capability.name} at revision ${acquired.capability.revision ?? "unknown"}`,
           evidence: {
             provenanceSource: acquired.capability.provenance?.source ?? (cacheReused ? "trusted-cache" : "external"),
+            sourceType: acquired.receipt.sourceType,
+            sourceUri: acquired.receipt.sourceUri,
+            resolvedRevision: acquired.receipt.resolvedRevision,
+            contentHash: acquired.receipt.contentHash,
             acquisitionReceiptId: acquired.receipt.id,
             acquisitionStatus: acquired.receipt.status,
             candidateId: acquired.receipt.candidateId,
