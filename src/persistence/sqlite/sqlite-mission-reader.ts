@@ -5,7 +5,7 @@ import type {
   CapabilityCostRecord,
   CapabilityTrustRecord
 } from "../../core/domain/capability-ledger.ts";
-import type { MissionState } from "../../core/domain/mission.ts";
+import type { MissionState, MissionSteeringMessage } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
 import type { Evidence, Gap } from "../../core/domain/verification.ts";
 import { initialMissionState } from "../../core/events/state-projector.ts";
@@ -32,6 +32,10 @@ export class SqliteMissionReader implements MissionReadModelReader {
     const mission = this.database.db.prepare(
       "SELECT user_goal FROM rm_missions WHERE mission_id = ?"
     ).get(missionId) as { user_goal?: string } | undefined;
+
+    const steeringMessages = this.database.db.prepare(
+      "SELECT event_sequence, message, received_at FROM rm_steering_messages WHERE mission_id = ? ORDER BY event_sequence"
+    ).all(missionId) as Array<{ event_sequence: number; message: string; received_at: string }>;
 
     const workItems = new Map<string, WorkItem>();
     for (const row of this.rows("rm_work_items", missionId)) {
@@ -75,6 +79,11 @@ export class SqliteMissionReader implements MissionReadModelReader {
     return {
       missionId,
       userGoal: mission?.user_goal ?? "",
+      steeringMessages: steeringMessages.map((row): MissionSteeringMessage => ({
+        sequence: row.event_sequence,
+        message: row.message,
+        receivedAt: row.received_at
+      })),
       workItems,
       artifacts,
       capabilityNeeds,
