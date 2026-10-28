@@ -23,7 +23,13 @@ const artifact: Artifact = {
 
 const profile = createDefaultVerificationProfileRegistry().select(artifact).profile;
 
-test("collector registry isolates synchronous and asynchronous adapter failures", async () => {
+test("collector registry isolates supports, synchronous and asynchronous adapter failures", async () => {
+  const supportsFailure: VerificationEvidenceCollector = {
+    id: "supports-failure",
+    kinds: ["static-analysis"],
+    supports() { throw new Error("supports exploded"); },
+    collect: () => []
+  };
   const synchronous: VerificationEvidenceCollector = {
     id: "sync-failure",
     kinds: ["browser-runtime"],
@@ -48,16 +54,20 @@ test("collector registry isolates synchronous and asynchronous adapter failures"
     }]
   };
 
-  const result = await new VerificationEvidenceCollectorRegistry([synchronous, asynchronous, healthy]).collect({
+  const result = await new VerificationEvidenceCollectorRegistry([supportsFailure, synchronous, asynchronous, healthy]).collect({
     artifact,
     profile,
     maxInspectionBytes: 4096
   });
 
-  assert.deepEqual(result.attemptedCollectorIds, ["sync-failure", "async-failure", "healthy"]);
+  assert.deepEqual(result.attemptedCollectorIds, ["supports-failure", "sync-failure", "async-failure", "healthy"]);
   assert.equal(result.collected.length, 1);
   assert.equal(result.collected[0]?.collectorId, "healthy");
-  assert.deepEqual(result.failures.map(failure => failure.collectorId).sort(), ["async-failure", "sync-failure"]);
+  assert.deepEqual(
+    result.failures.map(failure => failure.collectorId).sort(),
+    ["async-failure", "supports-failure", "sync-failure"]
+  );
+  assert.match(result.failures.find(failure => failure.collectorId === "supports-failure")?.reason ?? "", /supports\(\) failed/);
   assert.match(result.failures.find(failure => failure.collectorId === "sync-failure")?.reason ?? "", /sync collector exploded/);
 });
 
@@ -81,4 +91,38 @@ test("collector registry rejects duplicate ids and records undeclared emitted ki
     () => new VerificationEvidenceCollectorRegistry([bad, bad]),
     /Duplicate verification evidence collector id/
   );
+});
+
+test("collector registry fail-closes oversized durable details and transient inspection payloads", async () => {
+  const oversized: VerificationEvidenceCollector = {
+    id: "oversized",
+    kinds: ["browser-runtime"],
+    supports: () => true,
+    collect: () => [
+      {
+        type: "runtime-check",
+        kind: "browser-runtime",
+        claim: "durable details are too large",
+        result: "supports",
+        details: { body: "x".repeat(40 * 1024) }
+      },
+      {
+        type: "runtime-check",
+        kind: "browser-runtime",
+        claim: "inspection payload is too large",
+        result: "supports",
+        inspectionPayload: { body: "y".repeat(40 * 1024) }
+      }
+    ]
+  };
+
+  const result = await new VerificationEvidenceCollectorRegistry([oversized]).collect({
+    artifact,
+    profile,
+    maxInspectionBytes: 4096
+  });
+  assert.deepEqual(result.collected, []);
+  assert.equal(result.failures.length, 2);
+  assert.match(result.failures[0]?.reason ?? "", /durable evidence details exceed/);
+  assert.match(result.failures[1]?.reason ?? "", /inspection payload exceeds/);
 });
