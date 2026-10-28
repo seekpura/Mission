@@ -194,29 +194,38 @@ test("Mission API exposes capability ledger and applies durable capability/cache
     assert.equal(reader.readCapabilityTrust(missionId).at(-1)?.trustLevel, "revoked");
     assert.equal(reader.readCapabilityAudit(missionId).at(-1)?.decision, "revoked");
 
-    const cacheMissingReason = await fetch(`${base}/missions/${missionId}/capabilities/cache/cache-api-global/revoke`, {
+    const cacheKey = "d".repeat(64);
+    const cacheMissingReason = await fetch(`${base}/missions/${missionId}/capabilities/cache/${cacheKey}/revoke`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({})
     });
     assert.equal(cacheMissingReason.status, 400);
 
-    const cacheRevokeResponse = await fetch(`${base}/missions/${missionId}/capabilities/cache/cache-api-global/revoke`, {
+    const invalidCacheKey = await fetch(`${base}/missions/${missionId}/capabilities/cache/not-a-cache-key/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: "invalid key must fail at API boundary" })
+    });
+    assert.equal(invalidCacheKey.status, 400);
+    assert.deepEqual(await invalidCacheKey.json(), { error: "invalid_capability_cache_key" });
+
+    const cacheRevokeResponse = await fetch(`${base}/missions/${missionId}/capabilities/cache/${cacheKey}/revoke`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ reason: "global trust withdrawn" })
     });
     assert.equal(cacheRevokeResponse.status, 200);
     assert.deepEqual(await cacheRevokeResponse.json(), {
-      cacheKey: "cache-api-global",
+      cacheKey,
       status: "revoked"
     });
     assert.deepEqual(trustedCache.revoked, [
-      { cacheKey: "cache-api-global", reason: "global trust withdrawn" }
+      { cacheKey, reason: "global trust withdrawn" }
     ]);
     const latestAudit = reader.readCapabilityAudit(missionId).at(-1);
     assert.equal(latestAudit?.decision, "revoked");
-    assert.equal(latestAudit?.cacheKey, "cache-api-global");
+    assert.equal(latestAudit?.cacheKey, cacheKey);
   } finally {
     await closeServer(server);
     database.close();
