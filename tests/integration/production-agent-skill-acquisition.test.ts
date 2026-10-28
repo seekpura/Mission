@@ -145,7 +145,24 @@ function need(missionId: string): CapabilityNeed {
   };
 }
 
-test("production Agent Skill acquisition activates mission-locally and injects only the authorized skill into Host context", async () => {
+async function approvePendingSkill(approvals: RuntimeApprovalManager, missionId: string) {
+  let pending = await approvals.listPending(missionId);
+  for (let attempt = 0; pending.length === 0 && attempt < 100; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    pending = await approvals.listPending(missionId);
+  }
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]?.kind, "acquisition");
+  assert.match(pending[0]?.reason ?? "", /External Agent Skill instructions require explicit approval/);
+  await approvals.decide(missionId, pending[0]!.id, {
+    approved: true,
+    scope: "once",
+    actor: "test-user",
+    reason: "Explicitly approve this pinned external Agent Skill for the Mission"
+  });
+}
+
+test("production Agent Skill acquisition requires approval, activates mission-locally and injects only the authorized skill into Host context", async () => {
   const root = await mkdtemp(join(tmpdir(), "mission-production-skill-"));
   const database = new MissionDatabase(":memory:");
   database.migrate(join(process.cwd(), "src", "persistence", "sqlite", "schema.sql"));
@@ -167,7 +184,10 @@ test("production Agent Skill acquisition activates mission-locally and injects o
       smokeExecutor: smoke,
       dockerImage: "unused-test-image"
     });
-    const ensured = await runtime.ensure(need(missionId));
+    const ensurePromise = runtime.ensure(need(missionId));
+    await approvePendingSkill(approvals, missionId);
+    assert.equal(smoke.calls, 0, "isolated smoke must not start before durable user approval releases acquisition");
+    const ensured = await ensurePromise;
     assert.equal(ensured.status, "resolved");
     assert.equal(ensured.source, "acquired");
     assert.equal(smoke.calls, 1);
@@ -178,6 +198,11 @@ test("production Agent Skill acquisition activates mission-locally and injects o
     assert.ok(capability.invocationRef);
     assert.equal(readFileSync(join(capability.invocationRef!, "SKILL.md"), "utf8"), SKILL);
     assert.deepEqual(overlay.list(missionId).map(item => item.id), [capability.id]);
+
+    const acquisitionEvents = await events.list(missionId);
+    const requestedIndex = acquisitionEvents.findIndex(event => event.type === "approval.requested");
+    const decidedIndex = acquisitionEvents.findIndex(event => event.type === "approval.decided");
+    assert.ok(requestedIndex >= 0 && decidedIndex > requestedIndex);
 
     const host = new CapabilityContextHostAdapter(
       baseHost,
