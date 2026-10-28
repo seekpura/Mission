@@ -5,6 +5,12 @@ import type { BudgetAssessment, BudgetFinding, BudgetLimit, BudgetMetric, Budget
 import type { WorkItem } from "../domain/work-item.ts";
 
 export interface BudgetRouteLike { requiresApproval: boolean }
+export interface BudgetReservation {
+  attempts: number;
+  capabilityAcquisitions: number;
+  potentialExternalSideEffects: number;
+  concurrentExecutions: number;
+}
 
 export class BudgetManager {
   private readonly controller: MissionController;
@@ -90,20 +96,47 @@ export class BudgetManager {
     return assessment.hardExhaustedMetrics.some(metric => metric === "observed_execution_ms" || metric === "attempts");
   }
 
-  canDispatch(work: WorkItem, assessment: BudgetAssessment, route?: BudgetRouteLike): boolean {
-    const hard = new Set(assessment.hardExhaustedMetrics);
-    if (hard.has("observed_execution_ms") || hard.has("attempts")) return false;
-    if (work.purpose === "acquisition" && hard.has("capability_acquisitions")) return false;
-    if (route?.requiresApproval && hard.has("external_side_effects")) return false;
-    const maxConcurrent = assessment.maxConcurrentExecutions;
-    if (maxConcurrent !== undefined && assessment.usage.concurrentExecutions >= maxConcurrent) return false;
+  emptyReservation(): BudgetReservation {
+    return { attempts: 0, capabilityAcquisitions: 0, potentialExternalSideEffects: 0, concurrentExecutions: 0 };
+  }
+
+  canReserve(work: WorkItem, assessment: BudgetAssessment, reservation: BudgetReservation, route?: BudgetRouteLike): boolean {
+    if (wouldHitHardLimit(assessment, "observed_execution_ms", assessment.usage.observedExecutionMs, 0)) return false;
+    if (wouldHitHardLimit(assessment, "attempts", assessment.usage.attempts, reservation.attempts + 1)) return false;
+    if (work.purpose === "acquisition" && wouldHitHardLimit(
+      assessment, "capability_acquisitions", assessment.usage.capabilityAcquisitions, reservation.capabilityAcquisitions + 1
+    )) return false;
+    if (route?.requiresApproval && wouldHitHardLimit(
+      assessment, "external_side_effects", assessment.usage.externalSideEffects, reservation.potentialExternalSideEffects + 1
+    )) return false;
+    if (wouldHitHardLimit(
+      assessment, "concurrent_executions", assessment.usage.concurrentExecutions, reservation.concurrentExecutions + 1
+    )) return false;
     return true;
+  }
+
+  reserve(work: WorkItem, reservation: BudgetReservation, route?: BudgetRouteLike): void {
+    reservation.attempts += 1;
+    reservation.concurrentExecutions += 1;
+    if (work.purpose === "acquisition") reservation.capabilityAcquisitions += 1;
+    if (route?.requiresApproval) reservation.potentialExternalSideEffects += 1;
   }
 
   effectiveConcurrency(configuredMax: number, assessment: BudgetAssessment): number {
     const limit = assessment.maxConcurrentExecutions;
     if (limit === undefined) return configuredMax;
     return Math.max(0, Math.min(configuredMax, limit - assessment.usage.concurrentExecutions));
+  }
+
+  exhaustedMetricsForBlockedWork(work: WorkItem, assessment: BudgetAssessment, route?: BudgetRouteLike): BudgetMetric[] {
+    const metrics: BudgetMetric[] = [];
+    const hard = (metric: BudgetMetric) => assessment.findings.find(item => item.metric === metric && item.enforcement === "hard");
+    if (hard("observed_execution_ms")?.exceeded) metrics.push("observed_execution_ms");
+    if (hard("attempts")?.exceeded) metrics.push("attempts");
+    if (work.purpose === "acquisition" && hard("capability_acquisitions")?.exceeded) metrics.push("capability_acquisitions");
+    if (route?.requiresApproval && hard("external_side_effects")?.exceeded) metrics.push("external_side_effects");
+    if (hard("concurrent_executions")?.exceeded) metrics.push("concurrent_executions");
+    return metrics;
   }
 
   async markExhausted(assessment: BudgetAssessment, metrics?: BudgetMetric[]): Promise<void> {
@@ -144,6 +177,16 @@ function finding(limit: BudgetLimit, used: number): BudgetFinding {
     exceeded,
     warning: !exceeded && used >= warningAt
   };
+}
+
+function hardLimit(assessment: BudgetAssessment, metric: BudgetMetric): number | undefined {
+  return assessment.findings.find(item => item.metric === metric && item.enforcement === "hard")?.limit;
+}
+
+function wouldHitHardLimit(assessment: BudgetAssessment, metric: BudgetMetric, used: number, requested: number): boolean {
+  const limit = hardLimit(assessment, metric);
+  if (limit === undefined) return false;
+  return used + requested > limit || (requested === 0 && used >= limit);
 }
 
 function usageValue(usage: BudgetUsage, metric: BudgetMetric): number {
