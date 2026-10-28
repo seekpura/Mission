@@ -109,6 +109,32 @@ export function createMissionApi(
         if (
           req.method === "POST" &&
           parts[2] === "capabilities" &&
+          parts[3] === "cache" &&
+          parts[4] &&
+          parts[5] === "revoke" &&
+          parts.length === 6
+        ) {
+          if (!runtime.capabilityLifecycle) {
+            return json(res, 503, { error: "capability_lifecycle_manager_unavailable" });
+          }
+          const body = await readJson(req);
+          if (typeof body.reason !== "string" || !body.reason.trim()) {
+            return json(res, 400, { error: "capability_cache_revocation_reason_required" });
+          }
+          const cacheKey = parts[4];
+          await runtime.capabilityLifecycle.revokeTrustedCache({
+            missionId,
+            cacheKey,
+            reason: body.reason.trim()
+          });
+          return json(res, 200, {
+            cacheKey,
+            status: "revoked"
+          });
+        }
+        if (
+          req.method === "POST" &&
+          parts[2] === "capabilities" &&
           parts[3] &&
           (parts[4] === "deactivate" || parts[4] === "revoke") &&
           parts.length === 5
