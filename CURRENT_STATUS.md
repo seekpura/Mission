@@ -79,25 +79,37 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - recovery continuation prompt that inspects existing workspace and warns against blindly repeating irreversible side effects
 - exact executor-route recovery even when multiple routes share the same underlying driver id
 - protocol-level fake ACP integration tests including cross-process native-session resume without local DSH credentials
+- production runtime bootstrap composing SQLite/EventStore, DSH HostAdapter, host planner, ExecutorRouter, host worker driver, independent verifier, capability runtime, supervisor and approvals
+- strict framed-JSON HostAgent control transport for planner/verifier calls; malformed or unframed model output is rejected
+- HostDeliberationProvider uses fresh host sessions while reconstructing user goal, latest strategy, all capability needs, WorkItems, Artifacts and open Gaps from durable events every round
+- planner output cannot set Mission identity, Work status, graph ownership, timestamps, creator or unknown executor routes
+- HostArtifactVerifier performs deterministic file/hash checks before a separate mission-level host review
+- per-Mission single-flight MissionSupervisor automatically drives controller cycles after create / steering / approval / restart events
+- SQLite Mission catalog discovers persisted missions for startup recovery
+- RuntimeApprovalManager persists approval request/decision events before host release, rejects stale restart approvals, and makes the first durable decision authoritative under concurrent operators
+- current host permission bridge exposes only truthful one-shot approval scope
+- HTTP Mission API now wakes the supervisor automatically, exposes approval list/decision/manual-wake endpoints, and streams supervisor updates over SSE
+- production server startup resumes non-terminal persisted Missions instead of exposing a passive controller shell
+- external capability acquisition remains fail-closed in the production bootstrap until a strong-isolation acquisition transport is configured
 - HTTP Mission API and SSE event stream
 - browser-native Mission Control view
 - CI workflow
-- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, verifier recovery, acquisition transaction, capability runtime loop, evidence-backed gap closure, controller replacement recovery and cross-process ACP resume
+- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, verifier recovery, acquisition transaction, capability runtime loop, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner continuity and approval concurrency
 
 ## Next implementation frontier
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. production runtime composition/bootstrap so the server actually wires planner, executor routes, verifier profiles, capability runtime and HostAdapters instead of exposing only the core controller shell
+1. concrete GitHub / Agent Skills production capability transport: authenticated discovery, immutable revision resolution, quarantine materialization, provenance, strong-isolation smoke execution and mission-local activation
 2. persistent WorkItem / Artifact / Finding / Gap read-model projections beyond event reconstruction
 3. full verifier profiles for presentations / web / video / code / research and profile selection
 4. host capability graph with native semantics, constraints and routing characteristics instead of flat availability flags
-5. approval and side-effect manager wired consistently across acquisition, host permissions and external actions
-6. concrete GitHub / Agent Skills repository transport for production capability materialization plus trusted-cache reuse policy
-7. capability trust / cost / audit ledgers and activation lifecycle management
-8. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure and repair/replan
-9. second production host adapter proving HostAdapter portability
-10. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
+5. side-effect manager wired consistently across external actions, idempotency and approval policy
+6. capability trust / cost / audit ledgers, trusted-cache reuse and activation lifecycle management
+7. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure and repair/replan
+8. second production host adapter proving HostAdapter portability
+9. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
+10. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
 
 ## GitHub source control
 
