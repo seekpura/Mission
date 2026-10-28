@@ -1,4 +1,4 @@
-import type { CapabilityDescriptor, CapabilityNeed } from "../domain/capability.ts";
+import type { CapabilityDescriptor, CapabilityNeed, CapabilityProvenance, RiskLevel } from "../domain/capability.ts";
 import type { RankedCandidate } from "./candidate-ranker.ts";
 import { buildHostCapabilityGraph, type HostCapabilityGraphSource } from "./capability-graph.ts";
 import { CapabilityResolver } from "./resolver.ts";
@@ -26,16 +26,27 @@ export interface CapabilityEnsureAttempt {
   reason?: string;
 }
 
+export interface CapabilityResolutionEvidence {
+  provenanceSource: CapabilityProvenance["source"] | "unknown";
+  acquisitionReceiptId?: string;
+  acquisitionStatus?: string;
+  candidateId?: string;
+  securityRisk?: RiskLevel;
+  cacheKey?: string;
+}
+
 export interface CapabilityEnsureResult {
   status: "resolved" | "missing" | "acquisition_failed";
   capability?: CapabilityDescriptor;
-  source: "host-or-overlay" | "acquired" | "none";
+  source: "host-or-overlay" | "acquired" | "trusted-cache" | "none";
   attempts: CapabilityEnsureAttempt[];
   reason: string;
+  evidence?: CapabilityResolutionEvidence;
 }
 
 export interface CapabilityRuntime {
   restoreMissionCapabilities(missionId: string, capabilities: Iterable<CapabilityDescriptor>): void;
+  deactivateMissionCapability(missionId: string, capabilityId: string): void;
   ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult>;
 }
 
@@ -70,15 +81,23 @@ export class CapabilityCoordinator implements CapabilityRuntime {
     }
   }
 
+  deactivateMissionCapability(missionId: string, capabilityId: string): void {
+    this.overlay.deactivate(missionId, capabilityId);
+  }
+
   async ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult> {
     const existing = await this.resolveExisting(need);
-    if (existing.status === "resolved") {
+    if (existing.status === "resolved" && existing.capability) {
       return {
         status: "resolved",
         capability: existing.capability,
         source: "host-or-overlay",
         attempts: [],
-        reason: existing.reason
+        reason: existing.reason,
+        evidence: {
+          provenanceSource: existing.capability.provenance?.source
+            ?? (existing.capability.hostNative ? "host" : existing.capability.scope === "trusted-cache" ? "trusted-cache" : "mission")
+        }
       };
     }
 
@@ -110,12 +129,24 @@ export class CapabilityCoordinator implements CapabilityRuntime {
           candidateName: rankedCandidate.candidate.name,
           ok: true
         });
+        const cacheReused = acquired.receipt.status === "activated_from_trusted_cache"
+          || acquired.receipt.cache?.status === "reused";
         return {
           status: "resolved",
           capability: acquired.capability,
-          source: "acquired",
+          source: cacheReused ? "trusted-cache" : "acquired",
           attempts,
-          reason: `Acquired ${acquired.capability.name} at revision ${acquired.capability.revision ?? "unknown"}`
+          reason: cacheReused
+            ? `Reused trusted byte-identical ${acquired.capability.name} at revision ${acquired.capability.revision ?? "unknown"}`
+            : `Acquired ${acquired.capability.name} at revision ${acquired.capability.revision ?? "unknown"}`,
+          evidence: {
+            provenanceSource: acquired.capability.provenance?.source ?? (cacheReused ? "trusted-cache" : "external"),
+            acquisitionReceiptId: acquired.receipt.id,
+            acquisitionStatus: acquired.receipt.status,
+            candidateId: acquired.receipt.candidateId,
+            securityRisk: acquired.receipt.security.overall,
+            ...(acquired.receipt.cache?.cacheKey ? { cacheKey: acquired.receipt.cache.cacheKey } : {})
+          }
         };
       } catch (error) {
         attempts.push({
