@@ -15,7 +15,8 @@ const server = createMissionApi(runtime.controller, runtime.events, {
   supervisor: runtime.supervisor,
   approvals: runtime.approvals,
   capabilityLifecycle: runtime.capabilityLifecycle,
-  capabilityLedgerReader: runtime.reader
+  capabilityLedgerReader: runtime.reader,
+  evidenceReader: runtime.reader
 });
 
 server.listen(port, "127.0.0.1", () => {
