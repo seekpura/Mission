@@ -20,7 +20,6 @@ export type MissionEventType =
   | "work.failed"
   | "work.blocked"
   | "work.invalidated"
-  | "work.superseded"
   | "attempt.created"
   | "attempt.completed"
   | "execution.created"
