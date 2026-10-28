@@ -54,6 +54,7 @@ export type MissionEventType =
   | "capability.deactivated"
   | "capability.revoked"
   | "capability.rejected"
+  | "capability.resolution.recorded"
   | "capability.trust.recorded"
   | "capability.cost.recorded"
   | "capability.audit.recorded"
