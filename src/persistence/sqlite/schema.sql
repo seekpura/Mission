@@ -189,6 +189,15 @@ CREATE TABLE IF NOT EXISTS rm_missions (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS rm_steering_messages (
+  mission_id TEXT NOT NULL,
+  event_sequence INTEGER NOT NULL,
+  message TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, event_sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_steering_sequence ON rm_steering_messages(mission_id, event_sequence);
+
 CREATE TABLE IF NOT EXISTS rm_work_items (
   mission_id TEXT NOT NULL,
   id TEXT NOT NULL,
