@@ -71,12 +71,12 @@ export function createMissionApi(
           if (!runtime.approvals) return json(res, 503, { error: "approval_manager_unavailable" });
           const body = await readJson(req);
           if (typeof body.approved !== "boolean") return json(res, 400, { error: "approved_must_be_boolean" });
-          if (body.scope !== undefined && !isApprovalScope(body.scope)) {
-            return json(res, 400, { error: "invalid_approval_scope" });
+          if (body.scope !== undefined && body.scope !== "once") {
+            return json(res, 400, { error: "only_once_approval_scope_is_supported" });
           }
           const record = await runtime.approvals.decide(missionId, parts[3], {
             approved: body.approved,
-            ...(body.scope ? { scope: body.scope } : {}),
+            scope: "once",
             ...(typeof body.actor === "string" && body.actor ? { actor: body.actor } : {}),
             ...(typeof body.reason === "string" && body.reason ? { reason: body.reason } : {})
           });
@@ -120,8 +120,4 @@ async function readJson(req: AsyncIterable<any>) {
   let raw = "";
   for await (const chunk of req) raw += chunk;
   return raw ? JSON.parse(raw) : {};
-}
-
-function isApprovalScope(value: unknown): value is "once" | "mission" | "revision" | "host" {
-  return value === "once" || value === "mission" || value === "revision" || value === "host";
 }
