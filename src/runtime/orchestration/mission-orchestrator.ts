@@ -15,6 +15,7 @@ import type { WorkExecutionRouter, ExecutionRoute } from "./executor-router.ts";
 import type { InvocationReceipt } from "../../core/domain/invocation.ts";
 import { writeExecutionRecoveryManifest } from "../recovery/recovery-manifest.ts";
 import type { WorkerKnowledgeIngestor } from "../../core/knowledge/worker-knowledge-ingestor.ts";
+import { KnowledgeContextSelector } from "../../core/context/knowledge-context-selector.ts";
 
 export interface MissionOrchestratorOptions {
   maxConcurrency?: number;
@@ -35,6 +36,7 @@ export class MissionOrchestrator {
   private readonly capabilityCoordinator?: CapabilityCoordinator;
   private readonly executionRouter?: WorkExecutionRouter;
   private readonly knowledgeIngestor?: WorkerKnowledgeIngestor;
+  private readonly knowledgeSelector = new KnowledgeContextSelector();
   private readonly running = new Map<string, Promise<void>>();
   private readonly rerunRequested = new Set<string>();
   private readonly activeExecutions = new Map<string, { missionId: string; workItemId: string; executionId: string }>();
@@ -126,18 +128,27 @@ export class MissionOrchestrator {
     const attemptId = `attempt-${work.id}-${randomUUID().slice(0, 8)}`;
     const executionId = `execution-${work.id}-${randomUUID().slice(0, 8)}`;
     const workspace = this.workspaces.allocate(work.missionId, attemptId);
-    const requirements = await this.projections.listRequirements(work.missionId);
-    const knownArtifacts = await this.projections.listArtifacts(work.missionId);
+    const [requirements, knownArtifacts, knownSources, knownTruths] = await Promise.all([
+      this.projections.listRequirements(work.missionId),
+      this.projections.listArtifacts(work.missionId),
+      this.projections.listSources(work.missionId),
+      this.projections.listTruths(work.missionId)
+    ]);
+    const knowledgeContext = this.knowledgeSelector.select({ workItem: work, truths: knownTruths, sources: knownSources });
     const contextPacket = this.contextCompiler.compile({
       state,
       workItem: work,
       requirementRefs: work.requirementRefs,
+      truthRefs: knowledgeContext.truths.map(truth => truth.id),
+      sourceRefs: knowledgeContext.sources.map(source => source.id),
       artifactRefs: knownArtifacts.map(a => `${a.id}@${a.version}`),
       capabilityRefs: capabilities.map(capability => capability.id)
     });
     const workerContext = {
       contextPacket,
       requirements: requirements.filter(r => work.requirementRefs.includes(r.id)),
+      truths: knowledgeContext.truths,
+      sources: knowledgeContext.sources,
       expectedOutputs: work.expectedOutputs,
       capabilities,
       workspaceRoot: workspace.root,
