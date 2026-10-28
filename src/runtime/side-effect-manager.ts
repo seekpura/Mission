@@ -113,7 +113,12 @@ export class RuntimeSideEffectManager {
     const workItemId = optionalString(request.details?.workItemId);
     const attemptId = optionalString(request.details?.attemptId);
     const executionId = optionalString(request.details?.executionId);
-    const operationKey = hostOperationKey(request.missionId, workItemId, toolCall.toolCallId);
+    const operationKey = hostOperationKey(
+      request.missionId,
+      workItemId,
+      executionId ?? attemptId,
+      toolCall.toolCallId
+    );
     const intent: SideEffectIntent = {
       id: intentId(operationKey),
       missionId: request.missionId,
@@ -176,7 +181,7 @@ export class RuntimeSideEffectManager {
     for (const [toolCallId, item] of calls) {
       const classification = item.classification;
       if (!classification.sideEffect || !classification.effectClass || !classification.type) continue;
-      const operationKey = hostOperationKey(input.missionId, input.workItemId, toolCallId);
+      const operationKey = hostOperationKey(input.missionId, input.workItemId, input.executionId, toolCallId);
       const history = await this.history(input.missionId, operationKey);
       const status = finalStatus.get(toolCallId);
       if (!history.admission || history.admission.status !== "admitted") {
@@ -350,7 +355,7 @@ export class RuntimeSideEffectManager {
     call: HostToolCall,
     classification: HostToolClassification
   ): SideEffectIntent {
-    const operationKey = hostOperationKey(input.missionId, input.workItemId, call.toolCallId);
+    const operationKey = hostOperationKey(input.missionId, input.workItemId, input.executionId, call.toolCallId);
     return {
       id: intentId(operationKey),
       missionId: input.missionId,
@@ -550,8 +555,13 @@ function validateIntent(intent: SideEffectIntent): void {
   if (!intent.target.trim()) throw new Error("SideEffectIntent requires target");
 }
 
-function hostOperationKey(missionId: string, workItemId: string | undefined, toolCallId: string): string {
-  return `host-tool:${missionId}:${workItemId ?? "unscoped"}:${toolCallId}`;
+function hostOperationKey(
+  missionId: string,
+  workItemId: string | undefined,
+  executionScope: string | undefined,
+  toolCallId: string
+): string {
+  return `host-tool:${missionId}:${workItemId ?? "unscoped"}:${executionScope ?? "unbound"}:${toolCallId}`;
 }
 
 function intentId(operationKey: string): string {
