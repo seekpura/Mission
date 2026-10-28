@@ -4,12 +4,19 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { MissionController } from "../core/mission/controller.ts";
 import type { EventStore } from "../core/events/event-store.ts";
+import type { SqliteMissionReader } from "../persistence/sqlite/sqlite-mission-reader.ts";
 import type { RuntimeApprovalManager } from "../runtime/approval-manager.ts";
+import type { RuntimeCapabilityLifecycleManager } from "../runtime/capability-ledger-runtime.ts";
 import type { MissionSupervisor } from "../runtime/mission-supervisor.ts";
 
 export interface MissionApiRuntime {
   supervisor?: MissionSupervisor;
   approvals?: RuntimeApprovalManager;
+  capabilityLifecycle?: RuntimeCapabilityLifecycleManager;
+  capabilityLedgerReader?: Pick<
+    SqliteMissionReader,
+    "readCapabilityTrust" | "readCapabilityCosts" | "readCapabilityAudit"
+  >;
 }
 
 export function createMissionApi(
@@ -83,6 +90,51 @@ export function createMissionApi(
           await publish(missionId);
           void runtime.supervisor?.wake(missionId, "approval_event");
           return json(res, 200, record);
+        }
+        if (
+          req.method === "GET" &&
+          parts[2] === "capabilities" &&
+          parts[3] === "ledger" &&
+          parts.length === 4
+        ) {
+          if (!runtime.capabilityLedgerReader) {
+            return json(res, 503, { error: "capability_ledger_reader_unavailable" });
+          }
+          return json(res, 200, {
+            trust: runtime.capabilityLedgerReader.readCapabilityTrust(missionId),
+            costs: runtime.capabilityLedgerReader.readCapabilityCosts(missionId),
+            audit: runtime.capabilityLedgerReader.readCapabilityAudit(missionId)
+          });
+        }
+        if (
+          req.method === "POST" &&
+          parts[2] === "capabilities" &&
+          parts[3] &&
+          (parts[4] === "deactivate" || parts[4] === "revoke") &&
+          parts.length === 5
+        ) {
+          if (!runtime.capabilityLifecycle) {
+            return json(res, 503, { error: "capability_lifecycle_manager_unavailable" });
+          }
+          const body = await readJson(req);
+          if (typeof body.reason !== "string" || !body.reason.trim()) {
+            return json(res, 400, { error: "capability_lifecycle_reason_required" });
+          }
+          const capabilityId = parts[3];
+          const revoked = parts[4] === "revoke";
+          await runtime.capabilityLifecycle.deactivate({
+            missionId,
+            capabilityId,
+            reason: body.reason.trim(),
+            revoked
+          });
+          await publish(missionId);
+          void runtime.supervisor?.wake(missionId, "manual");
+          return json(res, 200, {
+            capabilityId,
+            status: revoked ? "revoked" : "deactivated",
+            state: await controller.state(missionId)
+          });
         }
         if (req.method === "GET" && parts[2] === "activity") return json(res, 200, await events.list(missionId));
         if (req.method === "GET" && parts[2] === "events") {
