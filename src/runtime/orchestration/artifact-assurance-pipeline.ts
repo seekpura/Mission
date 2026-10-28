@@ -58,6 +58,8 @@ export class ArtifactAssurancePipeline {
       return { ok: false, status: "failed", reason: "required outputs were not produced", artifactRefs: [] };
     }
     const artifactRefs: string[] = [];
+    const blockedNeeds = new Map<string, CapabilityNeed>();
+    let verificationBlocked = false;
     for (const output of outputs) {
       const sourcePath = this.safeWorkspacePath(workspaceRoot, output.path);
       if (!existsSync(sourcePath)) {
@@ -76,13 +78,25 @@ export class ArtifactAssurancePipeline {
       const verification = await this.verifyArtifact(artifact, output.requirementRefs ?? []);
       artifactRefs.push(verification.artifactRef);
       if (verification.status === "verification_blocked") {
-        return { ok: false, status: "verification_blocked", reason: verification.reason, artifactRefs, capabilityNeeds: verification.capabilityNeeds };
+        verificationBlocked = true;
+        for (const need of verification.capabilityNeeds) blockedNeeds.set(need.id, mergeCapabilityNeed(blockedNeeds.get(need.id), need));
+        await this.deferVerification(work, artifact, verification.capabilityNeeds, output.requirementRefs ?? []);
+        continue;
       }
       if (verification.status === "failed") {
         return { ok: false, status: "failed", reason: verification.reason, artifactRefs };
       }
     }
     if (outputs.length === 0 && work.expectedOutputs.length === 0) return { ok: true, status: "verified", reason: "non-artifact work completed", artifactRefs };
+    if (verificationBlocked) {
+      return {
+        ok: true,
+        status: "verification_blocked",
+        reason: "production completed; artifact verification deferred until required QA capabilities are available",
+        artifactRefs,
+        capabilityNeeds: [...blockedNeeds.values()]
+      };
+    }
     return { ok: true, status: "verified", reason: "outputs verified", artifactRefs };
   }
 
@@ -177,6 +191,44 @@ export class ArtifactAssurancePipeline {
     return { status: "verified", reason: "artifact verified", artifactRef: `${artifact.id}@${artifact.version}`, capabilityNeeds: [] };
   }
 
+  private async deferVerification(origin: WorkItem, artifact: Artifact, needs: CapabilityNeed[], requirementRefs: string[]): Promise<void> {
+    const existingNeeds = await this.projections.listCapabilityNeeds(origin.missionId);
+    const needRefs: string[] = [];
+    for (const need of needs) {
+      const existing = existingNeeds.find(item => item.id === need.id);
+      const selected = existing ?? need;
+      needRefs.push(selected.id);
+      if (!existing) {
+        await this.controller.emit(origin.missionId, "capability.need.created", { need }, { type: "verifier" }, `capability-need:${need.id}`);
+      }
+    }
+    const artifactRef = `${artifact.id}@${artifact.version}`;
+    const workId = `verify-${safeId(artifact.id)}-v${artifact.version}`;
+    const existingWork = (await this.projections.listWorkItems(origin.missionId)).find(item => item.id === workId);
+    if (existingWork) return;
+    const now = new Date().toISOString();
+    await this.controller.proposeWork({
+      id: workId,
+      missionId: origin.missionId,
+      workstreamId: origin.workstreamId,
+      parentWorkItemId: origin.id,
+      purpose: "verification",
+      objective: `Complete deferred verification for ${artifact.logicalName} without regenerating the artifact`,
+      status: "ready",
+      requirementRefs: [...new Set(requirementRefs)],
+      gapRefs: [],
+      inputArtifactRefs: [artifactRef],
+      expectedOutputs: [],
+      localAcceptanceCriteria: [{ id: `verify-${safeId(artifact.id)}-${artifact.version}`, description: "Existing candidate artifact passes all required checks and is promoted without production rerun", priority: "required" }],
+      capabilityNeedRefs: [...new Set(needRefs)],
+      priority: 100,
+      graphRevision: origin.graphRevision,
+      createdBy: "verifier",
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+
   private async satisfyArtifactRequirements(missionId: string, artifact: Artifact, explicitRequirementRefs: string[], verification: VerificationResult, evidenceByRequirement: Map<string, string[]>): Promise<void> {
     const contract = await this.projections.getAcceptanceContract(missionId);
     const requirements = await this.projections.listRequirements(missionId);
@@ -214,7 +266,7 @@ export class ArtifactAssurancePipeline {
 
   private async isRequiredArtifact(missionId: string, artifact: Artifact): Promise<boolean> {
     const contract = await this.projections.getAcceptanceContract(missionId);
-    return !!contract?.requiredArtifacts.some(item => item.logicalName === artifact.logicalName && (!item.type || item.type === artifact.type));
+    return !!contract?.requiredArtifacts.some(item => item.logicalName === artifact.logicalName && (!item.type || artifact.type === item.type));
   }
 
   private verificationFinding(artifact: Artifact, verification: VerificationResult): Finding {
@@ -258,4 +310,8 @@ function mergeCapabilityNeed(existing: CapabilityNeed | undefined, incoming: Cap
     desiredInputs: [...new Set([...existing.desiredInputs, ...incoming.desiredInputs])],
     desiredOutputs: [...new Set([...existing.desiredOutputs, ...incoming.desiredOutputs])]
   };
+}
+
+function safeId(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "artifact";
 }
