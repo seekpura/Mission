@@ -106,7 +106,13 @@ export class SideEffectHostAdapter implements HostAdapter {
   }
 
   async cancelAgent(handle: HostAgentHandle): Promise<void> {
-    await this.base.cancelAgent(handle);
+    try {
+      await this.base.cancelAgent(handle);
+    } finally {
+      const active = this.sessions.get(handle.id);
+      this.sessions.delete(handle.id);
+      active?.releaseScope();
+    }
   }
 
   async *observeAgent(handle: HostAgentHandle): AsyncIterable<HostAgentEvent> {
