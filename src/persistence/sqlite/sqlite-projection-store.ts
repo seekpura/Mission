@@ -9,11 +9,17 @@ import { applyMissionEvent, initialMissionState } from "../../core/events/state-
 import type { MissionProjectionReader, MissionProjectionWriter } from "../../core/events/projection-store.ts";
 import type { MissionDatabase } from "./database.ts";
 import { SqliteEntityProjector } from "./sqlite-entity-projector.ts";
+import { SqliteAssuranceProjector } from "./sqlite-assurance-projector.ts";
 
 export class SqliteProjectionStore implements MissionProjectionReader, MissionProjectionWriter {
   private readonly database: MissionDatabase;
   private readonly entities: SqliteEntityProjector;
-  constructor(database: MissionDatabase) { this.database = database; this.entities = new SqliteEntityProjector(database); }
+  private readonly assurance: SqliteAssuranceProjector;
+  constructor(database: MissionDatabase) {
+    this.database = database;
+    this.entities = new SqliteEntityProjector(database);
+    this.assurance = new SqliteAssuranceProjector(database);
+  }
 
   apply(event: MissionEvent): void {
     const db = this.database.db;
@@ -38,6 +44,7 @@ export class SqliteProjectionStore implements MissionProjectionReader, MissionPr
       .run(event.missionId, next.status, next.revision, next.createdAt ?? event.createdAt, event.createdAt);
 
     this.entities.apply(event);
+    this.assurance.apply(event);
   }
 
   rebuild(missionId: string, events: MissionEvent[]): void {
