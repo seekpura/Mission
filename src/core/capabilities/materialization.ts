@@ -55,26 +55,31 @@ export class RepositoryCapabilityMaterializer implements CapabilityMaterializer 
 
     const targetDirectory = join(this.stagingRoot, `${safeSegment(candidate.id)}-${randomUUID()}`);
     mkdirSync(targetDirectory, { recursive: true });
-    const snapshot = await this.client.snapshot({
-      sourceUri: candidate.sourceUri,
-      targetDirectory,
-      requestedRevision: candidate.resolvedRevision
-    });
-    if (!snapshot.resolvedRevision.trim()) {
-      throw new Error(`Materializer did not resolve an immutable revision for ${candidate.name}`);
-    }
+    try {
+      const snapshot = await this.client.snapshot({
+        sourceUri: candidate.sourceUri,
+        targetDirectory,
+        requestedRevision: candidate.resolvedRevision
+      });
+      if (!snapshot.resolvedRevision.trim()) {
+        throw new Error(`Materializer did not resolve an immutable revision for ${candidate.name}`);
+      }
 
-    const root = realpathSync(targetDirectory);
-    validateSymlinks(root);
-    return {
-      candidateId: candidate.id,
-      sourceType: candidate.sourceType,
-      sourceUri: candidate.sourceUri,
-      root,
-      resolvedRevision: snapshot.resolvedRevision,
-      contentHash: hashDirectory(root),
-      materializedAt: new Date().toISOString()
-    };
+      const root = realpathSync(targetDirectory);
+      validateSymlinks(root);
+      return {
+        candidateId: candidate.id,
+        sourceType: candidate.sourceType,
+        sourceUri: candidate.sourceUri,
+        root,
+        resolvedRevision: snapshot.resolvedRevision,
+        contentHash: hashDirectory(root),
+        materializedAt: new Date().toISOString()
+      };
+    } catch (error) {
+      rmSync(targetDirectory, { recursive: true, force: true });
+      throw error;
+    }
   }
 
   cleanup(materialized: MaterializedCapability): void {
