@@ -1,9 +1,21 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import test from "node:test";
 import type { WorkItem } from "../../src/core/domain/work-item.ts";
 import type { DeliberationProvider } from "../../src/core/planning/deliberation-provider.ts";
 import { MissionController } from "../../src/core/mission/controller.ts";
-import { InMemoryEventStore } from "../../src/core/events/in-memory-event-store.ts";
+import { MissionDatabase } from "../../src/persistence/sqlite/database.ts";
+import { SqliteEventStore } from "../../src/persistence/sqlite/sqlite-event-store.ts";
+
+function schemaPath() {
+  return join(process.cwd(), "src", "persistence", "sqlite", "schema.sql");
+}
+
+function runtime() {
+  const database = new MissionDatabase(":memory:");
+  database.migrate(schemaPath());
+  return { database, store: new SqliteEventStore(database) };
+}
 
 function work(missionId: string, id: string, supersedesWorkItemRefs: string[] = []): WorkItem {
   const now = new Date().toISOString();
@@ -51,46 +63,58 @@ function plannerFor(candidate: WorkItem): DeliberationProvider {
 }
 
 test("frontier admission rejects a replacement that references an unknown WorkItem", async () => {
+  const { database, store } = runtime();
   const missionId = "mission-supersession-unknown";
-  const store = new InMemoryEventStore();
-  const controller = new MissionController(store, plannerFor(work(missionId, "replacement", ["missing-work"])));
-  await controller.createMission(missionId, "reject unknown replacement target");
-  await assert.rejects(
-    () => controller.runControllerCycle({ missionId, trigger: "mission_created" }),
-    /unknown superseded WorkItem missing-work/
-  );
+  try {
+    const controller = new MissionController(store, plannerFor(work(missionId, "replacement", ["missing-work"])));
+    await controller.createMission(missionId, "reject unknown replacement target");
+    await assert.rejects(
+      () => controller.runControllerCycle({ missionId, trigger: "mission_created" }),
+      /unknown superseded WorkItem missing-work/
+    );
+  } finally {
+    database.close();
+  }
 });
 
 test("frontier admission rejects self-supersession", async () => {
+  const { database, store } = runtime();
   const missionId = "mission-supersession-self";
-  const store = new InMemoryEventStore();
-  const controller = new MissionController(store, plannerFor(work(missionId, "replacement", ["replacement"])));
-  await controller.createMission(missionId, "reject self replacement");
-  await assert.rejects(
-    () => controller.runControllerCycle({ missionId, trigger: "mission_created" }),
-    /cannot supersede itself/
-  );
+  try {
+    const controller = new MissionController(store, plannerFor(work(missionId, "replacement", ["replacement"])));
+    await controller.createMission(missionId, "reject self replacement");
+    await assert.rejects(
+      () => controller.runControllerCycle({ missionId, trigger: "mission_created" }),
+      /cannot supersede itself/
+    );
+  } finally {
+    database.close();
+  }
 });
 
 test("frontier admission rejects replacing a WorkItem that already succeeded", async () => {
+  const { database, store } = runtime();
   const missionId = "mission-supersession-succeeded";
-  const store = new InMemoryEventStore();
-  const replacement = work(missionId, "replacement", ["successful-work"]);
-  const controller = new MissionController(store, plannerFor(replacement));
-  await controller.createMission(missionId, "do not erase successful Work history");
-  const successful = work(missionId, "successful-work");
-  successful.status = "ready";
-  await controller.proposeWork(successful);
-  await controller.emit(
-    missionId,
-    "work.completed",
-    { id: successful.id, attemptId: "attempt-success", artifactRefs: ["deliverable@1"] },
-    { type: "controller" },
-    "successful-work-completed"
-  );
+  try {
+    const replacement = work(missionId, "replacement", ["successful-work"]);
+    const controller = new MissionController(store, plannerFor(replacement));
+    await controller.createMission(missionId, "do not erase successful Work history");
+    const successful = work(missionId, "successful-work");
+    successful.status = "ready";
+    await controller.proposeWork(successful);
+    await controller.emit(
+      missionId,
+      "work.completed",
+      { id: successful.id, attemptId: "attempt-success", artifactRefs: ["deliverable@1"] },
+      { type: "controller" },
+      "successful-work-completed"
+    );
 
-  await assert.rejects(
-    () => controller.runControllerCycle({ missionId, trigger: "manual" }),
-    /cannot supersede WorkItem successful-work in status succeeded/
-  );
+    await assert.rejects(
+      () => controller.runControllerCycle({ missionId, trigger: "manual" }),
+      /cannot supersede WorkItem successful-work in status succeeded/
+    );
+  } finally {
+    database.close();
+  }
 });
