@@ -5,6 +5,14 @@ import type { MissionDatabase } from "./database.ts";
 import { rowToMissionEvent, type SqliteMissionEventRow } from "./sqlite-event-row.ts";
 
 const PROJECTION_NAME = "verification-evidence-read-model-v1";
+const MAX_ID_CHARS = 256;
+const MAX_SUBJECT_REF_CHARS = 1_024;
+const MAX_COLLECTOR_ID_CHARS = 128;
+const MAX_SOURCE_REF_CHARS = 4_096;
+const MAX_PRODUCED_BY_CHARS = 256;
+const MAX_CLAIM_CHARS = 4_096;
+const MAX_DETAILS_BYTES = 32 * 1024;
+const MAX_EVIDENCE_JSON_BYTES = 64 * 1024;
 
 const EVIDENCE_TYPES = new Set<Evidence["type"]>([
   "test-result",
@@ -99,6 +107,10 @@ export class SqliteEvidenceProjector {
 
   private insertEvidence(event: MissionEvent): void {
     const evidence = validateEvidence(event);
+    const serialized = JSON.stringify(evidence);
+    if (Buffer.byteLength(serialized, "utf8") > MAX_EVIDENCE_JSON_BYTES) {
+      throw new Error(`Evidence durable payload exceeds ${MAX_EVIDENCE_JSON_BYTES} bytes`);
+    }
     this.db.prepare(`
       INSERT INTO rm_evidence
         (mission_id, id, subject_ref, evidence_kind, collector_id, result, data_json, created_at)
@@ -117,7 +129,7 @@ export class SqliteEvidenceProjector {
       evidence.kind,
       evidence.collectorId,
       evidence.result,
-      JSON.stringify(evidence),
+      serialized,
       evidence.createdAt
     );
   }
@@ -128,22 +140,31 @@ function validateEvidence(event: MissionEvent): Evidence {
     throw new Error("evidence.collected requires an Evidence object payload");
   }
   const value = event.payload as Record<string, unknown>;
-  const id = requiredString(value.id, "evidence.id");
-  const missionId = requiredString(value.missionId, "evidence.missionId");
+  const id = boundedString(value.id, "evidence.id", MAX_ID_CHARS);
+  const missionId = boundedString(value.missionId, "evidence.missionId", MAX_ID_CHARS);
   if (missionId !== event.missionId) throw new Error(`Evidence mission mismatch: ${missionId} != ${event.missionId}`);
-  const subjectRef = requiredString(value.subjectRef, "evidence.subjectRef");
+  const subjectRef = boundedString(value.subjectRef, "evidence.subjectRef", MAX_SUBJECT_REF_CHARS);
   const type = requiredString(value.type, "evidence.type") as Evidence["type"];
   if (!EVIDENCE_TYPES.has(type)) throw new Error(`Unsupported Evidence type: ${type}`);
   const kind = requiredString(value.kind, "evidence.kind") as VerificationEvidenceKind;
   if (!EVIDENCE_KINDS.has(kind)) throw new Error(`Unsupported verification evidence kind: ${kind}`);
-  const claim = requiredString(value.claim, "evidence.claim");
+  const claim = boundedString(value.claim, "evidence.claim", MAX_CLAIM_CHARS);
   const result = requiredString(value.result, "evidence.result") as Evidence["result"];
   if (!EVIDENCE_RESULTS.has(result)) throw new Error(`Unsupported Evidence result: ${result}`);
-  const collectorId = requiredString(value.collectorId, "evidence.collectorId");
+  const collectorId = boundedString(value.collectorId, "evidence.collectorId", MAX_COLLECTOR_ID_CHARS);
   const createdAt = requiredString(value.createdAt, "evidence.createdAt");
   if (value.details !== undefined && (!value.details || typeof value.details !== "object" || Array.isArray(value.details))) {
     throw new Error("Evidence details must be an object when supplied");
   }
+  if (value.details !== undefined && serializedBytes(value.details) > MAX_DETAILS_BYTES) {
+    throw new Error(`Evidence details exceed ${MAX_DETAILS_BYTES} bytes`);
+  }
+  const sourceRef = typeof value.sourceRef === "string" && value.sourceRef.trim()
+    ? boundedString(value.sourceRef, "evidence.sourceRef", MAX_SOURCE_REF_CHARS)
+    : undefined;
+  const producedBy = typeof value.producedBy === "string" && value.producedBy.trim()
+    ? boundedString(value.producedBy, "evidence.producedBy", MAX_PRODUCED_BY_CHARS)
+    : undefined;
   return {
     id,
     missionId,
@@ -153,8 +174,8 @@ function validateEvidence(event: MissionEvent): Evidence {
     claim,
     result,
     collectorId,
-    ...(typeof value.sourceRef === "string" && value.sourceRef ? { sourceRef: value.sourceRef } : {}),
-    ...(typeof value.producedBy === "string" && value.producedBy ? { producedBy: value.producedBy } : {}),
+    ...(sourceRef ? { sourceRef } : {}),
+    ...(producedBy ? { producedBy } : {}),
     ...(value.details ? { details: structuredClone(value.details as Record<string, unknown>) } : {}),
     createdAt
   };
@@ -163,4 +184,16 @@ function validateEvidence(event: MissionEvent): Evidence {
 function requiredString(value: unknown, path: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`Expected non-empty string at ${path}`);
   return value.trim();
+}
+
+function boundedString(value: unknown, path: string, maxChars: number): string {
+  const result = requiredString(value, path);
+  if (result.length > maxChars) throw new Error(`${path} exceeds ${maxChars} characters`);
+  return result;
+}
+
+function serializedBytes(value: unknown): number {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new Error("Evidence value is not JSON-serializable");
+  return Buffer.byteLength(serialized, "utf8");
 }
