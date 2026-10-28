@@ -192,11 +192,29 @@ export class CapabilityAcquisitionTransaction {
       }
 
       sandbox = this.sandboxManager.createFromDirectory(materialized.root);
-      const smoke = await this.smokeRunner.run({
-        candidate: pinnedCandidate,
-        need,
-        sandboxRoot: sandbox.candidateRoot
-      });
+      let smoke: AcquisitionReceipt["smoke"];
+      try {
+        smoke = await this.smokeRunner.run({
+          candidate: pinnedCandidate,
+          need,
+          sandboxRoot: sandbox.candidateRoot
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        const receipt = this.receipt({
+          candidate: pinnedCandidate,
+          need,
+          materialized,
+          security,
+          policy,
+          approval,
+          status: "smoke_failed",
+          reason: `Isolated capability smoke execution failed: ${reason}`
+        });
+        await this.receiptStore.save(receipt);
+        throw new CapabilityAcquisitionError(receipt.reason!, receipt);
+      }
+
       if (!smoke.passed) {
         const receipt = this.receipt({
           candidate: pinnedCandidate,
@@ -215,14 +233,32 @@ export class CapabilityAcquisitionTransaction {
         throw new CapabilityAcquisitionError(receipt.reason!, receipt);
       }
 
-      const capability = await this.activator.activate({
-        candidate: { ...pinnedCandidate, status: "verified" },
-        need,
-        materialized,
-        sandboxRoot: sandbox.candidateRoot,
-        security
-      });
-      assertActivatedCapability(capability, need, materialized);
+      let capability: CapabilityDescriptor;
+      try {
+        capability = await this.activator.activate({
+          candidate: { ...pinnedCandidate, status: "verified" },
+          need,
+          materialized,
+          sandboxRoot: sandbox.candidateRoot,
+          security
+        });
+        assertActivatedCapability(capability, need, materialized);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        const receipt = this.receipt({
+          candidate: pinnedCandidate,
+          need,
+          materialized,
+          security,
+          policy,
+          approval,
+          smoke,
+          status: "activation_failed",
+          reason: `Mission-local capability activation failed: ${reason}`
+        });
+        await this.receiptStore.save(receipt);
+        throw new CapabilityAcquisitionError(receipt.reason!, receipt);
+      }
 
       const receipt = this.receipt({
         candidate: pinnedCandidate,
