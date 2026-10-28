@@ -5,11 +5,30 @@ import type { VerificationCheckExecutor, VerificationCheckExecutorContext } from
 
 export class HostReviewCheckExecutor implements VerificationCheckExecutor {
   id = "independent-host-reviewer";
+  cacheVersion = "2";
   private readonly host: HostAdapter;
   constructor(host: HostAdapter) { this.host = host; }
   supports(check: VerificationCheck): boolean { return ["semantic", "perceptual", "source"].includes(check.method); }
 
   async execute(artifact: Artifact, check: VerificationCheck, context: VerificationCheckExecutorContext): Promise<VerificationCheckResult> {
+    if (check.method === "perceptual" && requiresDerivedInspection(artifact)) {
+      const inspection = context.inspection;
+      if (!inspection?.required || inspection.missingKinds.length > 0 || inspection.artifacts.length === 0) {
+        const missing = inspection?.missingKinds.length ? ` Missing inspection kinds: ${inspection.missingKinds.join(", ")}.` : "";
+        return result(check, "inconclusive", `Perceptual verification requires derived observable inspection artifacts for ${artifact.type}.${missing}`);
+      }
+    }
+    const inspectionArtifacts = check.method === "perceptual"
+      ? (context.inspection?.artifacts ?? []).map(item => ({
+          id: item.id,
+          version: item.version,
+          type: item.type,
+          uri: item.uri,
+          logicalName: item.logicalName,
+          contentHash: item.contentHash,
+          sourceArtifactRefs: item.sourceArtifactRefs
+        }))
+      : [];
     const handle = await this.host.createAgent({
       missionId: context.missionId,
       workItemId: `verify:${artifact.id}:${check.id}`,
@@ -19,6 +38,7 @@ export class HostReviewCheckExecutor implements VerificationCheckExecutor {
         kind: "verification-review",
         independence: "You are an independent verifier. Do not assume the producer's claims are correct.",
         artifact: { id: artifact.id, version: artifact.version, type: artifact.type, uri: artifact.uri, logicalName: artifact.logicalName },
+        inspectionArtifacts,
         check,
         responseContract: { status: "pass|fail|inconclusive", detail: "specific observation", confidence: "0..1" }
       }
@@ -32,6 +52,10 @@ export class HostReviewCheckExecutor implements VerificationCheckExecutor {
     if (!verdict) return result(check, "inconclusive", "Independent reviewer did not return a valid verification verdict");
     return result(check, verdict.status, verdict.detail);
   }
+}
+
+function requiresDerivedInspection(artifact: Artifact): boolean {
+  return ["presentation", "document", "website", "video"].includes(artifact.type);
 }
 
 function parseVerdict(value: unknown): { status: "pass" | "fail" | "inconclusive"; detail?: string } | null {
