@@ -1,5 +1,6 @@
 import type { CapabilityDescriptor, CapabilityNeed } from "../core/domain/capability.ts";
 import type { CapabilityEnsureResult, CapabilityRuntime } from "../core/capabilities/capability-coordinator.ts";
+import { buildHostCapabilityGraph } from "../core/capabilities/capability-graph.ts";
 import { MissionCapabilityOverlay } from "../core/capabilities/mission-capability-overlay.ts";
 import { CapabilityResolver } from "../core/capabilities/resolver.ts";
 import type { HostAdapter } from "../hosts/deepseek/host-adapter.ts";
@@ -31,7 +32,15 @@ export class HostCapabilityRuntime implements CapabilityRuntime {
   async ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult> {
     const snapshot = await this.host.snapshotEnvironment();
     const effective = this.overlay.effective(need.missionId, snapshot.capabilities);
-    const resolved = this.resolver.resolve(need, effective);
+    const graph = buildHostCapabilityGraph({
+      revision: snapshot.revision,
+      host: snapshot.host,
+      capabilities: effective,
+      shellAvailable: snapshot.shellAvailable,
+      filesystemAvailable: snapshot.filesystemAvailable,
+      browserAvailable: snapshot.browserAvailable
+    });
+    const resolved = this.resolver.resolve(need, graph);
     if (resolved.status === "resolved" && resolved.capability) {
       return {
         status: "resolved",
