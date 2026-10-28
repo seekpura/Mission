@@ -262,17 +262,17 @@ test("Reference Mission replans around failed capability acquisition instead of 
     assert.deepEqual(state.finalArtifactRefs, ["keynote@1"]);
 
     const after = await events.list(missionId);
-    const blockedIndex = after.findIndex(event => event.type === "work.blocked");
-    const gapIndex = after.findIndex((event, index) => index > blockedIndex && event.type === "gap.opened");
-    const diagnosisIndex = after.findIndex((event, index) => index > gapIndex && event.type === "decision.created");
+    const gapIndex = after.findIndex(event => event.type === "gap.opened");
+    const blockedIndex = after.findIndex((event, index) => index > gapIndex && event.type === "work.blocked");
+    const diagnosisIndex = after.findIndex((event, index) => index > blockedIndex && event.type === "decision.created");
     const fallbackIndex = after.findIndex((event, index) =>
       index > diagnosisIndex && event.type === "work.created" && (event.payload as { id?: string }).id === "keynote-safe-fallback"
     );
     const resolvedIndex = after.findIndex((event, index) => index > fallbackIndex && event.type === "gap.resolved");
     const completedIndex = after.findIndex((event, index) => index > resolvedIndex && event.type === "mission.completed");
-    assert.ok(blockedIndex >= 0);
-    assert.ok(gapIndex > blockedIndex);
-    assert.ok(diagnosisIndex > gapIndex);
+    assert.ok(gapIndex >= 0);
+    assert.ok(blockedIndex > gapIndex);
+    assert.ok(diagnosisIndex > blockedIndex);
     assert.ok(fallbackIndex > diagnosisIndex);
     assert.ok(resolvedIndex > fallbackIndex);
     assert.ok(completedIndex > resolvedIndex);
