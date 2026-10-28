@@ -3,6 +3,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { CapabilityDescriptor } from "../../src/core/domain/capability.ts";
 import type { CapabilityRuntime, CapabilityEnsureResult } from "../../src/core/capabilities/capability-coordinator.ts";
+import type { TrustedCapabilityCache } from "../../src/core/capabilities/trusted-capability-cache.ts";
 import { MissionController } from "../../src/core/mission/controller.ts";
 import { MissionDatabase } from "../../src/persistence/sqlite/database.ts";
 import { SqliteEventStore } from "../../src/persistence/sqlite/sqlite-event-store.ts";
@@ -37,6 +38,15 @@ class LifecycleRuntime implements CapabilityRuntime {
   }
   async ensure(): Promise<CapabilityEnsureResult> {
     return { status: "missing", source: "none", attempts: [], reason: "not used" };
+  }
+}
+
+class RecordingTrustedCache implements TrustedCapabilityCache {
+  readonly revoked: Array<{ cacheKey: string; reason: string }> = [];
+  async find(): Promise<undefined> { return undefined; }
+  async store(): Promise<any> { throw new Error("store is not used in this API fixture"); }
+  async revoke(cacheKey: string, reason: string): Promise<void> {
+    this.revoked.push({ cacheKey, reason });
   }
 }
 
@@ -86,7 +96,9 @@ function resolutionEnvelope(missionId: string, capabilityId: string) {
       cacheKey: "cache-api-1",
       reusable: true,
       reason: "fixture",
-      recordedAt: "2026-10-29T00:00:00.000Z"
+      // Intentionally later than the lifecycle events' wall clock. Ledger order
+      // must follow Mission Event sequence rather than a potentially skewed clock.
+      recordedAt: "2026-10-29T23:00:00.000Z"
     },
     cost: {
       id: "cost-api-1",
@@ -97,7 +109,7 @@ function resolutionEnvelope(missionId: string, capabilityId: string) {
       monetaryClass: "unknown",
       latencyClass: "unknown",
       source: "unknown",
-      recordedAt: "2026-10-29T00:00:01.000Z"
+      recordedAt: "2026-10-29T23:00:01.000Z"
     },
     audit: {
       id: "audit-api-1",
@@ -111,19 +123,20 @@ function resolutionEnvelope(missionId: string, capabilityId: string) {
       cacheKey: "cache-api-1",
       reason: "fixture",
       attempts: [],
-      recordedAt: "2026-10-29T00:00:02.000Z"
+      recordedAt: "2026-10-29T23:00:02.000Z"
     }
   };
 }
 
-test("Mission API exposes capability ledger and applies durable deactivate/revoke lifecycle", async () => {
+test("Mission API exposes capability ledger and applies durable capability/cache revocation lifecycle", async () => {
   const database = new MissionDatabase(":memory:");
   database.migrate(schemaPath());
   const events = new SqliteEventStore(database);
   const reader = new SqliteMissionReader(database);
   const controller = new MissionController(events);
   const baseRuntime = new LifecycleRuntime();
-  const lifecycle = new RuntimeCapabilityLifecycleManager(baseRuntime, events);
+  const trustedCache = new RecordingTrustedCache();
+  const lifecycle = new RuntimeCapabilityLifecycleManager(baseRuntime, events, trustedCache);
   const server = createMissionApi(controller, events, {
     capabilityLifecycle: lifecycle,
     capabilityLedgerReader: reader
@@ -180,6 +193,30 @@ test("Mission API exposes capability ledger and applies durable deactivate/revok
     ]);
     assert.equal(reader.readCapabilityTrust(missionId).at(-1)?.trustLevel, "revoked");
     assert.equal(reader.readCapabilityAudit(missionId).at(-1)?.decision, "revoked");
+
+    const cacheMissingReason = await fetch(`${base}/missions/${missionId}/capabilities/cache/cache-api-global/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+    assert.equal(cacheMissingReason.status, 400);
+
+    const cacheRevokeResponse = await fetch(`${base}/missions/${missionId}/capabilities/cache/cache-api-global/revoke`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: "global trust withdrawn" })
+    });
+    assert.equal(cacheRevokeResponse.status, 200);
+    assert.deepEqual(await cacheRevokeResponse.json(), {
+      cacheKey: "cache-api-global",
+      status: "revoked"
+    });
+    assert.deepEqual(trustedCache.revoked, [
+      { cacheKey: "cache-api-global", reason: "global trust withdrawn" }
+    ]);
+    const latestAudit = reader.readCapabilityAudit(missionId).at(-1);
+    assert.equal(latestAudit?.decision, "revoked");
+    assert.equal(latestAudit?.cacheKey, "cache-api-global");
   } finally {
     await closeServer(server);
     database.close();
