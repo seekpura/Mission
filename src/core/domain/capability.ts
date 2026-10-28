@@ -1,5 +1,47 @@
 export type CapabilityKind = "skill" | "tool" | "mcp" | "agent" | "runtime" | "library" | "cli" | "application" | "workflow";
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
+export type CapabilityEnvironment = "shell" | "filesystem" | "browser";
+export type CapabilityExecutionMode = "host-agent" | "host-capability" | "mission-context" | "local-process" | "remote-service" | "library";
+export type CapabilityCostClass = "negligible" | "low" | "medium" | "high" | "unknown";
+export type CapabilityLatencyClass = "local" | "interactive" | "batch" | "remote" | "unknown";
+
+export interface CapabilityConstraints {
+  requiredEnvironment?: CapabilityEnvironment[];
+  requiresCapabilityRefs?: string[];
+  supportedPurposes?: CapabilityNeed["purpose"][];
+  maxConcurrency?: number;
+}
+
+export interface CapabilityRouting {
+  executionMode: CapabilityExecutionMode;
+  executorIds?: string[];
+  resumable?: boolean;
+  concurrent?: boolean;
+  isolation?: "host" | "process" | "container" | "vm" | "remote" | "instruction-only" | "unknown";
+}
+
+export interface CapabilityCostProfile {
+  monetaryClass?: CapabilityCostClass;
+  latencyClass?: CapabilityLatencyClass;
+  metered?: boolean;
+}
+
+export interface CapabilityNativeSemantics {
+  provider?: string;
+  nativeId?: string;
+  protocol?: string;
+  loadMode?: "preinstalled" | "dynamic" | "mission-overlay" | "remote" | "unknown";
+  approvalModes?: Array<"none" | "once" | "mission" | "revision" | "host" | "provider-native">;
+  features?: string[];
+  persistence?: Array<"session" | "resume" | "recovery" | "background-job" | "durable-state">;
+}
+
+export interface CapabilityProvenance {
+  source: "host" | "mission" | "trusted-cache" | "external";
+  sourceRef?: string;
+  revision?: string;
+  contentHash?: string;
+}
 
 export interface CapabilityDescriptor {
   id: string;
@@ -12,6 +54,18 @@ export interface CapabilityDescriptor {
   permissions: string[];
   revision?: string;
   scope: "host" | "mission" | "trusted-cache";
+  /** Explicit semantic functions are preferred over free-text name/description matching. */
+  functions?: string[];
+  /** Logical input classes the capability can consume. */
+  accepts?: string[];
+  /** Logical output classes the capability can produce. */
+  produces?: string[];
+  constraints?: CapabilityConstraints;
+  routing?: CapabilityRouting;
+  cost?: CapabilityCostProfile;
+  /** Provider-native identity and behavior that Mission must preserve instead of flattening across harnesses. */
+  native?: CapabilityNativeSemantics;
+  provenance?: CapabilityProvenance;
 }
 
 export interface CapabilityNeed {

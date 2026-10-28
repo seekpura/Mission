@@ -1,5 +1,6 @@
 import type { CapabilityDescriptor, CapabilityNeed } from "../domain/capability.ts";
 import type { RankedCandidate } from "./candidate-ranker.ts";
+import { buildHostCapabilityGraph, type HostCapabilityGraphSource } from "./capability-graph.ts";
 import { CapabilityResolver } from "./resolver.ts";
 import { MissionCapabilityOverlay } from "./mission-capability-overlay.ts";
 import type { CapabilityAcquisitionOutcome } from "./acquisition-transaction.ts";
@@ -14,6 +15,8 @@ export interface CapabilityAcquirer {
 
 export interface HostCapabilitySource {
   listHostCapabilities(): Promise<CapabilityDescriptor[]>;
+  /** Preferred production path: preserves host environment/routing semantics for graph resolution. */
+  snapshotHostCapabilities?(): Promise<HostCapabilityGraphSource>;
 }
 
 export interface CapabilityEnsureAttempt {
@@ -133,6 +136,11 @@ export class CapabilityCoordinator implements CapabilityRuntime {
   }
 
   private async resolveExisting(need: CapabilityNeed) {
+    if (this.hostCapabilities.snapshotHostCapabilities) {
+      const snapshot = await this.hostCapabilities.snapshotHostCapabilities();
+      const effective = this.overlay.effective(need.missionId, snapshot.capabilities);
+      return this.resolver.resolve(need, buildHostCapabilityGraph({ ...snapshot, capabilities: effective }));
+    }
     const host = await this.hostCapabilities.listHostCapabilities();
     const effective = this.overlay.effective(need.missionId, host);
     return this.resolver.resolve(need, effective);

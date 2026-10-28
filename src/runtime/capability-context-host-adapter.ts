@@ -1,3 +1,4 @@
+import { buildHostCapabilityGraph } from "../core/capabilities/capability-graph.ts";
 import type {
   AgentCreateRequest,
   AgentResumeRequest,
@@ -20,6 +21,11 @@ import type { MissionAgentSkillWorkspaceProjector } from "./agent-skill-runtime.
  * workspace before delegating to the real HostAdapter. DeepSeek Harness then
  * discovers `.agents/skills/<name>/SKILL.md` through its native filesystem skill
  * provider and exposes the normal model-facing skill catalog/loader.
+ *
+ * This outer delivery adapter is also the final environment-snapshot boundary.
+ * Any inner wrapper (for example trusted MCP delivery) may extend the flat host
+ * catalog, so the semantic graph is rebuilt here from the final effective
+ * catalog instead of forwarding a stale graph produced by an inner adapter.
  */
 export class CapabilityWorkspaceHostAdapter implements HostAdapter {
   private readonly base: HostAdapter;
@@ -34,8 +40,19 @@ export class CapabilityWorkspaceHostAdapter implements HostAdapter {
     return this.base.describeHost();
   }
 
-  snapshotEnvironment(): Promise<EnvironmentSnapshot> {
-    return this.base.snapshotEnvironment();
+  async snapshotEnvironment(): Promise<EnvironmentSnapshot> {
+    const snapshot = await this.base.snapshotEnvironment();
+    return {
+      ...snapshot,
+      capabilityGraph: buildHostCapabilityGraph({
+        revision: snapshot.revision,
+        host: snapshot.host,
+        capabilities: snapshot.capabilities,
+        shellAvailable: snapshot.shellAvailable,
+        filesystemAvailable: snapshot.filesystemAvailable,
+        browserAvailable: snapshot.browserAvailable
+      })
+    };
   }
 
   async createAgent(request: AgentCreateRequest): Promise<HostAgentHandle> {

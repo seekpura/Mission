@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Artifact } from "../core/domain/artifact.ts";
-import type { CapabilityNeed, RiskLevel } from "../core/domain/capability.ts";
+import type { CapabilityDescriptor, CapabilityNeed, RiskLevel } from "../core/domain/capability.ts";
 import type { MissionState } from "../core/domain/mission.ts";
 import type { ArtifactExpectation, LocalAcceptanceCriterion, WorkItem, WorkPurpose } from "../core/domain/work-item.ts";
 import type { Gap } from "../core/domain/verification.ts";
+import { buildHostCapabilityGraph, type HostCapabilityGraph } from "../core/capabilities/capability-graph.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 import { projectMissionJournal } from "../core/mission/journal-view.ts";
 import type { MissionReadModelReader } from "../core/mission/mission-reader.ts";
@@ -14,12 +15,14 @@ import type {
   GapDiagnosis,
   StrategyProposal
 } from "../core/planning/deliberation-provider.ts";
+import type { HostAdapter } from "../hosts/deepseek/host-adapter.ts";
 import type { HostJsonTransport } from "./host-agent-json-transport.ts";
 
 export interface HostDeliberationProviderOptions {
   transport: HostJsonTransport;
   events: EventStore;
   reader?: MissionReadModelReader;
+  host?: HostAdapter;
   knownExecutorIds: string[];
   defaultExecutorId?: string;
   maxFrontierWorkItems?: number;
@@ -31,6 +34,7 @@ interface DurablePlannerContext {
   userGoal: string;
   strategy?: StrategyProposal;
   capabilityNeeds: CapabilityNeed[];
+  capabilities: CapabilityDescriptor[];
   workItems: WorkItem[];
   artifacts: Artifact[];
   openGaps: Gap[];
@@ -50,6 +54,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
   private readonly transport: HostJsonTransport;
   private readonly events: EventStore;
   private readonly reader?: MissionReadModelReader;
+  private readonly host?: HostAdapter;
   private readonly knownExecutorIds: Set<string>;
   private readonly defaultExecutorId?: string;
   private readonly maxFrontierWorkItems: number;
@@ -59,6 +64,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
     this.transport = options.transport;
     this.events = options.events;
     this.reader = options.reader;
+    this.host = options.host;
     this.knownExecutorIds = new Set(options.knownExecutorIds);
     this.defaultExecutorId = options.defaultExecutorId;
     this.maxFrontierWorkItems = Math.max(1, options.maxFrontierWorkItems ?? 8);
@@ -102,12 +108,15 @@ export class HostDeliberationProvider implements DeliberationProvider {
 
   async planFrontier(input: { state: MissionState; openGaps: Gap[] }): Promise<FrontierProposal> {
     const context = await this.context(input.state.missionId);
+    const hostCapabilityGraph = await this.capabilityGraph(context);
     const raw = await this.transport.request({
       missionId: input.state.missionId,
       operationId: `frontier-${input.state.revision}`,
       instruction: [
         "Plan only the next executable Mission frontier. Do not expand the entire mission into a fixed plan.",
         "Use existing evidence, completed/failed work and open gaps. Repair blocking gaps before unrelated expansion when appropriate.",
+        "Use hostCapabilityGraph as the source of truth for currently available capability semantics, constraints, permissions, routing, cost and provider-native behavior.",
+        "Prefer an already-available compatible capability when its graph constraints are satisfied. Create a CapabilityNeed only when required semantics are missing or materially inadequate; do not infer capability behavior from a name alone.",
         `Valid executor ids are: ${[...this.knownExecutorIds].join(", ")}.`,
         this.defaultExecutorId ? `If no special route is needed, assignedExecutorId may be omitted and Runtime will use ${this.defaultExecutorId}.` : "Every executable work item must name assignedExecutorId.",
         "Return JSON with graphRevision:number, capabilityNeeds:array, workItems:array.",
@@ -117,6 +126,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
       ].join(" "),
       input: {
         mission: plannerContext(context, input.state),
+        hostCapabilityGraph: hostCapabilityGraph ? plannerCapabilityGraph(hostCapabilityGraph) : undefined,
         openGaps: input.openGaps
       }
     });
@@ -164,17 +174,20 @@ export class HostDeliberationProvider implements DeliberationProvider {
 
   async diagnoseGap(input: { state: MissionState; gap: Gap }): Promise<GapDiagnosis> {
     const context = await this.context(input.state.missionId);
+    const hostCapabilityGraph = await this.capabilityGraph(context);
     const raw = await this.transport.request({
       missionId: input.state.missionId,
       operationId: `gap-${safeSegment(input.gap.id)}-${input.state.revision}`,
       instruction: [
         "Diagnose the supplied open gap from Mission evidence and choose one intervention.",
         "Allowed interventions: retry, revise_work, replace_capability, replan_local, revise_strategy.",
+        "When the gap may involve capability mismatch or absence, use hostCapabilityGraph semantics and constraints rather than capability names.",
         "Return JSON with gapId, rootCause, intervention, confidence (0..1).",
         "Do not mark the gap resolved; only independent verifier evidence can resolve it."
       ].join(" "),
       input: {
         mission: plannerContext(context, input.state),
+        hostCapabilityGraph: hostCapabilityGraph ? plannerCapabilityGraph(hostCapabilityGraph) : undefined,
         gap: input.gap
       }
     });
@@ -244,6 +257,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
         userGoal: journal.userGoal,
         ...(strategy ? { strategy } : {}),
         capabilityNeeds: [...journal.capabilityNeeds.values()],
+        capabilities: [...journal.capabilities.values()],
         workItems: [...journal.workItems.values()],
         artifacts: [...journal.artifacts.values()],
         openGaps: [...journal.gaps.values()].filter(gap => gap.status === "open" || gap.status === "working" || gap.status === "blocked")
@@ -276,10 +290,29 @@ export class HostDeliberationProvider implements DeliberationProvider {
       userGoal: journal.userGoal,
       ...(strategy ? { strategy } : {}),
       capabilityNeeds: [...journal.capabilityNeeds.values()],
+      capabilities: [...journal.capabilities.values()],
       workItems: [...journal.workItems.values()],
       artifacts: [...journal.artifacts.values()],
       openGaps: [...journal.gaps.values()].filter(gap => gap.status === "open" || gap.status === "working" || gap.status === "blocked")
     };
+  }
+
+  private async capabilityGraph(context: DurablePlannerContext): Promise<HostCapabilityGraph | undefined> {
+    if (!this.host) return undefined;
+    const snapshot = await this.host.snapshotEnvironment();
+    const effective = new Map(snapshot.capabilities.map(capability => [capability.id, capability]));
+    for (const capability of context.capabilities) {
+      if (!capability.available) continue;
+      effective.set(capability.id, capability);
+    }
+    return buildHostCapabilityGraph({
+      revision: snapshot.revision,
+      host: snapshot.host,
+      capabilities: [...effective.values()],
+      shellAvailable: snapshot.shellAvailable,
+      filesystemAvailable: snapshot.filesystemAvailable,
+      browserAvailable: snapshot.browserAvailable
+    });
   }
 
   private normalizeCapabilityNeed(value: unknown, missionId: string, path: string): CapabilityNeed {
@@ -373,6 +406,39 @@ function plannerContext(context: DurablePlannerContext, state: MissionState) {
     workItems: context.workItems,
     artifacts: context.artifacts,
     openGaps: context.openGaps
+  };
+}
+
+function plannerCapabilityGraph(graph: HostCapabilityGraph) {
+  return {
+    revision: graph.revision,
+    host: graph.host,
+    nodes: graph.nodes.map(node => {
+      if (node.kind !== "capability") return node;
+      const capability = node.capability;
+      return {
+        id: node.id,
+        kind: node.kind,
+        capability: {
+          id: capability.id,
+          kind: capability.kind,
+          name: capability.name,
+          available: capability.available,
+          scope: capability.scope,
+          hostNative: capability.hostNative,
+          functions: capability.functions,
+          accepts: capability.accepts,
+          produces: capability.produces,
+          permissions: capability.permissions,
+          constraints: capability.constraints,
+          routing: capability.routing,
+          cost: capability.cost,
+          native: capability.native,
+          provenance: capability.provenance
+        }
+      };
+    }),
+    edges: graph.edges
   };
 }
 

@@ -64,6 +64,15 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - truthful host-level isolation metadata for local commands; local process execution is not presented as an OS sandbox
 - structural file verifier
 - Capability Resolver
+- first-class semantic host capability graph foundation with capability / environment / executor-route nodes and dependency / environment / routing edges
+- CapabilityDescriptor semantic contracts for explicit functions, logical inputs/outputs, purpose/environment/dependency constraints, permissions, routing/isolation, cost/latency, provider-native semantics and provenance
+- EnvironmentSnapshot can publish a semantic `capabilityGraph` while legacy host adapters remain compatible with the flat capability list
+- graph-aware capability resolution hard-gates unsupported purpose, unavailable/unknown required environments and unavailable capability dependencies before semantic ranking
+- resolver prefers explicit function and I/O semantics over name/description coincidence, includes permissions/cost/routing in deterministic selection, and remains backward-compatible with legacy flat descriptors
+- host and acquisition-enabled capability runtimes resolve against live environment semantics rather than flat availability flags
+- DeepSeek Harness ACP capability publishes protocol/native identity, session/resume/recovery behavior, approval semantics, routing/isolation, cost class and host provenance into the graph
+- frontier planning and capability-gap diagnosis receive a live graph combining current host capabilities with durable mission-local activated capabilities, so CapabilityNeeds are created against observed capability semantics rather than names alone
+- outer Host delivery wrappers rebuild the semantic graph from the final effective capability catalog, preventing stale graphs when inner adapters such as trusted MCP delivery extend the host catalog
 - Agent Skills and GitHub discovery provider interfaces
 - need-driven GitHub candidate discovery/ranking
 - mission-local Capability Overlay with restart restoration from durable capability activation events
@@ -93,7 +102,12 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - resume/reconnect rebuilds the same Work-scoped Agent Skill projection from durable capability refs; unreferenced mission-local Skills are not exposed to the Worker
 - `.mission-skill-projection.json` records the concrete per-attempt capability-to-workspace projection
 - planner/verifier/control sessions do not inherit acquired Skills implicitly; non-Skill mission-local capability kinds remain fail-closed until a dedicated provider-native delivery adapter exists
-- MCP / CLI / general code acquisition remains unsupported and fail-closed until explicit provider-native delivery and safe smoke profiles exist
+- trusted operator-configured MCP servers are exposed as host capabilities and delivered only when explicitly present in a WorkItem's allowed capability refs
+- trusted MCP supports ACP `session/new` and `session/resume` through provider-native `mcpServers` for both stdio and HTTP transports
+- trusted MCP configuration validates safe IDs/names/revisions, absolute stdio commands, header/env shapes and HTTPS-by-default HTTP endpoints; runtime secret values remain in memory rather than durable projection receipts
+- `.mission-mcp-projection.json` records only non-secret Work-scoped MCP capability/revision/config-shape metadata and recovery fails closed if the configured revision or shape changes
+- direct caller-supplied MCP declarations are rejected at the trusted delivery boundary, so only the runtime-owned registry can populate provider-native MCP sessions
+- externally discovered/acquired MCP, CLI and general code capabilities remain unsupported and fail-closed until dedicated acquisition, trust, isolation and rollback profiles exist
 - HostAdapter contract
 - FakeHostAdapter
 - DeepSeekHarnessAdapter boundary via injected bindings
@@ -104,9 +118,9 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - recovery continuation prompt that inspects existing workspace and warns against blindly repeating irreversible side effects
 - exact executor-route recovery even when multiple routes share the same underlying driver id
 - protocol-level fake ACP integration tests including cross-process native-session resume without local DSH credentials
-- production runtime bootstrap composing SQLite/EventStore/read models, DSH HostAdapter, host planner, ExecutorRouter, host worker driver, independent verifier, capability runtime, supervisor and approvals
+- production runtime bootstrap composing SQLite/EventStore/read models, DSH HostAdapter, trusted MCP delivery, host planner, ExecutorRouter, host worker driver, independent verifier, capability runtime, supervisor and approvals
 - strict framed-JSON HostAgent control transport for planner/verifier calls; malformed or unframed model output is rejected
-- HostDeliberationProvider uses fresh host sessions while reconstructing current user goal, latest strategy, capability needs, WorkItems, Artifacts and open Gaps from the durable reader when available
+- HostDeliberationProvider uses fresh host sessions while reconstructing current user goal, latest strategy, capability needs, activated capabilities, WorkItems, Artifacts and open Gaps from the durable reader when available
 - planner output cannot set Mission identity, Work status, graph ownership, timestamps, creator or unknown executor routes
 - HostArtifactVerifier performs deterministic file/hash checks before a separate profile-selected mission-level host review
 - per-Mission single-flight MissionSupervisor automatically drives controller cycles after create / steering / approval / restart events
@@ -118,21 +132,21 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - HTTP Mission API and SSE event stream
 - browser-native Mission Control view
 - CI workflow
-- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, verifier recovery, verifier-profile routing/fail-closed coverage, acquisition transaction, capability runtime loop, production Agent Skill acquisition/native DSH delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrency
+- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, verifier recovery, verifier-profile routing/fail-closed coverage, semantic capability graph/planner routing, trusted MCP graph consistency and ACP create/resume delivery, acquisition transaction, capability runtime loop, production Agent Skill acquisition/native DSH delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrency
 
 ## Next implementation frontier
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. provider-native MCP capability delivery over ACP `mcpServers`, with Work-scoped allowlists, secure acquisition/config profiles, restart continuity and rollback
-2. host capability graph with native semantics, constraints, permissions, costs and routing characteristics instead of flat availability flags
-3. side-effect manager wired consistently across external actions, idempotency, irreversible-operation policy and approval boundaries
-4. capability trust / cost / audit ledgers, trusted-cache reuse and activation lifecycle management
-5. profile-specific verifier evidence collectors/adapters for rendered presentations, browser/runtime web checks, media probe/playback evidence, executable code/test evidence and research-source traceability; profiles now define the obligations but do not fabricate missing inspection evidence
-6. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure and repair/replan
-7. second production host adapter proving HostAdapter portability
-8. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
-9. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+1. side-effect manager wired consistently across external actions, idempotency, irreversible-operation policy and approval boundaries
+2. capability trust / cost / audit ledgers, trusted-cache reuse and activation lifecycle management
+3. profile-specific verifier evidence collectors/adapters for rendered presentations, browser/runtime web checks, media probe/playback evidence, executable code/test evidence and research-source traceability; profiles now define the obligations but do not fabricate missing inspection evidence
+4. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure and repair/replan
+5. second production host adapter proving HostAdapter portability
+6. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
+7. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+8. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as host adapters expose them
+9. external MCP discovery/acquisition plus provider-native CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles
 10. operational read-model/query APIs and observability for long-lived high-volume Missions beyond the current runtime-facing reader
 
 ## GitHub source control

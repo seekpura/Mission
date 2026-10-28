@@ -102,6 +102,7 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     transport: controlTransport,
     events,
     reader,
+    host,
     knownExecutorIds: [executorId],
     defaultExecutorId: executorId
   });

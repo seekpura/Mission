@@ -1,3 +1,4 @@
+import type { HostCapabilityGraph } from "../../core/capabilities/capability-graph.ts";
 import type { CapabilityDescriptor } from "../../core/domain/capability.ts";
 
 export interface HostDescriptor {
@@ -10,6 +11,8 @@ export interface EnvironmentSnapshot {
   revision: number;
   host: HostDescriptor;
   capabilities: CapabilityDescriptor[];
+  /** Rich semantic graph for planners/resolvers. Optional for legacy host adapters. */
+  capabilityGraph?: HostCapabilityGraph;
   shellAvailable: boolean;
   filesystemAvailable: boolean;
   browserAvailable: boolean;
