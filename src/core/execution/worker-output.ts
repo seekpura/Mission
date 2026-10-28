@@ -21,6 +21,7 @@ export interface WorkerSourceProposal {
   authority?: string;
   freshUntil?: string;
   contentHash?: string;
+  replacesSourceRef?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -30,6 +31,7 @@ export interface WorkerProposedFact {
   confidence?: number;
   sourceRefs?: string[];
   requirementRefs?: string[];
+  supersedesTruthRef?: string;
 }
 
 export interface WorkerOutputEnvelope {
@@ -52,11 +54,12 @@ When finished, first write the exact JSON object below to ${workspaceRoot}/${WOR
   "status":"completed|partial|failed",
   "summary":"what was actually accomplished",
   "outputs":[{"path":"relative/path.ext","logicalName":"stable-artifact-name","type":"file|document|presentation|image|video|audio|code|website|dataset|research|other","requirementRefs":["R1"]}],
-  "sources":[{"id":"source-id","type":"web|file|github|document|api|user|other","uri":"https://...","capturedAt":"ISO-8601","freshUntil":"ISO-8601"}],
-  "proposedFacts":[{"key":"stable.fact.key","value":"...","sourceRefs":["source-id"],"requirementRefs":["R1"]}],
+  "sources":[{"id":"source-id","type":"web|file|github|document|api|user|other","uri":"https://...","capturedAt":"ISO-8601","freshUntil":"ISO-8601","replacesSourceRef":"old-source-id"}],
+  "proposedFacts":[{"key":"stable.fact.key","value":"...","sourceRefs":["source-id"],"requirementRefs":["R1"],"supersedesTruthRef":"old-truth-id"}],
   "proposedWork":[],
   "warnings":[]
 }
+Use replacesSourceRef / supersedesTruthRef only when this work intentionally refreshes or replaces previously supplied source/truth records from invalidatedKnowledge. Never claim a replacement relation merely because values look similar.
 The recovery file is part of the execution protocol and must be written before the final response so Mission Control can recover from a runtime crash. Do not claim files that do not exist. proposedWork is advisory only; Mission Control decides whether to promote it.
 `;
 }

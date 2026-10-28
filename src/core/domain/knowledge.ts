@@ -15,6 +15,7 @@ export interface SourceRecord {
   freshUntil?: string;
   contentHash?: string;
   status: SourceStatus;
+  supersededBy?: string;
   metadata: Record<string, unknown>;
 }
 
