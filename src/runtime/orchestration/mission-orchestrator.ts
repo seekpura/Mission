@@ -14,6 +14,7 @@ import type { Verifier } from "../../core/verification/verifier.ts";
 import type { WorkExecutionRouter, ExecutionRoute } from "./executor-router.ts";
 import type { InvocationReceipt } from "../../core/domain/invocation.ts";
 import { writeExecutionRecoveryManifest } from "../recovery/recovery-manifest.ts";
+import type { WorkerKnowledgeIngestor } from "../../core/knowledge/worker-knowledge-ingestor.ts";
 
 export interface MissionOrchestratorOptions {
   maxConcurrency?: number;
@@ -33,6 +34,7 @@ export class MissionOrchestrator {
   private readonly assurance: ArtifactAssurancePipeline;
   private readonly capabilityCoordinator?: CapabilityCoordinator;
   private readonly executionRouter?: WorkExecutionRouter;
+  private readonly knowledgeIngestor?: WorkerKnowledgeIngestor;
   private readonly running = new Map<string, Promise<void>>();
   private readonly rerunRequested = new Set<string>();
   private readonly activeExecutions = new Map<string, { missionId: string; workItemId: string; executionId: string }>();
@@ -47,6 +49,7 @@ export class MissionOrchestrator {
     contextCompiler?: ContextCompiler;
     capabilityCoordinator?: CapabilityCoordinator;
     executionRouter?: WorkExecutionRouter;
+    knowledgeIngestor?: WorkerKnowledgeIngestor;
     assurance?: ArtifactAssurancePipeline;
     options?: MissionOrchestratorOptions;
   }) {
@@ -61,6 +64,7 @@ export class MissionOrchestrator {
     this.maxCyclesPerWake = Math.max(1, input.options?.maxCyclesPerWake ?? 64);
     this.capabilityCoordinator = input.capabilityCoordinator;
     this.executionRouter = input.executionRouter;
+    this.knowledgeIngestor = input.knowledgeIngestor;
     this.assurance = input.assurance ?? new ArtifactAssurancePipeline({ controller: input.controller, projections: input.projections, artifacts: input.artifacts, verifier: input.verifier });
   }
 
@@ -218,6 +222,7 @@ export class MissionOrchestrator {
         await this.failWork(work, attemptId, outcome.reason);
         return;
       }
+      await this.knowledgeIngestor?.ingest({ work, attemptId, envelope, artifactRefs: outcome.artifactRefs });
       await this.controller.emit(work.missionId, "attempt.completed", { id: attemptId, workItemId: work.id, status: envelope?.status === "partial" ? "partial" : "succeeded", artifactRefs: outcome.artifactRefs }, { type: "worker" }, `attempt-completed:${attemptId}`);
       await this.controller.emit(work.missionId, "work.completed", { id: work.id, summary: envelope?.summary ?? "Work completed", artifactRefs: outcome.artifactRefs }, { type: "worker" }, `work-completed:${work.id}:${attemptId}`);
       if (work.purpose === "repair" && outcome.artifactRefs.length > 0) {

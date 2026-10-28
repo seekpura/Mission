@@ -9,11 +9,35 @@ export interface WorkerOutputFile {
   requirementRefs?: string[];
 }
 
+export interface WorkerSourceProposal {
+  id?: string;
+  type?: "web" | "file" | "github" | "document" | "api" | "user" | "other";
+  uri?: string;
+  localRef?: string;
+  title?: string;
+  capturedAt?: string;
+  version?: string;
+  commit?: string;
+  authority?: string;
+  freshUntil?: string;
+  contentHash?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface WorkerProposedFact {
+  key: string;
+  value: unknown;
+  confidence?: number;
+  sourceRefs?: string[];
+  requirementRefs?: string[];
+}
+
 export interface WorkerOutputEnvelope {
   status: "completed" | "partial" | "failed";
   summary: string;
   outputs: WorkerOutputFile[];
-  proposedFacts: Array<{ key: string; value: unknown; confidence?: number }>;
+  sources?: WorkerSourceProposal[];
+  proposedFacts: WorkerProposedFact[];
   proposedWork: Array<{ objective: string; reason?: string; requirementRefs?: string[]; gapRefs?: string[] }>;
   warnings: string[];
 }
@@ -28,7 +52,8 @@ When finished, first write the exact JSON object below to ${workspaceRoot}/${WOR
   "status":"completed|partial|failed",
   "summary":"what was actually accomplished",
   "outputs":[{"path":"relative/path.ext","logicalName":"stable-artifact-name","type":"file|document|presentation|image|video|audio|code|website|dataset|research|other","requirementRefs":["R1"]}],
-  "proposedFacts":[],
+  "sources":[{"id":"source-id","type":"web|file|github|document|api|user|other","uri":"https://...","capturedAt":"ISO-8601","freshUntil":"ISO-8601"}],
+  "proposedFacts":[{"key":"stable.fact.key","value":"...","sourceRefs":["source-id"],"requirementRefs":["R1"]}],
   "proposedWork":[],
   "warnings":[]
 }
@@ -54,6 +79,7 @@ export function parseWorkerOutput(value: unknown): WorkerOutputEnvelope | null {
     status: parsed.status,
     summary: typeof parsed.summary === "string" ? parsed.summary : "",
     outputs,
+    sources: Array.isArray(parsed.sources) ? parsed.sources.filter((x: unknown) => !!x && typeof x === "object") : [],
     proposedFacts: Array.isArray(parsed.proposedFacts) ? parsed.proposedFacts.filter((x: unknown) => !!x && typeof x === "object") : [],
     proposedWork: Array.isArray(parsed.proposedWork) ? parsed.proposedWork.filter((x: unknown) => !!x && typeof x === "object") : [],
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings.filter((x: unknown): x is string => typeof x === "string") : []

@@ -83,6 +83,29 @@ CREATE TABLE IF NOT EXISTS evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_mission_subject ON evidence(mission_id, subject_ref);
 
+
+CREATE TABLE IF NOT EXISTS sources (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  uri TEXT,
+  data_json TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sources_mission_status ON sources(mission_id, status);
+
+CREATE TABLE IF NOT EXISTS truths (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  truth_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_truths_mission_key_status ON truths(mission_id, truth_key, status);
+
 CREATE TABLE IF NOT EXISTS verification_results (
   id TEXT PRIMARY KEY,
   mission_id TEXT NOT NULL,

@@ -59,6 +59,7 @@ export interface Evidence {
   result: "supports" | "contradicts" | "inconclusive";
   sourceRef?: string;
   producedBy?: string;
+  validity?: "active" | "stale" | "invalid";
   createdAt: string;
 }
 

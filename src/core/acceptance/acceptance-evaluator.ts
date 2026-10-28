@@ -35,7 +35,9 @@ export class AcceptanceEvaluator {
       ))
       .map(item => item.logicalName);
 
-    const supportingEvidence = new Set(input.evidence.filter(e => e.result === "supports").map(e => e.id));
+    const supportingEvidence = new Set(input.evidence
+      .filter(e => e.result === "supports" && (e.validity ?? "active") === "active")
+      .map(e => e.id));
     const missingValidations = contract.requiredValidations
       .filter(validation => {
         const exactCheckPassed = input.verifications.some(result =>
