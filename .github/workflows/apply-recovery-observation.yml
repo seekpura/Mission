@@ -4,6 +4,7 @@ on:
     branches: [build/recovery-observation]
     paths:
       - scripts/apply-recovery-observation.sh
+      - scripts/fix-recovery-observation.sh
       - .github/workflows/apply-recovery-observation.yml
 permissions:
   contents: write
@@ -17,12 +18,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Apply and verify
-        run: bash scripts/apply-recovery-observation.sh
-      - name: Commit batch
+      - name: Apply, verify, and publish diagnostics
         run: |
+          awk '/^npm test$/{exit} {print}' scripts/apply-recovery-observation.sh | bash
+          bash scripts/fix-recovery-observation.sh
+          set +e
+          npm test > .recovery-observation-test.log 2>&1
+          TEST_CODE=$?
+          npm run smoke >> .recovery-observation-test.log 2>&1
+          SMOKE_CODE=$?
+          git diff --check >> .recovery-observation-test.log 2>&1
+          DIFF_CODE=$?
+          set -e
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src tests
-          git commit -m 'build: apply recovery by observation batch'
+          git add src tests .recovery-observation-test.log
+          git commit -m 'build: apply recovery observation batch with diagnostics'
           git push origin HEAD:build/recovery-observation
+          if [ "$TEST_CODE" -ne 0 ] || [ "$SMOKE_CODE" -ne 0 ] || [ "$DIFF_CODE" -ne 0 ]; then exit 1; fi
