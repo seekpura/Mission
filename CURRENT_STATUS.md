@@ -30,6 +30,10 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - invalidated/superseded artifacts removed from Mission final-artifact projection
 - filesystem Workspace Manager
 - versioned content-hashed Artifact Store
+- production HostAgentWorkExecutionDriver for any HostAdapter, including DeepSeek Harness
+- Mission-owned host-agent output manifest contract (`.mission-output.json`)
+- workspace path confinement, manifest validation, artifact type checks, Mission-side hash/version/provenance commit
+- host-agent event log capture as execution evidence
 - LocalExecutionBackend with bounded local process execution and output commit
 - execution recovery state primitive
 - structural file verifier
@@ -49,13 +53,13 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - HTTP Mission API and SSE event stream
 - browser-native Mission Control view
 - CI workflow
-- unit, integration, and E2E tests including a real FileArtifactStore execution/verification vertical slice
+- unit, integration, and E2E tests including real FileArtifactStore execution/verification and host-agent artifact-contract slices
 
 ## Next implementation frontier
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. production WorkExecutionDriver for DeepSeek Harness and LocalExecutionBackend
+1. production WorkExecutionDriver adapter for LocalExecutionBackend and executor routing between host-agent/local/tool paths
 2. verifier protocol/identity failures normalized into recoverable verification gaps
 3. DSH session resume/reconnect and native session recovery
 4. evidence-backed gap closure after repair verification, without producer self-claims
