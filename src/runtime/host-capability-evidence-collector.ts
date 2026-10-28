@@ -7,7 +7,7 @@ import type {
   VerificationEvidenceDraft
 } from "../core/verification/evidence-collector.ts";
 import type { VerificationProfileKind } from "../core/verification/verification-profile.ts";
-import type { HostAdapter } from "../hosts/deepseek/host-adapter.ts";
+import type { HostAdapter } from "../hosts/host-adapter.ts";
 
 export interface TrustedHostCapabilityEvidenceBinding {
   /** Stable Runtime-owned binding id, not provider-authored. */
