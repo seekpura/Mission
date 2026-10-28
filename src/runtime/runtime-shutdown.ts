@@ -17,16 +17,19 @@ export interface RuntimeShutdownResult {
 export class RuntimeShutdownTimeoutError extends Error {
   readonly activeMissionIds: string[];
   readonly activeHostHandleIds: string[];
+  readonly hostAdmissionsInFlight: number;
 
-  constructor(activeMissionIds: string[], activeHostHandleIds: string[]) {
+  constructor(activeMissionIds: string[], activeHostHandleIds: string[], hostAdmissionsInFlight: number) {
     super(
       `Mission Runtime shutdown did not settle after forced cancellation; ` +
       `active missions=${activeMissionIds.join(",") || "none"}; ` +
-      `active host handles=${activeHostHandleIds.join(",") || "none"}`
+      `active host handles=${activeHostHandleIds.join(",") || "none"}; ` +
+      `host admissions in flight=${hostAdmissionsInFlight}`
     );
     this.name = "RuntimeShutdownTimeoutError";
     this.activeMissionIds = [...activeMissionIds];
     this.activeHostHandleIds = [...activeHostHandleIds];
+    this.hostAdmissionsInFlight = hostAdmissionsInFlight;
   }
 }
 
@@ -89,9 +92,12 @@ export function closeMissionRuntimeIfIdle(input: {
   if (activeMissions.length > 0) {
     throw new Error(`Cannot synchronously close Mission Runtime with active supervisor cycles: ${activeMissions.join(", ")}`);
   }
-  const activeHandles = input.host.snapshot().activeHandleIds;
-  if (activeHandles.length > 0) {
-    throw new Error(`Cannot synchronously close Mission Runtime with active host sessions: ${activeHandles.join(", ")}`);
+  const hostSnapshot = input.host.snapshot();
+  if (hostSnapshot.activeHandleIds.length > 0 || hostSnapshot.admissionsInFlight > 0) {
+    throw new Error(
+      `Cannot synchronously close Mission Runtime with ${hostSnapshot.activeHandleIds.length} active host session(s) and ` +
+      `${hostSnapshot.admissionsInFlight} admission(s) in flight`
+    );
   }
   input.supervisor.beginDrain();
   input.host.closeIfIdle();
@@ -116,9 +122,11 @@ function timeoutError(input: {
   supervisor: MissionSupervisor;
   host: DrainableHostAdapter;
 }): RuntimeShutdownTimeoutError {
+  const host = input.host.snapshot();
   return new RuntimeShutdownTimeoutError(
     input.supervisor.activeMissionIds(),
-    input.host.snapshot().activeHandleIds
+    host.activeHandleIds,
+    host.admissionsInFlight
   );
 }
 
