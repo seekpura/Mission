@@ -1,6 +1,7 @@
 import type { Artifact } from "../domain/artifact.ts";
 import type { CapabilityNeed } from "../domain/capability.ts";
 import type { InvocationReceipt } from "../domain/invocation.ts";
+import type { SourceRecord, TruthRecord } from "../domain/knowledge.ts";
 import type { AcceptanceContract, MissionSpec, Requirement } from "../domain/mission.ts";
 import type { Evidence, Finding, Gap, VerificationResult } from "../domain/verification.ts";
 import type { WorkItem } from "../domain/work-item.ts";
@@ -127,6 +128,29 @@ export class MissionReadModel {
       requirement.evidenceRefs = [...new Set([...requirement.evidenceRefs, ...(payload.evidenceRefs ?? [])])];
     }
     return [...requirements.values()];
+  }
+
+  async sources(missionId: string): Promise<SourceRecord[]> {
+    if (this.projections) return this.projections.listSources(missionId);
+    const map = new Map<string, SourceRecord>();
+    for (const event of await this.store.list(missionId)) {
+      const payload = event.payload as any;
+      if (event.type === "source.registered") { const source = (payload.source ?? payload) as SourceRecord; map.set(source.id, { ...source }); }
+      if (event.type === "source.status.changed" && map.has(payload.id)) map.get(payload.id)!.status = payload.status;
+    }
+    return [...map.values()];
+  }
+
+  async truths(missionId: string): Promise<TruthRecord[]> {
+    if (this.projections) return this.projections.listTruths(missionId);
+    const map = new Map<string, TruthRecord>();
+    for (const event of await this.store.list(missionId)) {
+      const payload = event.payload as any;
+      if (event.type === "truth.added") { const truth = (payload.truth ?? payload) as TruthRecord; map.set(truth.id, { ...truth }); }
+      if (event.type === "truth.status.changed" && map.has(payload.id)) map.get(payload.id)!.status = payload.status;
+      if (event.type === "truth.superseded" && map.has(payload.id ?? payload.truthId)) map.get(payload.id ?? payload.truthId)!.status = "superseded";
+    }
+    return [...map.values()];
   }
 
   async artifacts(missionId: string): Promise<Artifact[]> {

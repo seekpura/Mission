@@ -2,6 +2,7 @@ import type { Artifact } from "../domain/artifact.ts";
 import type { AcquisitionReceipt, CapabilityDescriptor, CapabilityNeed } from "../domain/capability.ts";
 import type { MissionEvent } from "../domain/event.ts";
 import type { InvocationReceipt } from "../domain/invocation.ts";
+import type { SourceRecord, TruthRecord } from "../domain/knowledge.ts";
 import type { AcceptanceContract, MissionSpec, MissionState, Requirement } from "../domain/mission.ts";
 import type { WorkItem } from "../domain/work-item.ts";
 import type { Evidence, Finding, Gap, VerificationResult } from "../domain/verification.ts";
@@ -12,6 +13,8 @@ export interface MissionProjectionReader {
   getAcceptanceContract(missionId: string): Promise<AcceptanceContract | null>;
   listRequirements(missionId: string): Promise<Requirement[]>;
   listEvidence(missionId: string): Promise<Evidence[]>;
+  listSources(missionId: string): Promise<SourceRecord[]>;
+  listTruths(missionId: string): Promise<TruthRecord[]>;
   listArtifacts(missionId: string): Promise<Artifact[]>;
   listCapabilityNeeds(missionId: string): Promise<CapabilityNeed[]>;
   listCapabilities(missionId: string): Promise<CapabilityDescriptor[]>;

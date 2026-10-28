@@ -30,6 +30,8 @@ import { ArtifactInspectionService } from "./orchestration/artifact-inspection-s
 import { CapabilityCoordinator } from "./orchestration/capability-coordinator.ts";
 import { VerificationContinuationService } from "./orchestration/verification-continuation-service.ts";
 import type { SecureAcquisitionService } from "../core/capabilities/secure-acquisition-service.ts";
+import { KnowledgeStalenessManager } from "../core/knowledge/knowledge-staleness-manager.ts";
+import { WorkerKnowledgeIngestor } from "../core/knowledge/worker-knowledge-ingestor.ts";
 
 export interface MissionRuntimeOptions {
   dbPath?: string;
@@ -54,6 +56,7 @@ export class MissionRuntime {
   readonly executionRouter?: WorkExecutionRouter;
   readonly recovery?: ExecutionRecoveryManager;
   readonly inspection?: ArtifactInspectionService;
+  readonly knowledge: KnowledgeStalenessManager;
 
   constructor(options: MissionRuntimeOptions = {}) {
     const rootDir = options.rootDir ?? join(process.cwd(), ".mission");
@@ -70,6 +73,7 @@ export class MissionRuntime {
     });
     this.workspaces = new WorkspaceManager(rootDir);
     this.artifacts = new FileArtifactStore(rootDir);
+    this.knowledge = new KnowledgeStalenessManager({ controller: this.controller, projections: this.projections });
     if (options.host) {
       const hostAgentBackend = new HostAgentExecutionBackend(options.host);
       const executionRouter = new WorkExecutionRouter({
@@ -115,6 +119,7 @@ export class MissionRuntime {
           verificationContinuation
         }),
         executionRouter,
+        knowledgeIngestor: new WorkerKnowledgeIngestor({ knowledge: this.knowledge, projections: this.projections }),
         options: { maxConcurrency: options.maxConcurrency }
       });
     }
