@@ -1,0 +1,34 @@
+name: Capture inspection diagnostics
+on:
+  push:
+    branches: [build/inspection-artifacts]
+    paths:
+      - .github/workflows/inspection-diagnostics.yml
+permissions:
+  contents: write
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/inspection-artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Capture tests
+        run: |
+          set +e
+          npm test > .inspection-test.log 2>&1
+          CODE=$?
+          npm run smoke >> .inspection-test.log 2>&1
+          SMOKE=$?
+          git diff --check >> .inspection-test.log 2>&1
+          DIFF=$?
+          set -e
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .inspection-test.log
+          git commit -m 'chore: record inspection diagnostics' || true
+          git push origin HEAD:build/inspection-artifacts
+          if [ "$CODE" -ne 0 ] || [ "$SMOKE" -ne 0 ] || [ "$DIFF" -ne 0 ]; then exit 1; fi
