@@ -1,0 +1,89 @@
+name: DSH live composition
+
+on:
+  push:
+    branches:
+      - develop
+      - 'build/dsh-live-composition'
+    paths:
+      - 'src/**'
+      - 'integrations/deepseek-plugin/**'
+      - 'tests/dsh-live/**'
+      - '.github/workflows/dsh-live-composition.yml'
+  workflow_dispatch:
+
+jobs:
+  live-composition:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DSH_COMMIT: 22ddee3792402c3e70ec5f86a63c3e3e895a2f60
+      DSH_PERMISSION_MODE: workspace-write
+      DSH_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Checkout Mission Runtime
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned DeepSeek Harness
+        uses: actions/checkout@v4
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ env.DSH_COMMIT }}
+          path: .dsh
+
+      - name: Set up Node 24.9
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.9.0
+
+      - name: Enable pnpm 11.28.5
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.28.5 --activate
+          pnpm --version
+
+      - name: Install pinned Harness dependencies
+        working-directory: .dsh
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Harness native host addon
+        working-directory: .dsh
+        run: pnpm run build:native-system
+
+      - name: Link Mission packages into the real Harness resolution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p node_modules/@mission-runtime
+          ln -s "$GITHUB_WORKSPACE/integrations/deepseek-plugin" node_modules/@mission-runtime/deepseek-plugin
+          ln -s "$GITHUB_WORKSPACE/tests/dsh-live/mock-llm" node_modules/@mission-runtime/dsh-live-mock
+
+          mkdir -p integrations/deepseek-plugin/node_modules tests/dsh-live/mock-llm/node_modules
+          ln -s "$GITHUB_WORKSPACE/.dsh/node_modules/@deepseek-ai" integrations/deepseek-plugin/node_modules/@deepseek-ai
+          ln -s "$GITHUB_WORKSPACE/.dsh/node_modules/@deepseek-ai" tests/dsh-live/mock-llm/node_modules/@deepseek-ai
+
+      - name: Boot real DSH Loader composition and run Mission
+        shell: bash
+        working-directory: .dsh
+        env:
+          DSH_HOME: ${{ runner.temp }}/mission-dsh-home
+          DSH_AGENTS_HOME: ${{ runner.temp }}/mission-dsh-agents
+        run: |
+          set -euo pipefail
+          pnpm exec tsx packages/test-support/loader-smoke/tests/fixtures/headless-driver.ts \
+            "$GITHUB_WORKSPACE/tests/dsh-live/mission-live.patch.yml" \
+            "MISSION_RUNTIME_LIVE_SMOKE" | tee "$RUNNER_TEMP/mission-dsh-live.log"
+
+          grep -q 'DSH_MISSION_OK' "$RUNNER_TEMP/mission-dsh-live.log"
+          test -f .mission/mission.db
+          grep -R -q 'LIVE_DSH_OK' .mission/*/artifacts .mission 2>/dev/null
+
+      - name: Upload live composition diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-live-composition-diagnostics
+          path: |
+            ${{ runner.temp }}/mission-dsh-live.log
+            .dsh/.mission
+          if-no-files-found: ignore
