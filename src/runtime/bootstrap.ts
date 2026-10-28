@@ -22,6 +22,12 @@ import { HostCapabilityRuntime } from "./host-capability-runtime.ts";
 import { HostDeliberationProvider } from "./host-deliberation-provider.ts";
 import { MissionSupervisor } from "./mission-supervisor.ts";
 import { createProductionAgentSkillCapabilityRuntime } from "./production-capability-runtime.ts";
+import {
+  TrustedMcpHostAdapter,
+  TrustedMcpRegistry,
+  parseTrustedMcpServersJson,
+  type TrustedMcpServerConfig
+} from "./trusted-mcp-runtime.ts";
 
 export interface ProductionCapabilityAcquisitionOptions {
   mode: "github-skills";
@@ -47,6 +53,8 @@ export interface MissionRuntimeOptions {
   maxSupervisorCycles?: number;
   retainControlWorkspaces?: boolean;
   capabilityAcquisition?: ProductionCapabilityAcquisitionOptions;
+  trustedMcpServers?: TrustedMcpServerConfig[];
+  allowInsecureTrustedMcpHttp?: boolean;
 }
 
 export interface MissionRuntime {
@@ -76,9 +84,13 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     argsPrefix: options.dshArgsPrefix,
     approvalHandler: request => approvals.requestHostApproval(request)
   }));
+  const trustedMcp = new TrustedMcpRegistry(options.trustedMcpServers ?? [], {
+    allowInsecureHttp: options.allowInsecureTrustedMcpHttp
+  });
+  const mcpHost = new TrustedMcpHostAdapter(baseHost, trustedMcp);
   const overlay = new MissionCapabilityOverlay();
   const skillProjection = new MissionAgentSkillWorkspaceProjector(overlay);
-  const host = new CapabilityWorkspaceHostAdapter(baseHost, skillProjection);
+  const host = new CapabilityWorkspaceHostAdapter(mcpHost, skillProjection);
 
   const executorId = options.executorId?.trim() || "deepseek-host";
   const controlTransport = new HostAgentJsonTransport(host, {
@@ -148,6 +160,10 @@ export function createProductionMissionRuntimeFromEnv(
 ): MissionRuntime {
   const rootDir = env.MISSION_HOME ? resolve(env.MISSION_HOME) : resolve(cwd, ".mission");
   const dshArgsPrefix = parseStringArrayEnv(env.MISSION_DSH_ARGS_PREFIX_JSON, "MISSION_DSH_ARGS_PREFIX_JSON");
+  const allowInsecureTrustedMcpHttp = env.MISSION_TRUSTED_MCP_ALLOW_HTTP === "1";
+  const trustedMcpServers = parseTrustedMcpServersJson(env.MISSION_TRUSTED_MCP_SERVERS_JSON, {
+    allowInsecureHttp: allowInsecureTrustedMcpHttp
+  });
   return createMissionRuntime({
     rootDir,
     dbPath: env.MISSION_DB ? resolve(env.MISSION_DB) : resolve(rootDir, "mission.db"),
@@ -160,7 +176,9 @@ export function createProductionMissionRuntimeFromEnv(
     workTimeoutMs: positiveNumber(env.MISSION_WORK_TIMEOUT_MS),
     maxSupervisorCycles: positiveNumber(env.MISSION_MAX_CYCLES_PER_WAKE),
     retainControlWorkspaces: env.MISSION_RETAIN_CONTROL_WORKSPACES === "1",
-    capabilityAcquisition: capabilityAcquisitionFromEnv(env)
+    capabilityAcquisition: capabilityAcquisitionFromEnv(env),
+    trustedMcpServers,
+    allowInsecureTrustedMcpHttp
   });
 }
 
