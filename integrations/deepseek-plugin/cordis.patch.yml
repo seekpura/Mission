@@ -1,0 +1,4 @@
+- insert:
+    - id: mission-runtime
+      name: '@mission-runtime/deepseek-plugin'
+      config: {}
