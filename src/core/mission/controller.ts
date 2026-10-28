@@ -520,8 +520,25 @@ export class MissionController {
       return { runId, passed: false };
     }
 
-    if (raw.missionId !== missionId || raw.artifactRef !== ref) {
-      throw new Error(`Verifier returned mismatched identity for ${ref}`);
+    const protocolError = verifierProtocolError(raw, missionId, ref);
+    if (protocolError) {
+      await this.emit(
+        missionId,
+        "verification.completed",
+        { id: runId, artifactRef: ref, verifierId: this.verifier!.id, overall: "inconclusive", error: protocolError },
+        { type: "verifier", id: this.verifier!.id },
+        `verification-completed:${runId}`
+      );
+      await this.openGap(missionId, {
+        id: `verification-gap:${runId}`,
+        severity: "major",
+        description: `Verifier ${this.verifier!.id} returned an invalid result for ${ref}: ${protocolError}`,
+        blocking: true,
+        category: "runtime",
+        requirementRefs: work.requirementRefs,
+        artifactRefs: [ref]
+      });
+      return { runId, passed: false };
     }
 
     const generatedFindings = synthesizeFindings(work, raw);
@@ -707,6 +724,33 @@ function missingRequiredOutputs(work: WorkItem, artifacts: Artifact[]) {
   return work.expectedOutputs.filter(expected => expected.required && !artifacts.some(artifact =>
     artifact.logicalName === expected.logicalName && artifact.type === expected.type
   ));
+}
+
+function verifierProtocolError(raw: unknown, missionId: string, artifactReference: string): string | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return `Verifier returned malformed result for ${artifactReference}`;
+  }
+
+  const candidate = raw as Partial<VerificationResult>;
+  if (candidate.missionId !== missionId || candidate.artifactRef !== artifactReference) {
+    return `Verifier returned mismatched identity for ${artifactReference}`;
+  }
+  if (typeof candidate.id !== "string" || candidate.id.length === 0) {
+    return `Verifier returned missing verification id for ${artifactReference}`;
+  }
+  if (typeof candidate.verifierId !== "string" || candidate.verifierId.length === 0) {
+    return `Verifier returned missing verifier id for ${artifactReference}`;
+  }
+  if (!Array.isArray(candidate.checkResults) || !Array.isArray(candidate.findingRefs) || !Array.isArray(candidate.evidenceRefs)) {
+    return `Verifier returned malformed evidence collections for ${artifactReference}`;
+  }
+  if (!["structural", "functional", "quality", "integration", "mission"].includes(candidate.level ?? "")) {
+    return `Verifier returned unsupported verification level for ${artifactReference}`;
+  }
+  if (!["pass", "pass_with_warnings", "fail", "inconclusive"].includes(candidate.overall ?? "")) {
+    return `Verifier returned unsupported overall status for ${artifactReference}`;
+  }
+  return null;
 }
 
 function synthesizeFindings(work: WorkItem, verification: VerificationResult): Finding[] {
