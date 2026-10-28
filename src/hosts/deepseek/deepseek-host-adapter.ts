@@ -60,6 +60,19 @@ export class DeepSeekHarnessAdapter implements HostAdapter {
             monetaryClass: "unknown",
             latencyClass: "interactive",
             metered: true
+          },
+          native: capability.native ?? {
+            provider: "deepseek-harness",
+            nativeId: "acp-agent",
+            protocol: "acp-v1",
+            loadMode: "preinstalled",
+            approvalModes: ["once", "provider-native"],
+            features: ["create-session", "resume-session", "steer", "cancel", "observe-events", "workspace-context"],
+            persistence: ["session", "resume", "recovery"]
+          },
+          provenance: capability.provenance ?? {
+            source: "host",
+            sourceRef: "dsh --profile acp"
           }
         };
       })
