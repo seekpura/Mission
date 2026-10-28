@@ -8,6 +8,8 @@
   disabled: true
 
 - insert:
+    - id: mission-live-launcher-host
+      name: '@mission-runtime/dsh-live-launcher-host'
     - id: mission-live-mock-llm
       name: '@mission-runtime/dsh-live-mock'
     - id: mission-runtime
