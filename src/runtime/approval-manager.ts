@@ -1,0 +1,246 @@
+import { randomUUID } from "node:crypto";
+import type { ApprovalRequest, ApprovalResult } from "../hosts/deepseek/host-adapter.ts";
+import type { AcquisitionApprovalBroker, AcquisitionApprovalRequest } from "../core/capabilities/acquisition-transaction.ts";
+import type { EventStore } from "../core/events/event-store.ts";
+
+export type RuntimeApprovalKind = "host" | "acquisition";
+
+export interface RuntimeApprovalRecord {
+  id: string;
+  missionId: string;
+  kind: RuntimeApprovalKind;
+  title: string;
+  reason: string;
+  details: Record<string, unknown>;
+  status: "pending" | "approved" | "rejected";
+  scope: "once" | "mission" | "revision" | "host";
+  actor?: string;
+  requestedAt: string;
+  decidedAt?: string;
+}
+
+interface PendingApproval {
+  record: RuntimeApprovalRecord;
+  resolve: (result: ApprovalResult) => void;
+  timer?: NodeJS.Timeout;
+}
+
+export interface RuntimeApprovalManagerOptions {
+  timeoutMs?: number;
+}
+
+export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
+  private readonly store: EventStore;
+  private readonly timeoutMs: number;
+  private readonly pending = new Map<string, PendingApproval>();
+
+  constructor(store: EventStore, options: RuntimeApprovalManagerOptions = {}) {
+    this.store = store;
+    this.timeoutMs = Math.max(1_000, options.timeoutMs ?? 30 * 60_000);
+  }
+
+  async requestHostApproval(request: ApprovalRequest): Promise<ApprovalResult> {
+    const record = await this.createPending({
+      missionId: request.missionId,
+      kind: "host",
+      title: request.title,
+      reason: request.reason,
+      details: { ...(request.details ?? {}) }
+    });
+
+    return new Promise<ApprovalResult>(resolve => {
+      const pending: PendingApproval = { record, resolve };
+      pending.timer = setTimeout(() => {
+        void this.decide(record.missionId, record.id, {
+          approved: false,
+          scope: "once",
+          actor: "system:approval-timeout",
+          reason: "Approval request timed out"
+        });
+      }, this.timeoutMs);
+      this.pending.set(record.id, pending);
+    });
+  }
+
+  async requestApproval(request: AcquisitionApprovalRequest): Promise<{ approved: boolean; actor?: string }> {
+    const record = await this.createPending({
+      missionId: request.missionId,
+      kind: "acquisition",
+      title: request.title,
+      reason: request.reason,
+      details: {
+        candidateId: request.candidateId,
+        capabilityNeedId: request.capabilityNeedId,
+        ...request.details
+      }
+    });
+
+    const result = await new Promise<ApprovalResult>(resolve => {
+      const pending: PendingApproval = { record, resolve };
+      pending.timer = setTimeout(() => {
+        void this.decide(record.missionId, record.id, {
+          approved: false,
+          scope: "once",
+          actor: "system:approval-timeout",
+          reason: "Capability approval request timed out"
+        });
+      }, this.timeoutMs);
+      this.pending.set(record.id, pending);
+    });
+    return {
+      approved: result.approved,
+      ...(result.approved ? { actor: "user" } : {})
+    };
+  }
+
+  async decide(
+    missionId: string,
+    approvalId: string,
+    decision: {
+      approved: boolean;
+      scope?: ApprovalResult["scope"];
+      actor?: string;
+      reason?: string;
+    }
+  ): Promise<RuntimeApprovalRecord> {
+    const current = (await this.list(missionId)).find(record => record.id === approvalId);
+    if (!current) throw new Error(`Unknown approval request: ${approvalId}`);
+    if (current.status !== "pending") return current;
+
+    const scope = decision.scope ?? "once";
+    const decidedAt = new Date().toISOString();
+    await this.append(missionId, "approval.decided", {
+      id: approvalId,
+      approved: decision.approved,
+      status: decision.approved ? "approved" : "rejected",
+      scope,
+      actor: decision.actor ?? "user",
+      ...(decision.reason ? { reason: decision.reason } : {}),
+      decidedAt
+    }, `approval-decided:${approvalId}`);
+
+    const pending = this.pending.get(approvalId);
+    if (pending) {
+      if (pending.timer) clearTimeout(pending.timer);
+      this.pending.delete(approvalId);
+      pending.resolve({ approved: decision.approved, scope });
+    }
+
+    return {
+      ...current,
+      status: decision.approved ? "approved" : "rejected",
+      scope,
+      actor: decision.actor ?? "user",
+      decidedAt
+    };
+  }
+
+  async list(missionId: string): Promise<RuntimeApprovalRecord[]> {
+    const records = new Map<string, RuntimeApprovalRecord>();
+    for (const event of await this.store.list(missionId)) {
+      if (event.type === "approval.requested") {
+        const payload = event.payload as Partial<RuntimeApprovalRecord> & { id?: string };
+        if (!payload.id || !payload.title || !payload.reason || !payload.kind) continue;
+        records.set(payload.id, {
+          id: payload.id,
+          missionId,
+          kind: payload.kind,
+          title: payload.title,
+          reason: payload.reason,
+          details: { ...(payload.details ?? {}) },
+          status: "pending",
+          scope: payload.scope ?? "once",
+          requestedAt: payload.requestedAt ?? event.createdAt
+        });
+      }
+      if (event.type === "approval.decided") {
+        const payload = event.payload as {
+          id?: string;
+          approved?: boolean;
+          status?: "approved" | "rejected";
+          scope?: RuntimeApprovalRecord["scope"];
+          actor?: string;
+          decidedAt?: string;
+        };
+        if (!payload.id) continue;
+        const current = records.get(payload.id);
+        if (!current) continue;
+        records.set(payload.id, {
+          ...current,
+          status: payload.status ?? (payload.approved ? "approved" : "rejected"),
+          scope: payload.scope ?? current.scope,
+          ...(payload.actor ? { actor: payload.actor } : {}),
+          decidedAt: payload.decidedAt ?? event.createdAt
+        });
+      }
+    }
+    return [...records.values()].sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
+  }
+
+  async listPending(missionId: string): Promise<RuntimeApprovalRecord[]> {
+    return (await this.list(missionId)).filter(record => record.status === "pending");
+  }
+
+  async rejectStalePending(missionId: string): Promise<number> {
+    const stale = await this.listPending(missionId);
+    for (const approval of stale) {
+      await this.decide(missionId, approval.id, {
+        approved: false,
+        scope: "once",
+        actor: "system:runtime-restart",
+        reason: "Runtime restarted before the approval could be delivered to the original host request"
+      });
+    }
+    return stale.length;
+  }
+
+  private async createPending(input: {
+    missionId: string;
+    kind: RuntimeApprovalKind;
+    title: string;
+    reason: string;
+    details: Record<string, unknown>;
+  }): Promise<RuntimeApprovalRecord> {
+    const id = `approval:${randomUUID()}`;
+    const requestedAt = new Date().toISOString();
+    const record: RuntimeApprovalRecord = {
+      id,
+      missionId: input.missionId,
+      kind: input.kind,
+      title: input.title,
+      reason: input.reason,
+      details: { ...input.details },
+      status: "pending",
+      scope: "once",
+      requestedAt
+    };
+    await this.append(input.missionId, "approval.requested", record, `approval-requested:${id}`);
+    return record;
+  }
+
+  private async append(
+    missionId: string,
+    type: "approval.requested" | "approval.decided",
+    payload: unknown,
+    idempotencyKey: string
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const expected = await this.store.lastSequence(missionId);
+      try {
+        await this.store.append({
+          id: randomUUID(),
+          missionId,
+          type,
+          actor: { type: "system", id: "runtime-approval-manager" },
+          payload,
+          idempotencyKey,
+          schemaVersion: 1,
+          createdAt: new Date().toISOString()
+        }, expected);
+        return;
+      } catch (error) {
+        if (attempt === 3 || !(error instanceof Error) || !error.name.includes("Concurrency")) throw error;
+      }
+    }
+  }
+}
