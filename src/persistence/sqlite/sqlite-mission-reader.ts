@@ -126,8 +126,12 @@ export class SqliteMissionReader implements MissionReadModelReader {
     table: "rm_capability_trust" | "rm_capability_cost" | "rm_capability_audit",
     missionId: string
   ): Array<{ data_json: string }> {
+    // Ledger rows are inserted by the transactional projector strictly in
+    // Mission Event sequence order. Use rowid rather than wall-clock fields so
+    // clock skew cannot invert audit history. Rebuilds replay the same event
+    // sequence and therefore reproduce the same ordering.
     return this.database.db.prepare(
-      `SELECT data_json FROM ${table} WHERE mission_id = ? ORDER BY recorded_at, id`
+      `SELECT data_json FROM ${table} WHERE mission_id = ? ORDER BY rowid`
     ).all(missionId) as Array<{ data_json: string }>;
   }
 
