@@ -24,31 +24,15 @@ jobs:
           from pathlib import Path
           path = Path('src/runtime/bootstrap.ts')
           text = path.read_text(encoding='utf-8')
-          anchor = '''  if (hostKind === "codex" && options.capabilityAcquisition) {
-            throw new Error(
-              "Production Agent Skill acquisition is not yet deliverable through Codex app-server; refusing to project DeepSeek-native .agents/skills semantics into a different HostAdapter"
-            );
-          }
-'''
-          replacement = anchor + '''  if (options.host && options.capabilityAcquisition) {
-            throw new Error(
-              "A custom HostAdapter cannot use production Agent Skill acquisition without an explicit provider-native Skill delivery adapter"
-            );
-          }
-'''
-          if text.count(anchor) != 1:
-              raise SystemExit(f'bootstrap acquisition anchor count={text.count(anchor)}')
-          text = text.replace(anchor, replacement)
-          old = '''  const capabilityHost = hostKind === "deepseek" || options.host
-            ? new CapabilityWorkspaceHostAdapter(mcpHost, new MissionAgentSkillWorkspaceProjector(overlay))
-            : mcpHost;
-'''
-          new = '''  const capabilityHost = !options.host && hostKind === "deepseek"
-            ? new CapabilityWorkspaceHostAdapter(mcpHost, new MissionAgentSkillWorkspaceProjector(overlay))
-            : mcpHost;
-'''
+          approval_line = '  const approvalHandler = (request: Parameters<RuntimeSideEffectManager["authorizeHostPermission"]>[0]) =>\n'
+          gate = '  if (options.host && options.capabilityAcquisition) {\n    throw new Error(\n      "A custom HostAdapter cannot use production Agent Skill acquisition without an explicit provider-native Skill delivery adapter"\n    );\n  }\n'
+          if text.count(approval_line) != 1:
+              raise SystemExit(f'approval anchor count={text.count(approval_line)}')
+          text = text.replace(approval_line, gate + approval_line)
+          old = '  const capabilityHost = hostKind === "deepseek" || options.host\n'
+          new = '  const capabilityHost = !options.host && hostKind === "deepseek"\n'
           if text.count(old) != 1:
-              raise SystemExit(f'bootstrap delivery anchor count={text.count(old)}')
+              raise SystemExit(f'delivery anchor count={text.count(old)}')
           path.write_text(text.replace(old, new), encoding='utf-8')
       - name: Commit bounded migration and remove this temporary workflow
         run: |
