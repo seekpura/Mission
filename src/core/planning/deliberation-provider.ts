@@ -4,6 +4,7 @@ import type { WorkItem } from "../domain/work-item.ts";
 import type { Evidence, Finding, Gap } from "../domain/verification.ts";
 import type { Artifact } from "../domain/artifact.ts";
 import type { SteeringInterpretation } from "../domain/steering.ts";
+import type { PlateauContext } from "../domain/progress.ts";
 
 export interface MissionInterpretation {
   missionSpec: MissionSpec;
@@ -69,6 +70,7 @@ export interface DeliberationProvider {
     evidence?: Evidence[];
     relatedWorkItems?: WorkItem[];
     priorRepairCount?: number;
+    plateauContext?: PlateauContext;
   }): Promise<GapDiagnosis>;
   challengeCompletion(input: { state: MissionState }): Promise<CompletionChallenge>;
 }

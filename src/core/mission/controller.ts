@@ -14,6 +14,7 @@ import { MissionReadModel } from "./mission-read-model.ts";
 import type { DeliberationProvider, CompletionChallenge, GapDiagnosis } from "../planning/deliberation-provider.ts";
 import type { SteeringApplicationResult, SteeringInterpretation } from "../domain/steering.ts";
 import { SteeringImpactAnalyzer } from "../steering/steering-impact-analyzer.ts";
+import { MissionProgressTracker } from "../progress/progress-tracker.ts";
 import { normalizeGapDiagnosis } from "../planning/repair-scope-policy.ts";
 import { RepairEnactmentPolicy } from "../planning/repair-enactment-policy.ts";
 
@@ -45,6 +46,7 @@ export class MissionController {
   private readonly readModel: MissionReadModel;
   private readonly repairEnactment = new RepairEnactmentPolicy();
   private readonly steeringImpact = new SteeringImpactAnalyzer();
+  private readonly progressTracker: MissionProgressTracker;
 
   constructor(store: EventStore, dependencies: MissionControllerDependencies = {}) {
     this.store = store;
@@ -52,6 +54,7 @@ export class MissionController {
     this.deliberation = dependencies.deliberation;
     this.concurrencyRetries = dependencies.concurrencyRetries ?? 5;
     this.readModel = new MissionReadModel(store, dependencies.projections);
+    this.progressTracker = new MissionProgressTracker(store, this.readModel);
   }
 
   async emit(
@@ -255,11 +258,29 @@ export class MissionController {
 
     const openGaps = await this.readModel.openGaps(input.missionId);
     const blockingGap = openGaps.find(gap => gap.status === "open" && (gap.severity === "critical" || gap.severity === "major"));
+    let plateauAssessment: import("../domain/progress.ts").PlateauAssessment | undefined;
+    if (blockingGap) {
+      const snapshot = await this.progressTracker.snapshot(input.missionId, state);
+      plateauAssessment = await this.progressTracker.assess(input.missionId, state, snapshot);
+      await this.emit(input.missionId, "progress.observed", { snapshot, assessment: plateauAssessment }, { type: "controller" }, `progress:${input.missionId}:${state.revision}`);
+      state = await this.state(input.missionId);
+      if (plateauAssessment.state === "plateau") {
+        const decision: MissionDecision = {
+          id: randomUUID(), missionId: input.missionId, type: "block", targetRefs: [blockingGap.id],
+          rationale: plateauAssessment.reason, evidenceRefs: [], gapRefs: [blockingGap.id], requirementRefs: [...blockingGap.requirementRefs],
+          expectedImpact: "Stop unproductive repair churn and report truthful plateau", confidence: 1, requiresApproval: false, status: "applied", createdAt: new Date().toISOString()
+        };
+        await this.emit(input.missionId, "decision.created", { decision }, { type: "controller" }, `plateau-decision:${blockingGap.id}:${state.revision}`);
+        await this.emit(input.missionId, "mission.status.changed", { status: "plateau", reason: plateauAssessment.reason, gapId: blockingGap.id }, { type: "controller" }, `mission-plateau:${blockingGap.id}:${state.revision}`);
+        const plateauState = await this.state(input.missionId);
+        return { missionRevision: plateauState.revision, decisionsCreated: [decision.id], workItemsCreated, executionsDispatched: [], verificationsScheduled: [], status: plateauState.status };
+      }
+    }
     if (this.deliberation && blockingGap) {
       const allWorkItems = await this.readModel.workItems(input.missionId);
       const relatedWorkItems = allWorkItems.filter(work => work.gapRefs.includes(blockingGap.id));
       const existingRepair = relatedWorkItems.find(work =>
-        work.purpose === "repair" && !["succeeded", "invalidated", "superseded", "abandoned"].includes(work.status)
+        work.purpose === "repair" && !["succeeded", "failed", "invalidated", "superseded", "abandoned"].includes(work.status)
       );
       if (!existingRepair) {
         const findingIds = new Set(blockingGap.findingRefs);
@@ -273,7 +294,8 @@ export class MissionController {
           findings,
           evidence,
           relatedWorkItems,
-          priorRepairCount
+          priorRepairCount,
+          plateauContext: plateauAssessment?.context
         });
         const diagnosis = normalizeGapDiagnosis(rawDiagnosis, {
           findingRefs: findings.map(finding => finding.id),
