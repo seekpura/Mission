@@ -179,6 +179,13 @@ function cloneCapability(capability: CapabilityDescriptor): CapabilityDescriptor
       ...capability.routing,
       executorIds: capability.routing.executorIds ? [...capability.routing.executorIds] : undefined
     } : undefined,
-    cost: capability.cost ? { ...capability.cost } : undefined
+    cost: capability.cost ? { ...capability.cost } : undefined,
+    native: capability.native ? {
+      ...capability.native,
+      approvalModes: capability.native.approvalModes ? [...capability.native.approvalModes] : undefined,
+      features: capability.native.features ? [...capability.native.features] : undefined,
+      persistence: capability.native.persistence ? [...capability.native.persistence] : undefined
+    } : undefined,
+    provenance: capability.provenance ? { ...capability.provenance } : undefined
   };
 }
