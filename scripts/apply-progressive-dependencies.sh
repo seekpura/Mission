@@ -11,9 +11,17 @@ def replace(path, old, new):
         raise SystemExit(f'anchor missing in {path}: {old[:180]!r}')
     p.write_text(s.replace(old,new,1))
 
-replace('src/core/mission/controller.ts',
-'''    if (this.deliberation && (this.shouldPlanFrontier(state) || (input.trigger === "user_steering" && state.blockingGapIds.length === 0))) {''',
-'''    const acceptanceBeforePlanning = await this.acceptanceEvaluation(input.missionId);\n    if (this.deliberation && !acceptanceBeforePlanning.satisfied && (this.shouldPlanFrontier(state) || (input.trigger === "user_steering" && state.blockingGapIds.length === 0))) {''')
+controller=Path('src/core/mission/controller.ts')
+s=controller.read_text()
+baseline='''    if (this.deliberation && (this.shouldPlanFrontier(state) || (input.trigger === "user_steering" && state.blockingGapIds.length === 0))) {'''
+first_patch='''    const acceptanceBeforePlanning = await this.acceptanceEvaluation(input.missionId);\n    if (this.deliberation && !acceptanceBeforePlanning.satisfied && (this.shouldPlanFrontier(state) || (input.trigger === "user_steering" && state.blockingGapIds.length === 0))) {'''
+final_patch='''    const acceptanceBeforePlanning = await this.acceptanceEvaluation(input.missionId);\n    const existingWorkBeforePlanning = await this.readModel.workItems(input.missionId);\n    const needsBootstrapFrontier = existingWorkBeforePlanning.length === 0 && state.finalArtifactRefs.length === 0;\n    if (this.deliberation && (!acceptanceBeforePlanning.satisfied || needsBootstrapFrontier) && (this.shouldPlanFrontier(state) || (input.trigger === "user_steering" && state.blockingGapIds.length === 0))) {'''
+if final_patch not in s:
+    if first_patch in s: s=s.replace(first_patch, final_patch, 1)
+    elif baseline in s: s=s.replace(baseline, final_patch, 1)
+    else: raise SystemExit('planning gate anchor missing')
+controller.write_text(s)
+
 replace('src/core/mission/controller.ts',
 '''      && state.verifyingWorkItemIds.length === 0\n      && state.activeExecutionIds.length === 0\n      && state.finalArtifactRefs.length === 0;''',
 '''      && state.verifyingWorkItemIds.length === 0\n      && state.activeExecutionIds.length === 0;''')
