@@ -145,7 +145,7 @@ function need(missionId: string): CapabilityNeed {
   };
 }
 
-async function approvePendingSkill(approvals: RuntimeApprovalManager, missionId: string) {
+async function pendingSkillApproval(approvals: RuntimeApprovalManager, missionId: string) {
   let pending = await approvals.listPending(missionId);
   for (let attempt = 0; pending.length === 0 && attempt < 100; attempt += 1) {
     await new Promise(resolve => setTimeout(resolve, 5));
@@ -154,12 +154,7 @@ async function approvePendingSkill(approvals: RuntimeApprovalManager, missionId:
   assert.equal(pending.length, 1);
   assert.equal(pending[0]?.kind, "acquisition");
   assert.match(pending[0]?.reason ?? "", /External Agent Skill instructions require explicit approval/);
-  await approvals.decide(missionId, pending[0]!.id, {
-    approved: true,
-    scope: "once",
-    actor: "test-user",
-    reason: "Explicitly approve this pinned external Agent Skill for the Mission"
-  });
+  return pending[0]!;
 }
 
 test("production Agent Skill acquisition requires approval, activates mission-locally and injects only the authorized skill into Host context", async () => {
@@ -185,8 +180,15 @@ test("production Agent Skill acquisition requires approval, activates mission-lo
       dockerImage: "unused-test-image"
     });
     const ensurePromise = runtime.ensure(need(missionId));
-    await approvePendingSkill(approvals, missionId);
-    assert.equal(smoke.calls, 0, "isolated smoke must not start before durable user approval releases acquisition");
+    const pending = await pendingSkillApproval(approvals, missionId);
+    assert.equal(smoke.calls, 0, "isolated smoke must not start while explicit approval is still pending");
+    await approvals.decide(missionId, pending.id, {
+      approved: true,
+      scope: "once",
+      actor: "test-user",
+      reason: "Explicitly approve this pinned external Agent Skill for the Mission"
+    });
+
     const ensured = await ensurePromise;
     assert.equal(ensured.status, "resolved");
     assert.equal(ensured.source, "acquired");
