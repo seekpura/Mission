@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { HostAdapter, HostAgentEvent, HostAgentHandle } from "../hosts/deepseek/host-adapter.ts";
+import type { HostAdapter, HostAgentEvent, HostAgentHandle } from "../hosts/host-adapter.ts";
 
 export const MISSION_JSON_BEGIN = "MISSION_JSON_BEGIN";
 export const MISSION_JSON_END = "MISSION_JSON_END";
