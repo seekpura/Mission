@@ -1,12 +1,14 @@
 import type { Artifact, ArtifactStatus } from "../domain/artifact.ts";
 import type { CapabilityDescriptor, CapabilityNeed } from "../domain/capability.ts";
 import type { MissionEvent } from "../domain/event.ts";
+import type { MissionSteeringMessage } from "../domain/mission.ts";
 import type { WorkItem, WorkStatus } from "../domain/work-item.ts";
 import type { Gap } from "../domain/verification.ts";
 
 export interface MissionJournalView {
   missionId: string;
   userGoal: string;
+  steeringMessages: MissionSteeringMessage[];
   workItems: Map<string, WorkItem>;
   artifacts: Map<string, Artifact>;
   capabilityNeeds: Map<string, CapabilityNeed>;
@@ -16,6 +18,7 @@ export interface MissionJournalView {
 }
 
 export function projectMissionJournal(missionId: string, events: MissionEvent[]): MissionJournalView {
+  const steeringMessages: MissionSteeringMessage[] = [];
   const workItems = new Map<string, WorkItem>();
   const artifacts = new Map<string, Artifact>();
   const capabilityNeeds = new Map<string, CapabilityNeed>();
@@ -29,6 +32,17 @@ export function projectMissionJournal(missionId: string, events: MissionEvent[])
       case "mission.created": {
         const payload = event.payload as { userGoal?: string };
         if (typeof payload.userGoal === "string") userGoal = payload.userGoal;
+        break;
+      }
+      case "user.steering.received": {
+        const payload = event.payload as { message?: string };
+        if (typeof payload.message === "string" && payload.message.trim()) {
+          steeringMessages.push({
+            sequence: event.sequence,
+            message: payload.message.trim(),
+            receivedAt: event.createdAt
+          });
+        }
         break;
       }
       case "capability.need.created": {
@@ -60,12 +74,12 @@ export function projectMissionJournal(missionId: string, events: MissionEvent[])
         const payload = event.payload as { id: string; status?: WorkStatus; work?: Partial<WorkItem> };
         const current = workItems.get(payload.id);
         if (!current) break;
-        workItems.set(payload.id, {
+        workItems.set(payload.id, cloneWork({
           ...current,
           ...(payload.work ?? {}),
           ...(payload.status ? { status: payload.status } : {}),
           updatedAt: event.createdAt
-        });
+        }));
         break;
       }
       case "work.started":
@@ -139,7 +153,17 @@ export function projectMissionJournal(missionId: string, events: MissionEvent[])
     }
   }
 
-  return { missionId, userGoal, workItems, artifacts, capabilityNeeds, capabilities, gaps, decisionIds };
+  return {
+    missionId,
+    userGoal,
+    steeringMessages,
+    workItems,
+    artifacts,
+    capabilityNeeds,
+    capabilities,
+    gaps,
+    decisionIds
+  };
 }
 
 export function openGaps(view: MissionJournalView): Gap[] {
@@ -173,7 +197,7 @@ function updateWorkStatus(
   if (!id) return;
   const current = items.get(id);
   if (!current) return;
-  items.set(id, { ...current, status, updatedAt: at });
+  items.set(id, cloneWork({ ...current, status, updatedAt: at }));
 }
 
 function updateGapStatus(
@@ -254,6 +278,7 @@ function asWorkItem(payload: Partial<WorkItem>, missionId: string, at: string): 
     expectedOutputs: [...(payload.expectedOutputs ?? [])],
     localAcceptanceCriteria: [...(payload.localAcceptanceCriteria ?? [])],
     capabilityNeedRefs: [...(payload.capabilityNeedRefs ?? [])],
+    ...(payload.supersedesWorkItemRefs ? { supersedesWorkItemRefs: [...payload.supersedesWorkItemRefs] } : {}),
     ...(payload.assignedExecutorId ? { assignedExecutorId: payload.assignedExecutorId } : {}),
     priority: payload.priority ?? 0,
     graphRevision: payload.graphRevision ?? 0,
@@ -333,7 +358,8 @@ function cloneWork(work: WorkItem): WorkItem {
     inputArtifactRefs: [...work.inputArtifactRefs],
     expectedOutputs: work.expectedOutputs.map(output => ({ ...output })),
     localAcceptanceCriteria: work.localAcceptanceCriteria.map(criterion => ({ ...criterion })),
-    capabilityNeedRefs: [...work.capabilityNeedRefs]
+    capabilityNeedRefs: [...work.capabilityNeedRefs],
+    ...(work.supersedesWorkItemRefs ? { supersedesWorkItemRefs: [...work.supersedesWorkItemRefs] } : {})
   };
 }
 
