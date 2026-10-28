@@ -12,6 +12,8 @@ import type { Artifact } from "../domain/artifact.ts";
 import { AcceptanceEvaluator, type AcceptanceEvaluation } from "../acceptance/acceptance-evaluator.ts";
 import { MissionReadModel } from "./mission-read-model.ts";
 import type { DeliberationProvider, CompletionChallenge, GapDiagnosis } from "../planning/deliberation-provider.ts";
+import type { SteeringApplicationResult, SteeringInterpretation } from "../domain/steering.ts";
+import { SteeringImpactAnalyzer } from "../steering/steering-impact-analyzer.ts";
 import { normalizeGapDiagnosis } from "../planning/repair-scope-policy.ts";
 import { RepairEnactmentPolicy } from "../planning/repair-enactment-policy.ts";
 
@@ -42,6 +44,7 @@ export class MissionController {
   private readonly concurrencyRetries: number;
   private readonly readModel: MissionReadModel;
   private readonly repairEnactment = new RepairEnactmentPolicy();
+  private readonly steeringImpact = new SteeringImpactAnalyzer();
 
   constructor(store: EventStore, dependencies: MissionControllerDependencies = {}) {
     this.store = store;
@@ -134,6 +137,73 @@ export class MissionController {
   async steer(missionId: string, message: string) {
     await this.emit(missionId, "user.steering.received", { message }, { type: "user" });
     return this.state(missionId);
+  }
+
+  async steerWithImpact(missionId: string, message: string): Promise<SteeringApplicationResult> {
+    const before = await this.state(missionId);
+    await this.emit(missionId, "user.steering.received", { message }, { type: "user" });
+    const [missionSpec, acceptanceContract, workItems, artifacts] = await Promise.all([
+      this.readModel.missionSpec(missionId), this.readModel.acceptanceContract(missionId),
+      this.readModel.workItems(missionId), this.readModel.artifacts(missionId)
+    ]);
+    if (!this.deliberation?.interpretSteering) {
+      return { impact: {
+        kind: "operational", reason: "No steering interpreter configured; preserved current mission semantics", confidence: 1,
+        previousMissionRevision: before.revision, strategyImpact: "none", affectedRequirementRefs: [],
+        invalidatedWorkItemRefs: [], invalidatedArtifactRefs: [],
+        unaffectedActiveWorkItemRefs: workItems.filter(work => ["ready", "running", "waiting", "verifying", "blocked"].includes(work.status)).map(work => work.id)
+      } };
+    }
+    const interpretation = await this.deliberation.interpretSteering({ missionId, message, state: await this.state(missionId), missionSpec, acceptanceContract, workItems, artifacts });
+    if (interpretation.kind === "operational") {
+      return { impact: this.steeringImpact.analyze({ missionRevision: before.revision, interpretation, workItems, artifacts }) };
+    }
+
+    const now = new Date().toISOString();
+    let revisedSpec = missionSpec ?? undefined;
+    if (interpretation.specPatch && missionSpec) {
+      revisedSpec = { ...missionSpec, ...definedPatch(interpretation.specPatch), revision: missionSpec.revision + 1, createdAt: now };
+      await this.emit(missionId, "mission.spec.revised", { revision: revisedSpec.revision, spec: revisedSpec, objective: revisedSpec.objective }, { type: "controller" }, `mission-spec:${missionId}:${revisedSpec.revision}`);
+    }
+
+    let revisedContract: AcceptanceContract | undefined;
+    let changedRequirementRefs: string[] = [];
+    if (interpretation.revisedAcceptanceContract) {
+      const previous = acceptanceContract;
+      const revision = (previous?.revision ?? 0) + 1;
+      changedRequirementRefs = acceptanceChangedRequirements(previous, interpretation.revisedAcceptanceContract);
+      const previousRequirements = new Map((previous?.requirements ?? []).map(requirement => [requirement.id, requirement]));
+      const affected = new Set([...interpretation.affectedRequirementRefs, ...changedRequirementRefs]);
+      revisedContract = {
+        ...interpretation.revisedAcceptanceContract, missionId, revision, createdAt: now,
+        requirements: interpretation.revisedAcceptanceContract.requirements.map(requirement => {
+          const old = previousRequirements.get(requirement.id);
+          const canPreserve = old && !affected.has(requirement.id) && sameRequirementMeaning(old, requirement);
+          return canPreserve ? { ...requirement, status: old.status, evidenceRefs: [...old.evidenceRefs] } : { ...requirement, status: "unverified", evidenceRefs: [] };
+        })
+      };
+      await this.emit(missionId, "acceptance.revised", { revision, contract: revisedContract }, { type: "controller" }, `acceptance:${missionId}:${revision}`);
+    }
+
+    const impact = this.steeringImpact.analyze({ missionRevision: before.revision, interpretation, workItems, artifacts, changedRequirementRefs });
+    impact.missionSpecRevision = revisedSpec?.revision;
+    impact.acceptanceRevision = revisedContract?.revision;
+    for (const workId of impact.invalidatedWorkItemRefs) {
+      await this.emit(missionId, "work.invalidated", { id: workId, reason: `User steering: ${interpretation.reason}` }, { type: "controller" }, `steering-work-invalidated:${before.revision}:${workId}`);
+    }
+    for (const artifactRef of impact.invalidatedArtifactRefs) {
+      await this.emit(missionId, "artifact.invalidated", { artifactRef, reason: `User steering: ${interpretation.reason}` }, { type: "controller" }, `steering-artifact-invalidated:${before.revision}:${artifactRef}`);
+    }
+    if (before.status === "completed" && (impact.invalidatedWorkItemRefs.length || impact.invalidatedArtifactRefs.length || revisedContract || revisedSpec)) {
+      await this.emit(missionId, "mission.reopened", { reason: interpretation.reason }, { type: "controller" }, `mission-reopened:steering:${before.revision}`);
+    }
+    if (interpretation.strategyImpact === "global" && this.deliberation) {
+      const state = await this.state(missionId);
+      const proposal = await this.deliberation.composeStrategy({ state, userGoal: revisedSpec?.objective ?? await this.readModel.userGoal(missionId), acceptanceContract: revisedContract ?? acceptanceContract });
+      const revision = Math.max((state.strategyRevision ?? 0) + 1, proposal.revision);
+      await this.emit(missionId, "strategy.revised", { ...proposal, revision, reason: interpretation.reason }, { type: "planner" }, `strategy:${missionId}:${revision}`);
+    }
+    return { impact, missionSpec: revisedSpec, acceptanceContract: revisedContract };
   }
 
   async openGap(missionId: string, payload: { id: string; severity: "critical" | "major" | "minor"; description: string; blocking?: boolean; category?: Gap["category"]; requirementRefs?: string[]; artifactRefs?: string[]; findingRefs?: string[] }) {
@@ -283,7 +353,7 @@ export class MissionController {
       }
     }
 
-    if (this.deliberation && this.shouldPlanFrontier(state)) {
+    if (this.deliberation && (this.shouldPlanFrontier(state) || (input.trigger === "user_steering" && state.blockingGapIds.length === 0))) {
       const frontier = await this.deliberation.planFrontier({
         state,
         userGoal: await this.readModel.userGoal(input.missionId),
@@ -409,4 +479,35 @@ export class MissionController {
       });
     }
   }
+}
+function definedPatch<T extends Record<string, unknown>>(value: T): Partial<T> {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as Partial<T>;
+}
+
+function sameRequirementMeaning(a: Requirement, b: Requirement): boolean {
+  return a.description === b.description && a.type === b.type && a.priority === b.priority && a.verification === b.verification;
+}
+
+function acceptanceChangedRequirements(current: AcceptanceContract | null, revised: SteeringInterpretation["revisedAcceptanceContract"]): string[] {
+  if (!revised) return [];
+  const changed = new Set<string>();
+  const oldRequirements = new Map((current?.requirements ?? []).map(item => [item.id, item]));
+  const newRequirements = new Map(revised.requirements.map(item => [item.id, item]));
+  for (const [id, item] of oldRequirements) if (!newRequirements.has(id) || !sameRequirementMeaning(item, newRequirements.get(id)!)) changed.add(id);
+  for (const [id, item] of newRequirements) if (!oldRequirements.has(id) || !sameRequirementMeaning(oldRequirements.get(id)!, item)) changed.add(id);
+  const oldArtifacts = new Map((current?.requiredArtifacts ?? []).map(item => [item.logicalName, item]));
+  for (const artifact of revised.requiredArtifacts) {
+    const old = oldArtifacts.get(artifact.logicalName);
+    if (!old || JSON.stringify(old) !== JSON.stringify(artifact)) for (const ref of artifact.requirementRefs) changed.add(ref);
+    oldArtifacts.delete(artifact.logicalName);
+  }
+  for (const artifact of oldArtifacts.values()) for (const ref of artifact.requirementRefs) changed.add(ref);
+  const oldValidations = new Map((current?.requiredValidations ?? []).map(item => [item.id, item]));
+  for (const validation of revised.requiredValidations) {
+    const old = oldValidations.get(validation.id);
+    if (!old || JSON.stringify(old) !== JSON.stringify(validation)) for (const ref of validation.requirementRefs) changed.add(ref);
+    oldValidations.delete(validation.id);
+  }
+  for (const validation of oldValidations.values()) for (const ref of validation.requirementRefs) changed.add(ref);
+  return [...changed];
 }

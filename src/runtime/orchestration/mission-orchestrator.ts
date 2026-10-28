@@ -35,6 +35,7 @@ export class MissionOrchestrator {
   private readonly executionRouter?: WorkExecutionRouter;
   private readonly running = new Map<string, Promise<void>>();
   private readonly rerunRequested = new Set<string>();
+  private readonly activeExecutions = new Map<string, { missionId: string; workItemId: string; executionId: string }>();
 
   constructor(input: {
     controller: MissionController;
@@ -77,6 +78,17 @@ export class MissionOrchestrator {
 
   async whenIdle(missionId: string): Promise<void> {
     await this.running.get(missionId);
+  }
+
+  async cancelWorkItems(missionId: string, workItemIds: string[]): Promise<string[]> {
+    if (!this.executionRouter) return [];
+    const targets = [...this.activeExecutions.values()].filter(item => item.missionId === missionId && workItemIds.includes(item.workItemId));
+    const cancelled: string[] = [];
+    for (const target of targets) {
+      await this.controller.emit(missionId, "execution.cancel.requested", { id: target.executionId, reason: "user steering invalidated work" }, { type: "controller" }, `steering-cancel:${target.executionId}`);
+      if (await this.executionRouter.cancel(target.executionId)) cancelled.push(target.executionId);
+    }
+    return cancelled;
   }
 
   async runUntilQuiescent(missionId: string): Promise<void> {
@@ -157,6 +169,7 @@ export class MissionOrchestrator {
       forceFreshAgent: work.executionConstraints?.forceFreshAgent
     };
 
+    this.activeExecutions.set(executionId, { missionId: work.missionId, workItemId: work.id, executionId });
     try {
       await this.controller.emit(work.missionId, "execution.started", { id: executionId, executorType: selectedRoute.kind }, { type: "host" }, `execution-started:${executionId}`);
       let result;
@@ -192,6 +205,10 @@ export class MissionOrchestrator {
         await this.controller.emit(work.missionId, "work.updated", { id: work.id, status: "waiting", reason: "Execution cancelled; awaiting reschedule or user direction" }, { type: "controller" }, `work-cancelled:${work.id}:${attemptId}`);
         return;
       }
+      if (await this.isWorkInvalidated(work.missionId, work.id)) {
+        await this.controller.emit(work.missionId, "attempt.completed", { id: attemptId, workItemId: work.id, status: "cancelled", reason: "Result superseded by user steering" }, { type: "controller" }, `attempt-completed:${attemptId}`);
+        return;
+      }
       if (result.state !== "succeeded" || envelope?.status === "failed") {
         await this.failWork(work, attemptId, envelope?.summary ?? `Host execution ended as ${result.state}`);
         return;
@@ -209,8 +226,15 @@ export class MissionOrchestrator {
       await this.promoteProposedWork(work, envelope);
     } catch (error) {
       await this.controller.emit(work.missionId, "execution.failed", { id: executionId, error: error instanceof Error ? error.message : String(error) }, { type: "host" }, `execution-settled:${executionId}`);
-      await this.failWork(work, attemptId, error instanceof Error ? error.message : String(error));
+      if (!(await this.isWorkInvalidated(work.missionId, work.id))) await this.failWork(work, attemptId, error instanceof Error ? error.message : String(error));
+    } finally {
+      this.activeExecutions.delete(executionId);
     }
+  }
+
+  private async isWorkInvalidated(missionId: string, workId: string): Promise<boolean> {
+    const work = (await this.projections.listWorkItems(missionId)).find(item => item.id === workId);
+    return work?.status === "invalidated" || work?.status === "superseded" || work?.status === "abandoned";
   }
 
   private async executeAcquisitionWork(work: WorkItem): Promise<void> {

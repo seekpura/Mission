@@ -135,6 +135,16 @@ export class MissionRuntime {
     }
   }
 
+  async steer(missionId: string, message: string) {
+    const result = await this.controller.steerWithImpact(missionId, message);
+    if (result.impact.invalidatedWorkItemRefs.length > 0) {
+      await this.orchestrator?.cancelWorkItems(missionId, result.impact.invalidatedWorkItemRefs);
+    }
+    await this.controller.runControllerCycle({ missionId, trigger: "user_steering" });
+    this.orchestrator?.wake(missionId);
+    return result;
+  }
+
   async cancelExecution(missionId: string, executionId: string): Promise<boolean> {
     if (!this.executionRouter) return false;
     await this.controller.emit(missionId, "execution.cancel.requested", { id: executionId }, { type: "user" }, `execution-cancel-request:${executionId}`);
