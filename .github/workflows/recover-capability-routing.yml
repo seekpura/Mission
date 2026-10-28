@@ -1,0 +1,33 @@
+name: Recover capability routing batch
+on:
+  push:
+    branches: ["recovery/capability-routing"]
+    paths:
+      - "scripts/recover-capability-routing.sh"
+      - ".github/workflows/recover-capability-routing.yml"
+permissions:
+  contents: write
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply recovered capability batch
+        run: bash scripts/recover-capability-routing.sh
+      - name: Verify
+        run: |
+          npm test
+          npm run smoke
+          git diff --check
+      - name: Commit recovered batch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests
+          git commit -m "recovery: apply capability routing batch"
+          git push origin HEAD:recovery/capability-routing
