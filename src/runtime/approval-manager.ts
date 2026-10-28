@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { ApprovalRequest, ApprovalResult } from "../hosts/deepseek/host-adapter.ts";
 import type { AcquisitionApprovalBroker, AcquisitionApprovalRequest } from "../core/capabilities/acquisition-transaction.ts";
 import type { EventStore } from "../core/events/event-store.ts";
+import type { SideEffectApprovalRequest } from "./side-effect-manager.ts";
 
-export type RuntimeApprovalKind = "host" | "acquisition";
+export type RuntimeApprovalKind = "host" | "acquisition" | "side-effect";
 
 export interface RuntimeApprovalRecord {
   id: string;
@@ -63,6 +64,35 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
         ...request.details
       },
       timeoutReason: "Capability approval request timed out"
+    });
+    return {
+      approved: result.approved,
+      ...(result.approved ? { actor: "user" } : {})
+    };
+  }
+
+  async requestSideEffectApproval(request: SideEffectApprovalRequest): Promise<{ approved: boolean; actor?: string }> {
+    const intent = request.intent;
+    const result = await this.createAndWait({
+      missionId: request.missionId,
+      kind: "side-effect",
+      title: `Approve side effect: ${intent.description}`,
+      reason: request.reason,
+      details: {
+        intentId: intent.id,
+        operationKey: intent.operationKey,
+        source: intent.source,
+        effectClass: intent.effectClass,
+        type: intent.type,
+        target: intent.target,
+        reversible: intent.reversible,
+        workItemId: intent.workItemId,
+        attemptId: intent.attemptId,
+        executionId: intent.executionId,
+        fingerprint: intent.fingerprint,
+        metadata: intent.metadata
+      },
+      timeoutReason: "Side-effect approval request timed out"
     });
     return {
       approved: result.approved,
@@ -254,8 +284,12 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
         }, expected);
         return;
       } catch (error) {
-        if (attempt === 3 || !(error instanceof Error) || !error.name.includes("Concurrency")) throw error;
+        if (attempt === 3 || !(error instanceof Error) || !isConcurrencyConflict(error)) throw error;
       }
     }
   }
+}
+
+function isConcurrencyConflict(error: Error): boolean {
+  return error.name.includes("Concurrency") || error.message.includes("expected sequence");
 }
