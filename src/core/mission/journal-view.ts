@@ -206,6 +206,11 @@ function asCapabilityNeed(payload: Partial<CapabilityNeed>, missionId: string): 
     urgency: payload.urgency,
     acquisitionAllowed: payload.acquisitionAllowed ?? false,
     maxRisk: payload.maxRisk,
+    ...(payload.acceptableKinds ? { acceptableKinds: [...payload.acceptableKinds] } : {}),
+    ...(payload.requiredDeliveryModes ? { requiredDeliveryModes: [...payload.requiredDeliveryModes] } : {}),
+    ...(payload.forbiddenPermissions ? { forbiddenPermissions: [...payload.forbiddenPermissions] } : {}),
+    ...(payload.acceptableTrust ? { acceptableTrust: [...payload.acceptableTrust] } : {}),
+    ...(payload.maxCostClass ? { maxCostClass: payload.maxCostClass } : {}),
     requirementRefs: [...(payload.requirementRefs ?? [])],
     gapRefs: [...(payload.gapRefs ?? [])]
   };
@@ -223,7 +228,8 @@ function asCapabilityDescriptor(payload: Partial<CapabilityDescriptor>): Capabil
     ...(payload.invocationRef ? { invocationRef: payload.invocationRef } : {}),
     permissions: [...(payload.permissions ?? [])],
     ...(payload.revision ? { revision: payload.revision } : {}),
-    scope: payload.scope
+    scope: payload.scope,
+    ...(payload.semantics ? { semantics: cloneSemantics(payload.semantics) } : {})
   };
 }
 
@@ -281,6 +287,10 @@ function cloneCapabilityNeed(need: CapabilityNeed): CapabilityNeed {
     requiredFunctions: [...need.requiredFunctions],
     desiredInputs: [...need.desiredInputs],
     desiredOutputs: [...need.desiredOutputs],
+    ...(need.acceptableKinds ? { acceptableKinds: [...need.acceptableKinds] } : {}),
+    ...(need.requiredDeliveryModes ? { requiredDeliveryModes: [...need.requiredDeliveryModes] } : {}),
+    ...(need.forbiddenPermissions ? { forbiddenPermissions: [...need.forbiddenPermissions] } : {}),
+    ...(need.acceptableTrust ? { acceptableTrust: [...need.acceptableTrust] } : {}),
     requirementRefs: [...need.requirementRefs],
     gapRefs: [...need.gapRefs]
   };
@@ -289,7 +299,21 @@ function cloneCapabilityNeed(need: CapabilityNeed): CapabilityNeed {
 function cloneCapability(capability: CapabilityDescriptor): CapabilityDescriptor {
   return {
     ...capability,
-    permissions: [...capability.permissions]
+    permissions: [...capability.permissions],
+    ...(capability.semantics ? { semantics: cloneSemantics(capability.semantics) } : {})
+  };
+}
+
+function cloneSemantics(semantics: NonNullable<CapabilityDescriptor["semantics"]>) {
+  return {
+    ...semantics,
+    functions: [...semantics.functions],
+    inputTypes: [...semantics.inputTypes],
+    outputTypes: [...semantics.outputTypes],
+    purposes: [...semantics.purposes],
+    deliveryModes: [...semantics.deliveryModes],
+    ...(semantics.requiresCapabilityRefs ? { requiresCapabilityRefs: [...semantics.requiresCapabilityRefs] } : {}),
+    ...(semantics.nativeRefs ? { nativeRefs: [...semantics.nativeRefs] } : {})
   };
 }
 
