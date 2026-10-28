@@ -320,3 +320,17 @@ CREATE TABLE IF NOT EXISTS rm_capability_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_rm_capability_audit_capability ON rm_capability_audit(mission_id, capability_id, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_rm_capability_audit_decision ON rm_capability_audit(mission_id, decision, recorded_at);
+
+CREATE TABLE IF NOT EXISTS rm_evidence (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  subject_ref TEXT NOT NULL,
+  evidence_kind TEXT NOT NULL,
+  collector_id TEXT NOT NULL,
+  result TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_evidence_subject ON rm_evidence(mission_id, subject_ref, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_rm_evidence_kind ON rm_evidence(mission_id, evidence_kind, created_at, id);

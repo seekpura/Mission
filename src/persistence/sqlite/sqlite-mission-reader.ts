@@ -7,7 +7,7 @@ import type {
 } from "../../core/domain/capability-ledger.ts";
 import type { MissionState } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
-import type { Gap } from "../../core/domain/verification.ts";
+import type { Evidence, Gap } from "../../core/domain/verification.ts";
 import { initialMissionState } from "../../core/events/state-projector.ts";
 import type { MissionJournalView } from "../../core/mission/journal-view.ts";
 import type { MissionReadModelReader } from "../../core/mission/mission-reader.ts";
@@ -120,6 +120,16 @@ export class SqliteMissionReader implements MissionReadModelReader {
   readCapabilityAudit(missionId: string): CapabilityAuditRecord[] {
     return this.ledgerRows("rm_capability_audit", missionId)
       .map(row => JSON.parse(row.data_json) as CapabilityAuditRecord);
+  }
+
+  readEvidence(missionId: string, subjectRef?: string): Evidence[] {
+    const sql = subjectRef
+      ? "SELECT data_json FROM rm_evidence WHERE mission_id = ? AND subject_ref = ? ORDER BY rowid"
+      : "SELECT data_json FROM rm_evidence WHERE mission_id = ? ORDER BY rowid";
+    const rows = (subjectRef
+      ? this.database.db.prepare(sql).all(missionId, subjectRef)
+      : this.database.db.prepare(sql).all(missionId)) as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as Evidence);
   }
 
   private ledgerRows(

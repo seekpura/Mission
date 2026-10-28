@@ -17,6 +17,7 @@ export interface MissionApiRuntime {
     SqliteMissionReader,
     "readCapabilityTrust" | "readCapabilityCosts" | "readCapabilityAudit"
   >;
+  evidenceReader?: Pick<SqliteMissionReader, "readEvidence">;
 }
 
 export function createMissionApi(
@@ -90,6 +91,11 @@ export function createMissionApi(
           await publish(missionId);
           void runtime.supervisor?.wake(missionId, "approval_event");
           return json(res, 200, record);
+        }
+        if (req.method === "GET" && parts[2] === "evidence" && parts.length === 3) {
+          if (!runtime.evidenceReader) return json(res, 503, { error: "evidence_reader_unavailable" });
+          const subjectRef = url.searchParams.get("subjectRef")?.trim() || undefined;
+          return json(res, 200, runtime.evidenceReader.readEvidence(missionId, subjectRef));
         }
         if (
           req.method === "GET" &&

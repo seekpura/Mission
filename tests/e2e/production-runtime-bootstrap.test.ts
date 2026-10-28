@@ -57,7 +57,10 @@ class ScriptedRuntimeHost implements HostAdapter {
     const handle = { id: `scripted-${this.nextId++}`, nativeRef: `native-${this.nextId}` };
     const now = new Date().toISOString();
     if (request.workItemId.startsWith("control:")) {
-      const response = controlResponse(request.workItemId);
+      const controlInput = request.context && typeof request.context === "object"
+        ? (request.context as { input?: unknown }).input
+        : undefined;
+      const response = controlResponse(request.workItemId, controlInput);
       this.events.set(handle.id, [
         { type: "started", payload: { role: "control" }, at: now },
         {
@@ -120,7 +123,7 @@ class ScriptedRuntimeHost implements HostAdapter {
   }
 }
 
-function controlResponse(workItemId: string): unknown {
+function controlResponse(workItemId: string, controlInput?: unknown): unknown {
   if (workItemId.startsWith("control:strategy-")) {
     return {
       framing: "produce one independently verified deliverable",
@@ -153,6 +156,13 @@ function controlResponse(workItemId: string): unknown {
     };
   }
   if (workItemId.startsWith("control:verify-")) {
+    const runtimeEvidence = controlInput && typeof controlInput === "object"
+      ? ((controlInput as { runtimeEvidence?: Array<{ id?: string; result?: string }> }).runtimeEvidence ?? [])
+      : [];
+    const evidenceRefs = runtimeEvidence
+      .filter(evidence => evidence.result === "supports" && typeof evidence.id === "string" && evidence.id)
+      .map(evidence => evidence.id as string);
+    if (evidenceRefs.length === 0) throw new Error("Scripted verifier requires Runtime Evidence");
     return {
       overall: "pass",
       checkResults: [
@@ -160,16 +170,16 @@ function controlResponse(workItemId: string): unknown {
           id: "generic-requirement-coverage",
           status: "pass",
           detail: "The candidate artifact satisfies the WorkItem requirement and acceptance contract.",
-          evidenceRefs: ["evidence:scripted-independent-review"]
+          evidenceRefs
         },
         {
           id: "generic-content-quality",
           status: "pass",
           detail: "The scripted deliverable is internally consistent and usable for the requested purpose.",
-          evidenceRefs: ["evidence:scripted-independent-review"]
+          evidenceRefs
         }
       ],
-      evidenceRefs: ["evidence:scripted-independent-review"],
+      evidenceRefs,
       gapAssessments: []
     };
   }
@@ -237,6 +247,7 @@ test("production runtime API automatically drives planner -> worker -> verifier 
     assert.ok(types.includes("work.created"));
     assert.ok(types.includes("execution.bound"));
     assert.ok(types.includes("artifact.created"));
+    assert.ok(types.includes("evidence.collected"));
     assert.ok(types.includes("verification.completed"));
     assert.ok(types.includes("artifact.validated"));
     assert.ok(types.includes("mission.completed"));

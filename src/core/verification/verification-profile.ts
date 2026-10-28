@@ -1,5 +1,6 @@
 import { extname } from "node:path";
 import type { Artifact, ArtifactType } from "../domain/artifact.ts";
+import type { VerificationEvidenceKind } from "../domain/verification.ts";
 
 export type VerificationProfileKind =
   | "generic"
@@ -9,10 +10,20 @@ export type VerificationProfileKind =
   | "code"
   | "research";
 
+export interface VerificationEvidencePolicy {
+  /** At least one supporting referenced Evidence must have one of these kinds. */
+  anyOf?: VerificationEvidenceKind[];
+  /** Every kind listed here must have at least one supporting referenced Evidence. */
+  allOf?: VerificationEvidenceKind[];
+  /** Minimum number of supporting Runtime Evidence refs required by the check. */
+  minimumSupportingRefs?: number;
+}
+
 export interface VerificationProfileCheck {
   id: string;
   objective: string;
   evidenceExpectation: string;
+  evidencePolicy: VerificationEvidencePolicy;
 }
 
 export interface VerificationProfile {
@@ -49,22 +60,26 @@ const DEFAULT_PROFILES: VerificationProfile[] = [
       {
         id: "presentation-structure",
         objective: "Verify narrative/section order, required slides, hierarchy and coverage against the WorkItem acceptance criteria.",
-        evidenceExpectation: "slide/page references, extracted slide text or render evidence"
+        evidenceExpectation: "slide/page references, extracted slide text or render evidence",
+        evidencePolicy: { anyOf: ["presentation-package", "presentation-render"] }
       },
       {
         id: "presentation-visual-quality",
         objective: "Verify legibility, clipping/overflow, alignment, layout consistency, contrast and visual hierarchy.",
-        evidenceExpectation: "rendered-slide inspection with slide identifiers"
+        evidenceExpectation: "rendered-slide inspection with slide identifiers",
+        evidencePolicy: { anyOf: ["presentation-render"] }
       },
       {
         id: "presentation-content-integrity",
         objective: "Verify claims, numbers, labels and referenced facts are internally consistent and supported.",
-        evidenceExpectation: "artifact content plus source/evidence references"
+        evidenceExpectation: "artifact content plus source/evidence references",
+        evidencePolicy: { anyOf: ["presentation-package", "presentation-render", "text-content"] }
       },
       {
         id: "presentation-delivery-integrity",
         objective: "Verify the deliverable is usable in the requested presentation format and preserves required editability/structure when applicable.",
-        evidenceExpectation: "file validation and, when available, native/render inspection"
+        evidenceExpectation: "file validation and, when available, native/render inspection",
+        evidencePolicy: { allOf: ["file-integrity"], anyOf: ["presentation-package", "presentation-render"] }
       }
     ],
     evidenceRequirements: [
@@ -89,22 +104,26 @@ const DEFAULT_PROFILES: VerificationProfile[] = [
       {
         id: "website-structure-content",
         objective: "Verify required pages/sections, information architecture and content coverage.",
-        evidenceExpectation: "source/runtime page evidence and route/section references"
+        evidenceExpectation: "source/runtime page evidence and route/section references",
+        evidencePolicy: { anyOf: ["website-source", "browser-runtime"] }
       },
       {
         id: "website-functional",
         objective: "Verify required navigation, interactions, links, forms and state transitions behave as intended.",
-        evidenceExpectation: "runtime/browser/test evidence; source inspection alone is insufficient for behavioral claims"
+        evidenceExpectation: "runtime/browser/test evidence; source inspection alone is insufficient for behavioral claims",
+        evidencePolicy: { anyOf: ["browser-runtime", "executable-test", "integration-test"] }
       },
       {
         id: "website-responsive-accessible",
         objective: "Verify responsive behavior and material accessibility requirements such as semantic structure, keyboard reachability and readable contrast.",
-        evidenceExpectation: "viewport/browser inspection or automated accessibility/runtime evidence"
+        evidenceExpectation: "viewport/browser inspection or automated accessibility/runtime evidence",
+        evidencePolicy: { anyOf: ["browser-runtime", "accessibility-check"] }
       },
       {
         id: "website-runtime-quality",
         objective: "Verify there are no material runtime errors, broken assets or blocking console/network failures.",
-        evidenceExpectation: "runtime/browser/test evidence"
+        evidenceExpectation: "runtime/browser/test evidence",
+        evidencePolicy: { anyOf: ["browser-runtime", "integration-test"] }
       }
     ],
     evidenceRequirements: [
@@ -129,22 +148,26 @@ const DEFAULT_PROFILES: VerificationProfile[] = [
       {
         id: "video-technical-integrity",
         objective: "Verify the media is playable and materially free of broken/corrupt output, missing tracks or invalid duration/encoding evidence.",
-        evidenceExpectation: "media probe/runtime playback evidence"
+        evidenceExpectation: "media probe/runtime playback evidence",
+        evidencePolicy: { anyOf: ["media-probe", "media-playback"] }
       },
       {
         id: "video-temporal-content",
         objective: "Verify required scenes/messages, sequence, pacing and timing against the WorkItem criteria.",
-        evidenceExpectation: "timecoded frame/transcript/playback evidence"
+        evidenceExpectation: "timecoded frame/transcript/playback evidence",
+        evidencePolicy: { anyOf: ["media-playback"] }
       },
       {
         id: "video-visual-audio-quality",
         objective: "Verify legibility, framing, continuity, audio intelligibility and material sync issues.",
-        evidenceExpectation: "timecoded playback/frame/audio evidence"
+        evidenceExpectation: "timecoded playback/frame/audio evidence",
+        evidencePolicy: { anyOf: ["media-playback"] }
       },
       {
         id: "video-claims-captions",
         objective: "Verify on-screen claims, captions/subtitles and spoken content are consistent with supplied evidence and requirements.",
-        evidenceExpectation: "transcript/caption plus source/evidence references"
+        evidenceExpectation: "transcript/caption plus source/evidence references",
+        evidencePolicy: { anyOf: ["media-playback", "text-content"] }
       }
     ],
     evidenceRequirements: [
@@ -171,22 +194,26 @@ const DEFAULT_PROFILES: VerificationProfile[] = [
       {
         id: "code-requirement-correctness",
         objective: "Verify implemented behavior covers the WorkItem objective and acceptance criteria without unsupported completion claims.",
-        evidenceExpectation: "source inspection plus requirement-scoped test/runtime evidence"
+        evidenceExpectation: "source inspection plus requirement-scoped test/runtime evidence",
+        evidencePolicy: { allOf: ["code-source"], anyOf: ["executable-test", "integration-test"] }
       },
       {
         id: "code-tests",
         objective: "Verify relevant automated tests or equivalent executable checks pass and cover material behavior and regressions.",
-        evidenceExpectation: "test command/result evidence with failures or coverage gaps surfaced"
+        evidenceExpectation: "test command/result evidence with failures or coverage gaps surfaced",
+        evidencePolicy: { anyOf: ["executable-test"] }
       },
       {
         id: "code-integration",
         objective: "Verify interfaces, schemas, dependencies and integration points remain compatible with the surrounding system.",
-        evidenceExpectation: "build/type/schema/integration test evidence where applicable"
+        evidenceExpectation: "build/type/schema/integration test evidence where applicable",
+        evidencePolicy: { anyOf: ["build-check", "integration-test"] }
       },
       {
         id: "code-security-reliability",
         objective: "Verify material error handling, boundary validation, unsafe side effects and security-sensitive behavior appropriate to the change.",
-        evidenceExpectation: "source plus targeted static/runtime/security evidence"
+        evidenceExpectation: "source plus targeted static/runtime/security evidence",
+        evidencePolicy: { allOf: ["code-source"], anyOf: ["static-analysis", "executable-test", "integration-test"] }
       }
     ],
     evidenceRequirements: [
@@ -209,22 +236,26 @@ const DEFAULT_PROFILES: VerificationProfile[] = [
       {
         id: "research-question-coverage",
         objective: "Verify the research answers the requested questions and covers material dimensions without hiding unresolved uncertainty.",
-        evidenceExpectation: "section/claim references mapped to the WorkItem objective and acceptance criteria"
+        evidenceExpectation: "section/claim references mapped to the WorkItem objective and acceptance criteria",
+        evidencePolicy: { anyOf: ["text-content", "source-traceability"] }
       },
       {
         id: "research-source-quality",
         objective: "Verify material claims rely on appropriate, traceable and sufficiently authoritative sources for the claim type.",
-        evidenceExpectation: "source references with provenance and publication/observation context when relevant"
+        evidenceExpectation: "source references with provenance and publication/observation context when relevant",
+        evidencePolicy: { anyOf: ["source-traceability"] }
       },
       {
         id: "research-claim-traceability",
         objective: "Verify important factual claims can be traced to supplied evidence and that inference is distinguished from source fact.",
-        evidenceExpectation: "claim-to-source/evidence mapping"
+        evidenceExpectation: "claim-to-source/evidence mapping",
+        evidencePolicy: { anyOf: ["source-traceability"] }
       },
       {
         id: "research-recency-conflict",
         objective: "Verify time-sensitive claims use sufficiently current evidence and conflicting evidence is acknowledged/resolved rather than silently discarded.",
-        evidenceExpectation: "dated sources/evidence and explicit treatment of disagreements"
+        evidenceExpectation: "dated sources/evidence and explicit treatment of disagreements",
+        evidencePolicy: { anyOf: ["source-recency"] }
       }
     ],
     evidenceRequirements: [
@@ -246,12 +277,14 @@ const DEFAULT_PROFILES: VerificationProfile[] = [
       {
         id: "generic-requirement-coverage",
         objective: "Verify the artifact satisfies the WorkItem objective and local acceptance criteria.",
-        evidenceExpectation: "artifact content and requirement-scoped evidence"
+        evidenceExpectation: "artifact content and requirement-scoped evidence",
+        evidencePolicy: { anyOf: ["text-content", "file-integrity"] }
       },
       {
         id: "generic-content-quality",
         objective: "Verify internal consistency, material correctness and usability for the requested purpose.",
-        evidenceExpectation: "artifact-specific evidence"
+        evidenceExpectation: "artifact-specific evidence",
+        evidencePolicy: { anyOf: ["text-content", "file-integrity"] }
       }
     ],
     evidenceRequirements: [
@@ -327,7 +360,16 @@ function freezeProfile(profile: VerificationProfile): VerificationProfile {
     artifactTypes: [...profile.artifactTypes],
     mimeTypes: profile.mimeTypes ? [...profile.mimeTypes] : undefined,
     extensions: profile.extensions?.map(value => value.toLowerCase()),
-    checks: profile.checks.map(check => ({ ...check })),
+    checks: profile.checks.map(check => ({
+      ...check,
+      evidencePolicy: {
+        ...(check.evidencePolicy.anyOf ? { anyOf: [...check.evidencePolicy.anyOf] } : {}),
+        ...(check.evidencePolicy.allOf ? { allOf: [...check.evidencePolicy.allOf] } : {}),
+        ...(check.evidencePolicy.minimumSupportingRefs === undefined
+          ? {}
+          : { minimumSupportingRefs: check.evidencePolicy.minimumSupportingRefs })
+      }
+    })),
     evidenceRequirements: [...profile.evidenceRequirements],
     instructions: [...profile.instructions]
   };

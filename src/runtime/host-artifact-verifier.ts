@@ -1,23 +1,36 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import type { Artifact } from "../core/domain/artifact.ts";
-import type { GapAssessment, VerificationCheckResult, VerificationResult } from "../core/domain/verification.ts";
+import type {
+  Evidence,
+  GapAssessment,
+  VerificationCheckResult,
+  VerificationEvidenceKind,
+  VerificationResult
+} from "../core/domain/verification.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 import { projectMissionJournal } from "../core/mission/journal-view.ts";
 import type { MissionReadModelReader } from "../core/mission/mission-reader.ts";
+import type {
+  VerificationEvidenceCollection,
+  VerificationEvidenceCollectorRegistry
+} from "../core/verification/evidence-collector.ts";
 import {
   createDefaultVerificationProfileRegistry,
+  type VerificationEvidencePolicy,
   type VerificationProfile,
   type VerificationProfileRegistry
 } from "../core/verification/verification-profile.ts";
 import type { VerificationContext, Verifier } from "../core/verification/verifier.ts";
 import type { HostJsonTransport } from "./host-agent-json-transport.ts";
+import { createDefaultVerificationEvidenceCollectorRegistry } from "./verification-evidence-collectors.ts";
 
 export interface HostArtifactVerifierOptions {
   transport: HostJsonTransport;
   events: EventStore;
   reader?: MissionReadModelReader;
   profiles?: VerificationProfileRegistry;
+  evidenceCollectors?: VerificationEvidenceCollectorRegistry;
   maxInlineBytes?: number;
 }
 
@@ -32,12 +45,18 @@ interface NormalizedReview {
   gapAssessments: GapAssessment[];
 }
 
+interface RegisteredEvidence {
+  evidence: Evidence;
+  inspectionPayload?: unknown;
+}
+
 export class HostArtifactVerifier implements Verifier {
   readonly id = "host-artifact-verifier";
   private readonly transport: HostJsonTransport;
   private readonly events: EventStore;
   private readonly reader?: MissionReadModelReader;
   private readonly profiles: VerificationProfileRegistry;
+  private readonly evidenceCollectors: VerificationEvidenceCollectorRegistry;
   private readonly maxInlineBytes: number;
 
   constructor(options: HostArtifactVerifierOptions) {
@@ -45,6 +64,7 @@ export class HostArtifactVerifier implements Verifier {
     this.events = options.events;
     this.reader = options.reader;
     this.profiles = options.profiles ?? createDefaultVerificationProfileRegistry();
+    this.evidenceCollectors = options.evidenceCollectors ?? createDefaultVerificationEvidenceCollectorRegistry();
     this.maxInlineBytes = Math.max(1_024, options.maxInlineBytes ?? 64 * 1_024);
   }
 
@@ -90,6 +110,15 @@ export class HostArtifactVerifier implements Verifier {
       : projectMissionJournal(artifact.missionId, await this.events.list(artifact.missionId));
     const profileInlineLimit = Math.min(this.maxInlineBytes, profile.maxInlineBytes ?? this.maxInlineBytes);
     const inline = inlineArtifact(artifact, profileInlineLimit);
+    const collection = await this.evidenceCollectors.collect({
+      artifact,
+      profile,
+      maxInspectionBytes: profileInlineLimit
+    });
+    const registered = await this.registerEvidence(artifact, profile, context.state.revision, collection);
+    const evidenceById = new Map(registered.map(item => [item.evidence.id, item.evidence]));
+    const availability = profile.checks.map(check => checkEvidenceAvailability(check.evidencePolicy, evidenceById));
+
     const raw = await this.transport.request({
       missionId: artifact.missionId,
       operationId: `verify-${safeSegment(profile.kind)}-${safeSegment(artifact.id)}-${artifact.version}-${context.state.revision}`,
@@ -134,12 +163,25 @@ export class HostArtifactVerifier implements Verifier {
         deterministicEvidence: {
           checks: structural.checkResults,
           evidenceRefs: structural.evidenceRefs
-        }
+        },
+        runtimeEvidence: registered.map(item => ({
+          ...item.evidence,
+          ...(item.inspectionPayload === undefined ? {} : { inspectionPayload: item.inspectionPayload })
+        })),
+        evidenceAvailability: profile.checks.map((check, index) => ({
+          checkId: check.id,
+          policy: check.evidencePolicy,
+          ...availability[index]
+        })),
+        collectorFailures: collection.failures
       }
     });
 
     const normalized = normalizeReview(raw, new Set(context.gaps.map(gap => gap.id)));
-    const reviewed = enforceProfileCoverage(normalized, profile);
+    validateRuntimeEvidenceReferences(normalized, evidenceById);
+    const groundedGaps = enforceResolvedGapEvidence(normalized, evidenceById);
+    const covered = enforceProfileCoverage(groundedGaps, profile);
+    const reviewed = enforceProfileEvidence(covered, profile, evidenceById);
     if ((reviewed.overall === "pass" || reviewed.overall === "pass_with_warnings") &&
         reviewed.checkResults.some(check => check.status === "fail" || check.status === "inconclusive")) {
       throw new Error("Host verifier returned a passing overall status with failed/inconclusive checks");
@@ -149,15 +191,67 @@ export class HostArtifactVerifier implements Verifier {
       level: "mission",
       overall: reviewed.overall,
       checkResults: [...structural.checkResults, ...reviewed.checkResults],
-      evidenceRefs: unique([...structural.evidenceRefs, ...reviewed.evidenceRefs]),
+      evidenceRefs: unique([
+        ...structural.evidenceRefs,
+        ...registered.map(item => item.evidence.id),
+        ...reviewed.evidenceRefs
+      ]),
       gapAssessments: reviewed.gapAssessments
     });
+  }
+
+  private async registerEvidence(
+    artifact: Artifact,
+    profile: VerificationProfile,
+    missionRevision: number,
+    collection: VerificationEvidenceCollection
+  ): Promise<RegisteredEvidence[]> {
+    const registered: RegisteredEvidence[] = [];
+    const subjectRef = `${artifact.id}@${artifact.version}`;
+    for (const item of collection.collected) {
+      const draft = item.draft;
+      const token = createHash("sha256").update(stableJson({
+        subjectRef,
+        profileId: profile.id,
+        missionRevision,
+        collectorId: item.collectorId,
+        kind: draft.kind,
+        type: draft.type,
+        claim: draft.claim,
+        result: draft.result,
+        sourceRef: draft.sourceRef ?? null,
+        details: draft.details ?? null
+      })).digest("hex");
+      const evidence: Evidence = {
+        id: `evidence:${token.slice(0, 40)}`,
+        missionId: artifact.missionId,
+        subjectRef,
+        type: draft.type,
+        kind: draft.kind,
+        claim: draft.claim,
+        result: draft.result,
+        collectorId: item.collectorId,
+        ...(draft.sourceRef ? { sourceRef: draft.sourceRef } : {}),
+        producedBy: this.id,
+        ...(draft.details ? { details: structuredClone(draft.details) } : {}),
+        createdAt: new Date().toISOString()
+      };
+      const committed = await appendEvidence(this.events, evidence, `evidence-collected:${token}`);
+      registered.push({
+        evidence: committed,
+        ...(draft.inspectionPayload === undefined ? {} : { inspectionPayload: structuredClone(draft.inspectionPayload) })
+      });
+    }
+    return registered;
   }
 }
 
 function buildProfileInstruction(profile: VerificationProfile): string {
   const checks = profile.checks
-    .map(check => `${check.id}: ${check.objective} Evidence expectation: ${check.evidenceExpectation}`)
+    .map(check => {
+      const policy = evidencePolicyDescription(check.evidencePolicy);
+      return `${check.id}: ${check.objective} Evidence expectation: ${check.evidenceExpectation}. Runtime evidence policy: ${policy}.`;
+    })
     .join(" ");
   const evidence = profile.evidenceRequirements.join(" ");
   return [
@@ -166,10 +260,12 @@ function buildProfileInstruction(profile: VerificationProfile): string {
     ...profile.instructions,
     `Required profile checks: ${checks}`,
     `Profile evidence requirements: ${evidence}`,
-    "Do not trust producer completion claims. Use only supplied artifact/evidence plus inspection that is explicitly available to the verifier; never invent runtime, render, playback, test, source, or citation evidence.",
-    "Every required profile check id must appear exactly once in checkResults. When required evidence is unavailable, mark that check inconclusive instead of omitting it or guessing.",
+    "runtimeEvidence is the authoritative evidence registry for this review. Cite only runtimeEvidence[].id in checkResults/evidenceRefs/gapAssessments; never invent an evidence id and never cite a raw filename, hash, test claim, render claim, browser claim or producer claim as if it were registered Evidence.",
+    "deterministicEvidence contains structural file checks for context, but required profile evidence policies are satisfied only by supporting Runtime Evidence of the declared kinds.",
+    "Do not trust producer completion claims. Never infer that a render, browser interaction, playback, test, build, source validation or accessibility check occurred unless corresponding Runtime Evidence is supplied.",
+    "Every required profile check id must appear exactly once in checkResults. A pass, warning, or fail judgment for a required check must cite supporting Runtime Evidence that satisfies that check's evidence policy. When the required evidence is unavailable, mark the check inconclusive instead of guessing.",
     "Return JSON with overall:pass|pass_with_warnings|fail|inconclusive, checkResults:[{id,status:pass|fail|warning|inconclusive,detail?,evidenceRefs[]}], evidenceRefs:[], gapAssessments:[{gapId,status:resolved|still_open|inconclusive,evidenceRefs[],confidence,detail?}].",
-    "Assess only gaps explicitly supplied in input.gaps. A resolved assessment must cite concrete evidenceRefs.",
+    "Assess only gaps explicitly supplied in input.gaps. A resolved assessment must cite at least one supporting Runtime Evidence ref; inconclusive or contradictory Evidence cannot close a gap.",
     "A pass result must not contain failed or inconclusive checks."
   ].join(" ");
 }
@@ -259,6 +355,40 @@ function normalizeReview(raw: unknown, allowedGapIds: Set<string>): NormalizedRe
   };
 }
 
+function validateRuntimeEvidenceReferences(review: NormalizedReview, evidenceById: Map<string, Evidence>): void {
+  const validate = (refs: string[], owner: string) => {
+    const unknown = refs.filter(ref => !evidenceById.has(ref));
+    if (unknown.length > 0) {
+      throw new Error(`Host verifier referenced unregistered Runtime Evidence in ${owner}: ${unique(unknown).sort().join(", ")}`);
+    }
+  };
+  validate(review.evidenceRefs, "verification review.evidenceRefs");
+  for (const check of review.checkResults) validate(check.evidenceRefs, `check ${check.id}`);
+  for (const gap of review.gapAssessments) validate(gap.evidenceRefs, `gap ${gap.gapId}`);
+}
+
+function enforceResolvedGapEvidence(review: NormalizedReview, evidenceById: Map<string, Evidence>): NormalizedReview {
+  return {
+    ...review,
+    gapAssessments: review.gapAssessments.map(assessment => {
+      if (assessment.status !== "resolved") return assessment;
+      const supporting = assessment.evidenceRefs
+        .map(ref => evidenceById.get(ref))
+        .filter((evidence): evidence is Evidence => Boolean(evidence) && evidence!.result === "supports");
+      if (supporting.length > 0) return assessment;
+      return {
+        ...assessment,
+        status: "inconclusive" as const,
+        confidence: Math.min(assessment.confidence, 0.5),
+        detail: [
+          assessment.detail,
+          "Gap resolution was downgraded because none of the cited Runtime Evidence has result=supports."
+        ].filter(Boolean).join(" ")
+      };
+    })
+  };
+}
+
 function enforceProfileCoverage(review: NormalizedReview, profile: VerificationProfile): NormalizedReview {
   const requiredIds = new Set(profile.checks.map(check => check.id));
   const seen = new Set<string>();
@@ -276,7 +406,7 @@ function enforceProfileCoverage(review: NormalizedReview, profile: VerificationP
   if (missing.length === 0) return review;
   return {
     ...review,
-    overall: "inconclusive",
+    overall: review.overall === "fail" ? "fail" : "inconclusive",
     checkResults: [
       ...review.checkResults,
       ...missing.map(check => ({
@@ -287,6 +417,106 @@ function enforceProfileCoverage(review: NormalizedReview, profile: VerificationP
       }))
     ]
   };
+}
+
+function enforceProfileEvidence(
+  review: NormalizedReview,
+  profile: VerificationProfile,
+  evidenceById: Map<string, Evidence>
+): NormalizedReview {
+  const profileChecks = new Map(profile.checks.map(check => [check.id, check]));
+  let downgraded = false;
+  const checkResults = review.checkResults.map(check => {
+    const profileCheck = profileChecks.get(check.id);
+    if (!profileCheck || check.status === "inconclusive") return check;
+    const availability = checkEvidenceAvailability(profileCheck.evidencePolicy, evidenceById, check.evidenceRefs);
+    if (availability.satisfied) return check;
+    downgraded = true;
+    return {
+      ...check,
+      status: "inconclusive" as const,
+      detail: [
+        check.detail,
+        `Runtime Evidence policy not satisfied: ${availability.reason}. Expected ${profileCheck.evidenceExpectation}`
+      ].filter(Boolean).join(" "),
+      evidenceRefs: [...check.evidenceRefs]
+    };
+  });
+  const remainingFailure = checkResults.some(check => check.status === "fail");
+  return {
+    ...review,
+    overall: downgraded ? (remainingFailure ? "fail" : "inconclusive") : review.overall,
+    checkResults
+  };
+}
+
+function checkEvidenceAvailability(
+  policy: VerificationEvidencePolicy,
+  evidenceById: Map<string, Evidence>,
+  refs?: string[]
+): {
+  satisfied: boolean;
+  supportingRefs: string[];
+  supportingKinds: VerificationEvidenceKind[];
+  missingAllOf: VerificationEvidenceKind[];
+  anyOfSatisfied: boolean;
+  reason: string;
+} {
+  const scope = refs ? refs.map(ref => evidenceById.get(ref)).filter((item): item is Evidence => Boolean(item)) : [...evidenceById.values()];
+  const supporting = scope.filter(evidence => evidence.result === "supports");
+  const kinds = new Set(supporting.map(evidence => evidence.kind));
+  const allOf = policy.allOf ?? [];
+  const anyOf = policy.anyOf ?? [];
+  const missingAllOf = allOf.filter(kind => !kinds.has(kind));
+  const anyOfSatisfied = anyOf.length === 0 || anyOf.some(kind => kinds.has(kind));
+  const minimum = Math.max(0, policy.minimumSupportingRefs ?? (allOf.length === 0 && anyOf.length === 0 ? 0 : 1));
+  const countSatisfied = supporting.length >= minimum;
+  const satisfied = missingAllOf.length === 0 && anyOfSatisfied && countSatisfied;
+  const reason = satisfied
+    ? "required Runtime Evidence is present"
+    : [
+        missingAllOf.length > 0 ? `missing allOf kinds ${missingAllOf.join(", ")}` : "",
+        !anyOfSatisfied ? `none of anyOf kinds present (${anyOf.join(",")})` : "",
+        !countSatisfied ? `only ${supporting.length} supporting refs; minimum ${minimum}` : ""
+      ].filter(Boolean).join("; ");
+  return {
+    satisfied,
+    supportingRefs: supporting.map(evidence => evidence.id),
+    supportingKinds: [...kinds],
+    missingAllOf,
+    anyOfSatisfied,
+    reason
+  };
+}
+
+async function appendEvidence(events: EventStore, evidence: Evidence, idempotencyKey: string): Promise<Evidence> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const expected = await events.lastSequence(evidence.missionId);
+    try {
+      const committed = await events.append({
+        id: randomUUID(),
+        missionId: evidence.missionId,
+        type: "evidence.collected",
+        actor: { type: "verifier", id: evidence.producedBy },
+        payload: evidence,
+        idempotencyKey,
+        schemaVersion: 1,
+        createdAt: evidence.createdAt
+      }, expected);
+      return structuredClone(committed.payload as Evidence);
+    } catch (error) {
+      if (attempt === 4 || !(error instanceof Error) || !error.name.includes("Concurrency")) throw error;
+    }
+  }
+  throw new Error("Unreachable verification evidence append retry state");
+}
+
+function evidencePolicyDescription(policy: VerificationEvidencePolicy): string {
+  const parts: string[] = [];
+  if (policy.allOf?.length) parts.push(`allOf=[${policy.allOf.join(",")}]`);
+  if (policy.anyOf?.length) parts.push(`anyOf=[${policy.anyOf.join(",")}]`);
+  if (policy.minimumSupportingRefs !== undefined) parts.push(`minimumSupportingRefs=${policy.minimumSupportingRefs}`);
+  return parts.join(" ") || "no additional kind constraint";
 }
 
 function resultBase(
@@ -346,4 +576,10 @@ function unique(values: string[]): string[] { return [...new Set(values)]; }
 function safeSegment(value: string): string {
   const safe = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   return safe || "artifact";
+}
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const object = value as Record<string, unknown>;
+  return `{${Object.keys(object).sort().map(key => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(",")}}`;
 }

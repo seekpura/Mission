@@ -42,6 +42,7 @@ export type MissionEventType =
   | "artifact.invalidated"
   | "verification.started"
   | "verification.completed"
+  | "evidence.collected"
   | "finding.created"
   | "gap.opened"
   | "gap.resolved"

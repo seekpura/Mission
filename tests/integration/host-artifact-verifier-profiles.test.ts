@@ -5,8 +5,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Artifact } from "../../src/core/domain/artifact.ts";
+import type { MissionEvent } from "../../src/core/domain/event.ts";
 import type { MissionState } from "../../src/core/domain/mission.ts";
 import type { WorkItem } from "../../src/core/domain/work-item.ts";
+import type { EventStore } from "../../src/core/events/event-store.ts";
+import {
+  VerificationEvidenceCollectorRegistry,
+  type VerificationEvidenceCollector
+} from "../../src/core/verification/evidence-collector.ts";
 import { HostArtifactVerifier } from "../../src/runtime/host-artifact-verifier.ts";
 import type { HostJsonRequest, HostJsonTransport } from "../../src/runtime/host-agent-json-transport.ts";
 
@@ -72,12 +78,28 @@ function fixtureArtifact(root: string): Artifact {
   };
 }
 
-function fakeEvents() {
-  return {
-    async append() { throw new Error("not used"); },
-    async list() { throw new Error("event replay must not be used when reader is supplied"); },
-    async lastSequence() { return 0; }
-  } as any;
+class MemoryEvents implements EventStore {
+  readonly events: MissionEvent[] = [];
+
+  async append<T>(event: Omit<MissionEvent<T>, "sequence">, expectedSequence: number): Promise<MissionEvent<T>> {
+    const scoped = this.events.filter(item => item.missionId === event.missionId);
+    if (event.idempotencyKey) {
+      const duplicate = scoped.find(item => item.idempotencyKey === event.idempotencyKey);
+      if (duplicate) return duplicate as MissionEvent<T>;
+    }
+    assert.equal(scoped.length, expectedSequence);
+    const committed = { ...event, sequence: scoped.length + 1 } as MissionEvent<T>;
+    this.events.push(committed as MissionEvent);
+    return committed;
+  }
+
+  async list(missionId: string, afterSequence = 0): Promise<MissionEvent[]> {
+    return this.events.filter(event => event.missionId === missionId && event.sequence > afterSequence);
+  }
+
+  async lastSequence(missionId: string): Promise<number> {
+    return this.events.filter(event => event.missionId === missionId).length;
+  }
 }
 
 function fakeReader() {
@@ -102,27 +124,71 @@ class CapturingTransport implements HostJsonTransport {
   }
 }
 
-test("host verifier selects presentation profile and persists its profile id", async () => {
+function presentationEvidenceCollectors(includeRender = true): VerificationEvidenceCollectorRegistry {
+  const collector: VerificationEvidenceCollector = {
+    id: includeRender ? "fixture-presentation-full" : "fixture-presentation-package-only",
+    kinds: includeRender
+      ? ["file-integrity", "presentation-package", "presentation-render"]
+      : ["file-integrity", "presentation-package"],
+    supports: () => true,
+    collect: () => [
+      {
+        type: "file-validation",
+        kind: "file-integrity",
+        claim: "Fixture artifact bytes were validated by the test collector.",
+        result: "supports",
+        details: { fixture: true }
+      },
+      {
+        type: "source",
+        kind: "presentation-package",
+        claim: "Fixture presentation structure was inspected by the test collector.",
+        result: "supports",
+        details: { slideCount: 3 }
+      },
+      ...(includeRender ? [{
+        type: "render-inspection" as const,
+        kind: "presentation-render" as const,
+        claim: "Fixture rendered slides were visually inspected by the test collector.",
+        result: "supports" as const,
+        details: { renderedSlides: 3 },
+        inspectionPayload: { frames: ["slide-1", "slide-2", "slide-3"] }
+      }] : [])
+    ]
+  };
+  return new VerificationEvidenceCollectorRegistry([collector]);
+}
+
+function runtimeRefs(request: HostJsonRequest): string[] {
+  return ((request.input as any).runtimeEvidence ?? [])
+    .filter((evidence: any) => evidence.result === "supports")
+    .map((evidence: any) => evidence.id);
+}
+
+test("host verifier selects presentation profile, persists Runtime Evidence and can pass only with matching evidence kinds", async () => {
   const root = mkdtempSync(join(tmpdir(), "mission-verifier-profile-"));
   try {
     const artifact = fixtureArtifact(root);
+    const events = new MemoryEvents();
     const transport = new CapturingTransport(request => {
       const profile = (request.input as any).verificationProfile;
+      const evidenceRefs = runtimeRefs(request);
       return {
         overall: "pass",
         checkResults: profile.checks.map((check: any) => ({
           id: check.id,
           status: "pass",
-          evidenceRefs: [`review:${check.id}`]
+          evidenceRefs
         })),
-        evidenceRefs: ["review:presentation"],
+        evidenceRefs,
         gapAssessments: []
       };
     });
     const verifier = new HostArtifactVerifier({
       transport,
-      events: fakeEvents(),
-      reader: fakeReader()
+      events,
+      reader: fakeReader(),
+      evidenceCollectors: presentationEvidenceCollectors(true)
     });
 
     const result = await verifier.verify(artifact, { state, workItem, gaps: [] });
@@ -136,7 +202,10 @@ test("host verifier selects presentation profile and persists its profile id", a
       profile.checks.map((check: any) => check.id),
       ["presentation-structure", "presentation-visual-quality", "presentation-content-integrity", "presentation-delivery-integrity"]
     );
-    assert.match(transport.requests[0].instruction, /Every required profile check id must appear exactly once/);
+    assert.match(transport.requests[0].instruction, /runtimeEvidence is the authoritative evidence registry/);
+    const evidenceEvents = events.events.filter(event => event.type === "evidence.collected");
+    assert.equal(evidenceEvents.length, 3);
+    assert.ok(evidenceEvents.some(event => (event.payload as any).kind === "presentation-render"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -146,16 +215,21 @@ test("host verifier fail-closes omitted required profile checks as inconclusive"
   const root = mkdtempSync(join(tmpdir(), "mission-verifier-profile-"));
   try {
     const artifact = fixtureArtifact(root);
-    const transport = new CapturingTransport(() => ({
-      overall: "pass",
-      checkResults: [{ id: "presentation-structure", status: "pass", evidenceRefs: ["review:structure"] }],
-      evidenceRefs: ["review:structure"],
-      gapAssessments: []
-    }));
+    const events = new MemoryEvents();
+    const transport = new CapturingTransport(request => {
+      const evidenceRefs = runtimeRefs(request);
+      return {
+        overall: "pass",
+        checkResults: [{ id: "presentation-structure", status: "pass", evidenceRefs }],
+        evidenceRefs,
+        gapAssessments: []
+      };
+    });
     const verifier = new HostArtifactVerifier({
       transport,
-      events: fakeEvents(),
-      reader: fakeReader()
+      events,
+      reader: fakeReader(),
+      evidenceCollectors: presentationEvidenceCollectors(true)
     });
 
     const result = await verifier.verify(artifact, { state, workItem, gaps: [] });
@@ -163,6 +237,71 @@ test("host verifier fail-closes omitted required profile checks as inconclusive"
     assert.equal(result.verificationProfileId, "presentation-mission-review-v1");
     const missing = result.checkResults.filter(check => check.status === "inconclusive").map(check => check.id).sort();
     assert.deepEqual(missing, ["presentation-content-integrity", "presentation-delivery-integrity", "presentation-visual-quality"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("host verifier rejects fabricated evidence refs that were not registered by Runtime collectors", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mission-verifier-evidence-forge-"));
+  try {
+    const artifact = fixtureArtifact(root);
+    const verifier = new HostArtifactVerifier({
+      transport: new CapturingTransport(request => ({
+        overall: "pass",
+        checkResults: (request.input as any).verificationProfile.checks.map((check: any) => ({
+          id: check.id,
+          status: "pass",
+          evidenceRefs: ["evidence:forged-by-host"]
+        })),
+        evidenceRefs: ["evidence:forged-by-host"],
+        gapAssessments: []
+      })),
+      events: new MemoryEvents(),
+      reader: fakeReader(),
+      evidenceCollectors: presentationEvidenceCollectors(true)
+    });
+
+    await assert.rejects(
+      () => verifier.verify(artifact, { state, workItem, gaps: [] }),
+      /unregistered Runtime Evidence/
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("presentation visual check cannot pass without presentation-render Runtime Evidence", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mission-verifier-render-missing-"));
+  try {
+    const artifact = fixtureArtifact(root);
+    const transport = new CapturingTransport(request => {
+      const evidenceRefs = runtimeRefs(request);
+      return {
+        overall: "pass",
+        checkResults: (request.input as any).verificationProfile.checks.map((check: any) => ({
+          id: check.id,
+          status: "pass",
+          evidenceRefs
+        })),
+        evidenceRefs,
+        gapAssessments: []
+      };
+    });
+    const verifier = new HostArtifactVerifier({
+      transport,
+      events: new MemoryEvents(),
+      reader: fakeReader(),
+      evidenceCollectors: presentationEvidenceCollectors(false)
+    });
+
+    const result = await verifier.verify(artifact, { state, workItem, gaps: [] });
+    assert.equal(result.overall, "inconclusive");
+    const visual = result.checkResults.find(check => check.id === "presentation-visual-quality");
+    assert.equal(visual?.status, "inconclusive");
+    assert.match(visual?.detail ?? "", /presentation-render/);
+    assert.equal(result.checkResults.find(check => check.id === "presentation-structure")?.status, "pass");
+    assert.equal(result.checkResults.find(check => check.id === "presentation-delivery-integrity")?.status, "pass");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

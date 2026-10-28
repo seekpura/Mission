@@ -23,15 +23,45 @@ export interface Finding {
   createdAt: string;
 }
 
+/**
+ * Fine-grained evidence identity used by verification profiles. A verifier may
+ * reason over evidence, but it does not get to invent one of these kinds: the
+ * Runtime must have collected and durably registered the referenced Evidence.
+ */
+export type VerificationEvidenceKind =
+  | "file-integrity"
+  | "text-content"
+  | "presentation-package"
+  | "presentation-render"
+  | "website-source"
+  | "browser-runtime"
+  | "accessibility-check"
+  | "media-probe"
+  | "media-playback"
+  | "code-source"
+  | "executable-test"
+  | "build-check"
+  | "integration-test"
+  | "static-analysis"
+  | "source-traceability"
+  | "source-recency";
+
 export interface Evidence {
   id: string;
   missionId: string;
   subjectRef: string;
   type: "test-result" | "render-inspection" | "source" | "runtime-check" | "human-approval" | "automated-review" | "file-validation";
+  kind: VerificationEvidenceKind;
   claim: string;
   result: "supports" | "contradicts" | "inconclusive";
+  collectorId: string;
   sourceRef?: string;
   producedBy?: string;
+  /**
+   * Bounded structured observations only. Artifact bodies, credentials and
+   * opaque provider payloads must not be copied here merely for convenience.
+   */
+  details?: Record<string, unknown>;
   createdAt: string;
 }
 
