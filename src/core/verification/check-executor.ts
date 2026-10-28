@@ -3,6 +3,7 @@ import type { VerificationCheck, VerificationCheckResult } from "../domain/verif
 
 export interface VerificationCheckExecutorContext {
   missionId: string;
+  artifacts?: Artifact[];
 }
 
 export interface VerificationCheckExecutor {

@@ -45,6 +45,16 @@ export interface RequiredValidation {
   description: string;
   level?: "structural" | "functional" | "quality" | "integration" | "mission";
   requirementRefs: string[];
+  runtime?: {
+    command: string;
+    args?: string[];
+    timeoutMs?: number;
+    env?: Record<string, string>;
+  };
+  integration?: {
+    mode: "artifacts-present";
+    artifactLogicalNames: string[];
+  };
 }
 
 export interface AcceptanceContract {

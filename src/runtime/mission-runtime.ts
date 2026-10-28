@@ -18,6 +18,8 @@ import { VerificationPlanner } from "../core/verification/verification-planner.t
 import { VerifierRegistry } from "../core/verification/verifier-registry.ts";
 import { DeterministicFileCheckExecutor } from "../core/verification/deterministic-file-check-executor.ts";
 import { HostReviewCheckExecutor } from "../core/verification/host-review-check-executor.ts";
+import { RuntimeCommandCheckExecutor } from "../core/verification/runtime-command-check-executor.ts";
+import { IntegrationCheckExecutor } from "../core/verification/integration-check-executor.ts";
 import { ProfiledVerifier } from "../core/verification/profiled-verifier.ts";
 import { MissionOrchestrator } from "./orchestration/mission-orchestrator.ts";
 import { ArtifactAssurancePipeline } from "./orchestration/artifact-assurance-pipeline.ts";
@@ -73,7 +75,7 @@ export class MissionRuntime {
           approvalDecided: payload => this.controller.emit(payload.missionId, "approval.decided", payload, { type: "user" }, `approval-decision:${payload.id}`)
         }
       });
-      const registry = new VerifierRegistry([new DeterministicFileCheckExecutor(), new HostReviewCheckExecutor(options.host)]);
+      const registry = new VerifierRegistry([new DeterministicFileCheckExecutor(), new RuntimeCommandCheckExecutor(), new IntegrationCheckExecutor(), new HostReviewCheckExecutor(options.host)]);
       const verifier = new ProfiledVerifier(new VerificationPlanner(), registry);
       const assurance = new ArtifactAssurancePipeline({ controller: this.controller, projections: this.projections, artifacts: this.artifacts, verifier });
       this.executionRouter = executionRouter;

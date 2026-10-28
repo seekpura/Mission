@@ -36,14 +36,12 @@ export class AcceptanceEvaluator {
       .map(item => item.logicalName);
 
     const supportingEvidence = new Set(input.evidence.filter(e => e.result === "supports").map(e => e.id));
-    const passedVerificationIds = new Set(
-      input.verifications
-        .filter(v => v.overall === "pass" || v.overall === "pass_with_warnings")
-        .flatMap(v => [v.id, v.verificationProfileId, v.level])
-    );
     const missingValidations = contract.requiredValidations
       .filter(validation => {
-        if (passedVerificationIds.has(validation.id) || passedVerificationIds.has(validation.level ?? "")) return false;
+        const exactCheckPassed = input.verifications.some(result =>
+          result.checkResults.some(check => check.id === `validation-${validation.id}` && check.status === "pass")
+        );
+        if (exactCheckPassed) return false;
         return !requirements.some(req =>
           validation.requirementRefs.includes(req.id)
           && req.status === "satisfied"

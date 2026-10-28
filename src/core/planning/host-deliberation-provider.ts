@@ -29,11 +29,11 @@ Return ONLY JSON with this shape:
   "acceptanceContract": {
     "requirements":[{"id":string,"description":string,"type":"functional|content|visual|technical|evidence|experience|compliance","priority":"critical|required|preferred","verification":"artifact|test|review|evidence|runtime|human"}],
     "requiredArtifacts":[{"logicalName":string,"type":string,"description":string,"requirementRefs":string[]}],
-    "requiredValidations":[{"id":string,"description":string,"level":"structural|functional|quality|integration|mission","requirementRefs":string[]}],
+    "requiredValidations":[{"id":string,"description":string,"level":"structural|functional|quality|integration|mission","requirementRefs":string[],"runtime"?:{"command":string,"args":string[],"timeoutMs":number},"integration"?:{"mode":"artifacts-present","artifactLogicalNames":string[]}}],
     "criticalFailureConditions":string[]
   }
 }
-Create an acceptance contract that captures the actual end goal, not implementation steps. Critical/required requirements must be objectively checkable. Use stable short ids. Do not invent extra deliverables the user did not request.
+Create an acceptance contract that captures the actual end goal, not implementation steps. Critical/required requirements must be objectively checkable. Use stable short ids. Do not invent extra deliverables the user did not request. For functional/runtime validation, include runtime only when a concrete direct executable and argument vector can be stated; never use shell pipelines, redirection, or command strings containing multiple commands. For integration checks that only require presence of named artifacts, use integration.mode=artifacts-present.
 `);
     const now = new Date().toISOString();
     const rawSpec = value.missionSpec ?? {};
@@ -57,7 +57,9 @@ Create an acceptance contract that captures the actual end goal, not implementat
       id: stringValue(raw?.id, `validation-${index + 1}`),
       description: stringValue(raw?.description, `Validate mission output ${index + 1}`),
       level: validationLevel(raw?.level),
-      requirementRefs: stringArray(raw?.requirementRefs)
+      requirementRefs: stringArray(raw?.requirementRefs),
+      runtime: runtimeValidation(raw?.runtime),
+      integration: integrationValidation(raw?.integration)
     }));
     const missionSpec: MissionSpec = {
       missionId: input.missionId,
@@ -250,3 +252,18 @@ function validationLevel(value: unknown): RequiredValidation["level"] { const al
 function capabilityPurpose(value: unknown): CapabilityNeed["purpose"] { return ["production","verification","research","integration"].includes(String(value)) ? value as CapabilityNeed["purpose"] : "production"; }
 function capabilityUrgency(value: unknown): CapabilityNeed["urgency"] { return ["blocking","high-value","optional-improvement"].includes(String(value)) ? value as CapabilityNeed["urgency"] : "blocking"; }
 function capabilityRisk(value: unknown): CapabilityNeed["maxRisk"] { return ["low","medium","high"].includes(String(value)) ? value as CapabilityNeed["maxRisk"] : "medium"; }
+
+function runtimeValidation(value: unknown): RequiredValidation["runtime"] {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as any;
+  if (typeof raw.command !== "string" || !raw.command.trim()) return undefined;
+  if (/\n|\r|[;&|><`]/.test(raw.command)) return undefined;
+  return { command: raw.command.trim(), args: stringArray(raw.args), timeoutMs: typeof raw.timeoutMs === "number" ? Math.max(1000, Math.min(120000, raw.timeoutMs)) : undefined };
+}
+function integrationValidation(value: unknown): RequiredValidation["integration"] {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as any;
+  if (raw.mode !== "artifacts-present") return undefined;
+  const artifactLogicalNames = stringArray(raw.artifactLogicalNames);
+  return artifactLogicalNames.length > 0 ? { mode: "artifacts-present", artifactLogicalNames } : undefined;
+}
