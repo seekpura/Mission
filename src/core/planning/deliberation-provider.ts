@@ -1,7 +1,8 @@
-import type { CapabilityNeed } from "../domain/capability.ts";
+import type { Artifact } from "../domain/artifact.ts";
 import type { MissionState } from "../domain/mission.ts";
 import type { WorkItem } from "../domain/work-item.ts";
 import type { Gap } from "../domain/verification.ts";
+import type { CapabilityNeed } from "../domain/capability.ts";
 
 export interface StrategyProposal {
   framing: string;
@@ -29,9 +30,17 @@ export interface CompletionChallenge {
   confidence: number;
 }
 
+export interface DeliberationMissionContext {
+  state: MissionState;
+  userGoal: string;
+  workItems: WorkItem[];
+  artifacts: Artifact[];
+  openGaps: Gap[];
+}
+
 export interface DeliberationProvider {
   composeStrategy(input: { state: MissionState; userGoal: string }): Promise<StrategyProposal>;
-  planFrontier(input: { state: MissionState; openGaps: Gap[] }): Promise<FrontierProposal>;
-  diagnoseGap(input: { state: MissionState; gap: Gap }): Promise<GapDiagnosis>;
-  challengeCompletion(input: { state: MissionState }): Promise<CompletionChallenge>;
+  planFrontier(input: DeliberationMissionContext): Promise<FrontierProposal>;
+  diagnoseGap(input: DeliberationMissionContext & { gap: Gap }): Promise<GapDiagnosis>;
+  challengeCompletion(input: DeliberationMissionContext): Promise<CompletionChallenge>;
 }
