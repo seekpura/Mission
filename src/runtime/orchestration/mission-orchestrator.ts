@@ -13,6 +13,7 @@ import type { FileArtifactStore } from "../../execution/artifacts/artifact-store
 import type { Verifier } from "../../core/verification/verifier.ts";
 import type { WorkExecutionRouter, ExecutionRoute } from "./executor-router.ts";
 import type { InvocationReceipt } from "../../core/domain/invocation.ts";
+import { writeExecutionRecoveryManifest } from "../recovery/recovery-manifest.ts";
 
 export interface MissionOrchestratorOptions {
   maxConcurrency?: number;
@@ -45,6 +46,7 @@ export class MissionOrchestrator {
     contextCompiler?: ContextCompiler;
     capabilityCoordinator?: CapabilityCoordinator;
     executionRouter?: WorkExecutionRouter;
+    assurance?: ArtifactAssurancePipeline;
     options?: MissionOrchestratorOptions;
   }) {
     this.controller = input.controller;
@@ -58,7 +60,7 @@ export class MissionOrchestrator {
     this.maxCyclesPerWake = Math.max(1, input.options?.maxCyclesPerWake ?? 64);
     this.capabilityCoordinator = input.capabilityCoordinator;
     this.executionRouter = input.executionRouter;
-    this.assurance = new ArtifactAssurancePipeline({ controller: input.controller, projections: input.projections, artifacts: input.artifacts, verifier: input.verifier });
+    this.assurance = input.assurance ?? new ArtifactAssurancePipeline({ controller: input.controller, projections: input.projections, artifacts: input.artifacts, verifier: input.verifier });
   }
 
   wake(missionId: string): void {
@@ -165,6 +167,13 @@ export class MissionOrchestrator {
         await this.hostBackend.start(handle);
         result = await this.hostBackend.collect(handle);
       }
+      const envelope = parseWorkerOutput(result.runtimeObservationRef);
+      writeExecutionRecoveryManifest(workspace.root, {
+        schemaVersion: 1, missionId: work.missionId, workItemId: work.id, attemptId, executionId,
+        route: selectedRoute.kind, routeReason: selectedRoute.reason, capabilityRefs: capabilities.map(capability => capability.id),
+        targetRef: selectedRoute.capability?.id, approvalRef, result: result.state, sideEffects: result.sideEffects, envelope,
+        startedAt: result.startedAt, endedAt: result.endedAt, writtenAt: new Date().toISOString()
+      });
       const receipt: InvocationReceipt = {
         id: `invocation-${executionId}`,
         missionId: work.missionId, workItemId: work.id, attemptId, executionId,
@@ -180,7 +189,6 @@ export class MissionOrchestrator {
         await this.controller.emit(work.missionId, "work.updated", { id: work.id, status: "waiting", reason: "Execution cancelled; awaiting reschedule or user direction" }, { type: "controller" }, `work-cancelled:${work.id}:${attemptId}`);
         return;
       }
-      const envelope = parseWorkerOutput(result.runtimeObservationRef);
       if (result.state !== "succeeded" || envelope?.status === "failed") {
         await this.failWork(work, attemptId, envelope?.summary ?? `Host execution ended as ${result.state}`);
         return;

@@ -1,0 +1,44 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { MissionRuntime } from "../../src/runtime/mission-runtime.ts";
+import { FakeHostAdapter } from "../../src/hosts/fake/fake-host-adapter.ts";
+import { WORKER_RECOVERY_FILE } from "../../src/core/execution/worker-output.ts";
+
+ test("runtime recovers verified workspace output instead of blindly retrying a lost execution", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mission-observed-recovery-"));
+  const missionId = "observed-recovery";
+  const attemptId = "attempt-recoverable";
+  const executionId = "execution-recoverable";
+  const first = new MissionRuntime({ rootDir: root, host: new FakeHostAdapter() });
+  await first.controller.createMission(missionId, "recover already completed output");
+  const now = new Date().toISOString();
+  await first.controller.proposeWork({ id: "work-recoverable", missionId, purpose: "production", objective: "produce report", status: "ready", requirementRefs: ["req-report"], gapRefs: [], inputArtifactRefs: [], expectedOutputs: [{ logicalName: "report", type: "document", required: true }], localAcceptanceCriteria: [], capabilityNeedRefs: [], priority: 1, graphRevision: 1, createdBy: "planner", createdAt: now, updatedAt: now });
+  await first.controller.emit(missionId, "work.started", { id: "work-recoverable" }, { type: "controller" }, "work-start-recoverable");
+  await first.controller.emit(missionId, "attempt.created", { id: attemptId, workItemId: "work-recoverable", executorId: "host_agent", contextPacketId: "ctx" }, { type: "controller" }, `attempt:${attemptId}`);
+  await first.controller.emit(missionId, "execution.created", { id: executionId, workItemId: "work-recoverable", attemptId }, { type: "controller" }, `execution-created:${executionId}`);
+  await first.controller.emit(missionId, "execution.route.selected", { executionId, workItemId: "work-recoverable", attemptId, route: "host_agent", reason: "test recovery", capabilityRefs: [] }, { type: "controller" }, `execution-route:${executionId}`);
+  await first.controller.emit(missionId, "execution.started", { id: executionId }, { type: "host" }, `execution-started:${executionId}`);
+  const workspace = first.workspaces.allocate(missionId, attemptId);
+  writeFileSync(join(workspace.root, "report.md"), "# completed before crash\n", "utf8");
+  writeFileSync(join(workspace.root, WORKER_RECOVERY_FILE), JSON.stringify({ status: "completed", summary: "report was already completed", outputs: [{ path: "report.md", logicalName: "report", type: "document", requirementRefs: [] }], proposedFacts: [], proposedWork: [], warnings: [] }), "utf8");
+  first.close();
+
+  const recoveredRuntime = new MissionRuntime({ rootDir: root, host: new FakeHostAdapter() });
+  const summary = await recoveredRuntime.recoverMission(missionId);
+  assert.deepEqual(summary.recovered, [executionId]);
+  assert.deepEqual(summary.lost, []);
+  const state = await recoveredRuntime.controller.state(missionId);
+  assert.equal(state.activeExecutionIds.includes(executionId), false);
+  const artifacts = await recoveredRuntime.projections.listArtifacts(missionId);
+  assert.equal(artifacts.some(artifact => artifact.logicalName === "report"), true);
+  const work = (await recoveredRuntime.projections.listWorkItems(missionId)).find(item => item.id === "work-recoverable");
+  assert.equal(work?.status, "succeeded");
+  const gaps = await recoveredRuntime.projections.listGaps(missionId);
+  assert.equal(gaps.some(gap => gap.id === `recovery-${executionId}`), false);
+  const receipts = await recoveredRuntime.projections.listInvocationReceipts(missionId);
+  assert.equal(receipts.some(receipt => receipt.executionId === executionId && receipt.result === "succeeded"), true);
+  recoveredRuntime.close();
+});
