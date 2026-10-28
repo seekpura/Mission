@@ -70,6 +70,7 @@ interface GapEvidenceAggregate {
   details: string[];
 }
 
+const MAX_STEERING_CHARS = 64 * 1024;
 const SUPERSEDABLE_WORK_STATUSES = new Set<WorkItem["status"]>([
   "blocked",
   "failed",
@@ -151,7 +152,12 @@ export class MissionController {
   }
 
   async steer(missionId: string, message: string) {
-    await this.emit(missionId, "user.steering.received", { message }, { type: "user" });
+    const normalized = message.trim();
+    if (!normalized) throw new Error("User steering message must be non-empty");
+    if (normalized.length > MAX_STEERING_CHARS) {
+      throw new Error(`User steering exceeds ${MAX_STEERING_CHARS} characters`);
+    }
+    await this.emit(missionId, "user.steering.received", { message: normalized }, { type: "user" });
     return this.state(missionId);
   }
 
@@ -230,6 +236,7 @@ export class MissionController {
 
     this.capabilities?.restoreMissionCapabilities(input.missionId, view.journal.capabilities.values());
     view = await this.applyPendingWorkSupersessions(input.missionId, view);
+    if (this.deliberation) view = await this.applyPendingSteeringStrategy(input.missionId, view);
 
     if (view.state.activeExecutionIds.length > 0) {
       const recovery = await this.recoverActiveExecutions(input.missionId, view);
@@ -239,15 +246,6 @@ export class MissionController {
     }
 
     if (this.deliberation) {
-      if (view.state.strategyRevision === null) {
-        const proposal = await this.deliberation.composeStrategy({
-          state: view.state,
-          userGoal: view.journal.userGoal
-        });
-        await this.persistStrategy(input.missionId, view.state, proposal, "created");
-        view = await this.cycleView(input.missionId);
-      }
-
       const gapsBeforePlanning = openGaps(view.journal);
       for (const gap of gapsBeforePlanning) {
         if (hasNonTerminalWorkForGap(view.journal, gap.id)) continue;
@@ -261,12 +259,16 @@ export class MissionController {
         decisionsCreated.push(decisionId);
 
         if (diagnosis.intervention === "revise_strategy") {
-          const proposal = await this.deliberation.composeStrategy({
-            state: await this.state(input.missionId),
-            userGoal: view.journal.userGoal
-          });
-          const current = await this.state(input.missionId);
-          await this.persistStrategy(input.missionId, current, proposal, "revised", decisionId);
+          const strategyView = await this.cycleView(input.missionId);
+          const proposal = await this.composeStrategyForView(input.missionId, strategyView);
+          await this.persistStrategy(
+            input.missionId,
+            strategyView.state,
+            proposal,
+            "revised",
+            decisionId,
+            strategyView.state.strategyAppliedSteeringSequence ?? 0
+          );
         }
 
         await this.emit(
@@ -416,6 +418,71 @@ export class MissionController {
   async state(missionId: string) {
     if (this.reader) return this.reader.state(missionId);
     return projectMissionState(missionId, await this.store.list(missionId));
+  }
+
+  private async applyPendingSteeringStrategy(missionId: string, initialView: CycleView): Promise<CycleView> {
+    const latestSteeringSequence = initialView.journal.steeringMessages.at(-1)?.sequence ?? 0;
+    const appliedSteeringSequence = initialView.state.strategyAppliedSteeringSequence ?? 0;
+    const strategyMissing = initialView.state.strategyRevision === null;
+    if (!strategyMissing && latestSteeringSequence <= appliedSteeringSequence) return initialView;
+
+    let view = initialView;
+    if (latestSteeringSequence > appliedSteeringSequence) {
+      for (const workId of [...view.state.readyWorkItemIds]) {
+        await this.emit(
+          missionId,
+          "work.invalidated",
+          {
+            id: workId,
+            reason: `Invalidated before execution because user steering ${latestSteeringSequence} has not yet been incorporated into strategy.`,
+            steeringSequence: latestSteeringSequence
+          },
+          { type: "controller" },
+          `work-invalidated:steering:${workId}:${latestSteeringSequence}`
+        );
+      }
+      if (view.state.readyWorkItemIds.length > 0) view = await this.cycleView(missionId);
+    }
+
+    const proposal = await this.composeStrategyForView(missionId, view);
+    const mode = view.state.strategyRevision === null ? "created" : "revised";
+    const causeRef = latestSteeringSequence > appliedSteeringSequence
+      ? `user-steering:${latestSteeringSequence}`
+      : undefined;
+    await this.persistStrategy(
+      missionId,
+      view.state,
+      proposal,
+      mode,
+      causeRef,
+      latestSteeringSequence
+    );
+    return this.cycleView(missionId);
+  }
+
+  private async composeStrategyForView(missionId: string, view: CycleView): Promise<StrategyProposal> {
+    const currentStrategy = await this.currentStrategy(missionId);
+    return this.deliberation!.composeStrategy({
+      state: view.state,
+      userGoal: view.journal.userGoal,
+      steeringMessages: view.journal.steeringMessages,
+      ...(currentStrategy ? { currentStrategy } : {})
+    });
+  }
+
+  private async currentStrategy(missionId: string): Promise<StrategyProposal | undefined> {
+    if (this.reader) return this.reader.latestStrategy(missionId);
+    const events = await this.store.list(missionId);
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index]!;
+      if (event.type !== "strategy.created" && event.type !== "strategy.revised") continue;
+      if (!event.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) continue;
+      const payload = event.payload as Partial<StrategyProposal>;
+      if (typeof payload.framing !== "string" || typeof payload.approach !== "string" ||
+          !Array.isArray(payload.workstreams) || typeof payload.revision !== "number") continue;
+      return structuredClone(payload as StrategyProposal);
+    }
+    return undefined;
   }
 
   private async applyPendingWorkSupersessions(missionId: string, initialView: CycleView): Promise<CycleView> {
@@ -1078,15 +1145,22 @@ export class MissionController {
     state: MissionState,
     proposal: StrategyProposal,
     mode: "created" | "revised",
-    causeRef?: string
+    causeRef?: string,
+    appliedSteeringSequence = state.strategyAppliedSteeringSequence ?? 0
   ): Promise<void> {
     const revision = mode === "created"
       ? Math.max(1, proposal.revision)
       : Math.max((state.strategyRevision ?? 0) + 1, proposal.revision);
+    const steeringCheckpoint = Math.max(state.strategyAppliedSteeringSequence ?? 0, appliedSteeringSequence);
     await this.emit(
       missionId,
       mode === "created" ? "strategy.created" : "strategy.revised",
-      { ...proposal, revision, ...(causeRef ? { causeRef } : {}) },
+      {
+        ...proposal,
+        revision,
+        appliedSteeringSequence: steeringCheckpoint,
+        ...(causeRef ? { causeRef } : {})
+      },
       { type: "planner" },
       `${mode === "created" ? "strategy-created" : "strategy-revised"}:${missionId}:${revision}:${causeRef ?? "initial"}`
     );
