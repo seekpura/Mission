@@ -46,6 +46,7 @@ export type MissionEventType =
   | "gap.accepted"
   | "decision.created"
   | "decision.applied"
+  | "progress.observed"
   | "capability.need.created"
   | "capability.need.updated"
   | "capability.candidate.discovered"

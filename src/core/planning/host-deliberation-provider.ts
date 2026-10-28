@@ -232,6 +232,8 @@ Findings: ${JSON.stringify(input.findings ?? [])}
 Evidence: ${JSON.stringify(input.evidence ?? [])}
 Related work items: ${JSON.stringify(input.relatedWorkItems ?? [])}
 Prior repair count: ${input.priorRepairCount ?? 0}
+Progress / plateau context: ${JSON.stringify(input.plateauContext ?? null)}
+If progress has stalled, consider a broader intervention than the already-attempted scopes, but only when the supplied findings/evidence support that root cause.
 Generate competing root-cause hypotheses before choosing a repair scope. Prefer the minimum sufficient repair. A repeated semantic failure must not be treated as the same transient attempt retry. Do not claim a root cause unsupported by the supplied findings/evidence.
 Return ONLY JSON: {"gapId":string,"rootCause":string,"hypotheses":[{"statement":string,"confidence":number,"findingRefs":string[],"evidenceRefs":string[]}],"repairScope":"attempt|work_item|executor|capability|graph|strategy","intervention":"retry|revise_work|replace_executor|replace_capability|replan_local|revise_strategy","confidence":number,"evidenceRefs":string[],"rootCauseKeyCandidate":string|null}.
 `);
