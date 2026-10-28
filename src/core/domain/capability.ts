@@ -26,6 +26,23 @@ export interface CapabilityCostProfile {
   metered?: boolean;
 }
 
+export interface CapabilityNativeSemantics {
+  provider?: string;
+  nativeId?: string;
+  protocol?: string;
+  loadMode?: "preinstalled" | "dynamic" | "mission-overlay" | "remote" | "unknown";
+  approvalModes?: Array<"none" | "once" | "mission" | "revision" | "host" | "provider-native">;
+  features?: string[];
+  persistence?: Array<"session" | "resume" | "recovery" | "background-job" | "durable-state">;
+}
+
+export interface CapabilityProvenance {
+  source: "host" | "mission" | "trusted-cache" | "external";
+  sourceRef?: string;
+  revision?: string;
+  contentHash?: string;
+}
+
 export interface CapabilityDescriptor {
   id: string;
   kind: CapabilityKind;
@@ -46,6 +63,9 @@ export interface CapabilityDescriptor {
   constraints?: CapabilityConstraints;
   routing?: CapabilityRouting;
   cost?: CapabilityCostProfile;
+  /** Provider-native identity and behavior that Mission must preserve instead of flattening across harnesses. */
+  native?: CapabilityNativeSemantics;
+  provenance?: CapabilityProvenance;
 }
 
 export interface CapabilityNeed {
