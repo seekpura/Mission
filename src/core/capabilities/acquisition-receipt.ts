@@ -8,6 +8,7 @@ export type AcquisitionReceiptStatus =
   | "rejected"
   | "approval_rejected"
   | "smoke_failed"
+  | "activation_failed"
   | "activated";
 
 export interface AcquisitionReceipt {
