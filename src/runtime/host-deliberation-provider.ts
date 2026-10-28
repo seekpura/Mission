@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Artifact } from "../core/domain/artifact.ts";
 import type { CapabilityDescriptor, CapabilityNeed, RiskLevel } from "../core/domain/capability.ts";
-import type { MissionState } from "../core/domain/mission.ts";
+import type { MissionState, MissionSteeringMessage } from "../core/domain/mission.ts";
 import type { ArtifactExpectation, LocalAcceptanceCriterion, WorkItem, WorkPurpose } from "../core/domain/work-item.ts";
 import type { Gap } from "../core/domain/verification.ts";
 import { buildHostCapabilityGraph, type HostCapabilityGraph } from "../core/capabilities/capability-graph.ts";
@@ -32,6 +32,7 @@ export interface HostDeliberationProviderOptions {
 interface DurablePlannerContext {
   missionId: string;
   userGoal: string;
+  steeringMessages: MissionSteeringMessage[];
   strategy?: StrategyProposal;
   capabilityNeeds: CapabilityNeed[];
   capabilities: CapabilityDescriptor[];
@@ -75,18 +76,28 @@ export class HostDeliberationProvider implements DeliberationProvider {
     }
   }
 
-  async composeStrategy(input: { state: MissionState; userGoal: string }): Promise<StrategyProposal> {
+  async composeStrategy(input: {
+    state: MissionState;
+    userGoal: string;
+    steeringMessages?: MissionSteeringMessage[];
+    currentStrategy?: StrategyProposal;
+  }): Promise<StrategyProposal> {
+    const steeringMessages = input.steeringMessages ?? [];
     const raw = await this.transport.request({
       missionId: input.state.missionId,
       operationId: `strategy-${input.state.revision}`,
       instruction: [
-        "Create the current Mission strategy, not a complete task list.",
-        "Preserve the user's final goal. Choose a progressive approach that can adapt after execution and verification evidence.",
+        "Create or revise the current Mission strategy, not a complete task list.",
+        "Preserve the user's final goal and hard constraints. Durable user steering is authoritative for subsequent choices and should revise the current strategy when applicable.",
+        "When steering conflicts with an earlier soft preference or style choice, prefer the newer steering; do not silently discard open gaps or verified facts.",
+        "Choose a progressive approach that can adapt after execution and verification evidence.",
         "Return JSON with: framing:string, approach:string, workstreams:[{id?:string, objective:string}], revision:number.",
-        "Do not claim work is complete and do not include execution instructions outside the JSON schema."
+        "Do not claim work is complete, do not invent steering, and do not include execution instructions outside the JSON schema."
       ].join(" "),
       input: {
         userGoal: input.userGoal,
+        currentStrategy: input.currentStrategy,
+        steeringMessages,
         state: compactState(input.state)
       }
     });
@@ -114,14 +125,15 @@ export class HostDeliberationProvider implements DeliberationProvider {
       operationId: `frontier-${input.state.revision}`,
       instruction: [
         "Plan only the next executable Mission frontier. Do not expand the entire mission into a fixed plan.",
-        "Use existing evidence, completed/failed work and open gaps. Repair blocking gaps before unrelated expansion when appropriate.",
+        "Use the latest durable user steering, existing evidence, completed/failed work and open gaps. Repair blocking gaps before unrelated expansion when appropriate.",
         "Use hostCapabilityGraph as the source of truth for currently available capability semantics, constraints, permissions, routing, cost and provider-native behavior.",
         "Prefer an already-available compatible capability when its graph constraints are satisfied. Create a CapabilityNeed only when required semantics are missing or materially inadequate; do not infer capability behavior from a name alone.",
+        "When a new WorkItem intentionally replaces obsolete blocked/failed/invalidated/abandoned Work, declare supersedesWorkItemRefs with the exact existing Work ids. Do not use it to erase successful Work history.",
         `Valid executor ids are: ${[...this.knownExecutorIds].join(", ")}.`,
         this.defaultExecutorId ? `If no special route is needed, assignedExecutorId may be omitted and Runtime will use ${this.defaultExecutorId}.` : "Every executable work item must name assignedExecutorId.",
         "Return JSON with graphRevision:number, capabilityNeeds:array, workItems:array.",
         "Each capability need may contain id?, objective, requiredFunctions[], desiredInputs[], desiredOutputs[], purpose, urgency, acquisitionAllowed, maxRisk, requirementRefs[], gapRefs[].",
-        "Each work item may contain id?, workstreamId?, parentWorkItemId?, purpose, objective, requirementRefs[], gapRefs[], inputArtifactRefs[], expectedOutputs:[{logicalName,type,required}], localAcceptanceCriteria:[{id?,description,priority}], capabilityNeedRefs[], assignedExecutorId?, priority.",
+        "Each work item may contain id?, workstreamId?, parentWorkItemId?, purpose, objective, requirementRefs[], gapRefs[], inputArtifactRefs[], expectedOutputs:[{logicalName,type,required}], localAcceptanceCriteria:[{id?,description,priority}], capabilityNeedRefs[], supersedesWorkItemRefs[], assignedExecutorId?, priority.",
         "Do not set missionId, status, graphRevision, createdBy or timestamps; Runtime owns those fields."
       ].join(" "),
       input: {
@@ -154,6 +166,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
     ]);
     const knownGapIds = new Set(context.openGaps.map(gap => gap.id));
     const knownArtifactRefs = new Set(context.artifacts.map(artifact => `${artifact.id}@${artifact.version}`));
+    const knownWorkIds = new Set(context.workItems.map(work => work.id));
     const now = new Date().toISOString();
     const createdBy: WorkItem["createdBy"] = input.openGaps.length > 0 ? "replanner" : "planner";
     const workItems = workValues.map((value, index) => this.normalizeWorkItem({
@@ -165,7 +178,8 @@ export class HostDeliberationProvider implements DeliberationProvider {
       createdBy,
       knownNeedIds,
       knownGapIds,
-      knownArtifactRefs
+      knownArtifactRefs,
+      knownWorkIds
     }));
     assertUnique(workItems.map(work => work.id), "work item id");
 
@@ -179,7 +193,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
       missionId: input.state.missionId,
       operationId: `gap-${safeSegment(input.gap.id)}-${input.state.revision}`,
       instruction: [
-        "Diagnose the supplied open gap from Mission evidence and choose one intervention.",
+        "Diagnose the supplied open gap from Mission evidence and the latest durable user steering, then choose one intervention.",
         "Allowed interventions: retry, revise_work, replace_capability, replan_local, revise_strategy.",
         "When the gap may involve capability mismatch or absence, use hostCapabilityGraph semantics and constraints rather than capability names.",
         "Return JSON with gapId, rootCause, intervention, confidence (0..1).",
@@ -211,7 +225,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
       operationId: `completion-${input.state.revision}`,
       instruction: [
         "Act as an adversarial independent completion challenger.",
-        "The Mission may complete only when the user goal is supported by final artifacts and there is no remaining material objection.",
+        "The Mission may complete only when the user goal plus latest durable steering are supported by final artifacts and there is no remaining material objection.",
         "Do not treat producer claims or work-completed events as proof by themselves.",
         "Return JSON with blockingObjection:boolean, objections:[{description, requirementRefs[], artifactRefs[], severity:blocking|non_blocking}], confidence:0..1.",
         "If evidence is insufficient, raise a blocking objection describing the missing evidence."
@@ -255,6 +269,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
       return {
         missionId,
         userGoal: journal.userGoal,
+        steeringMessages: journal.steeringMessages,
         ...(strategy ? { strategy } : {}),
         capabilityNeeds: [...journal.capabilityNeeds.values()],
         capabilities: [...journal.capabilities.values()],
@@ -282,12 +297,16 @@ export class HostDeliberationProvider implements DeliberationProvider {
             objective: nonEmptyString(item.objective, `strategy event workstreams[${index}].objective`)
           };
         }),
-        revision: payload.revision
+        revision: payload.revision,
+        ...(typeof payload.appliedSteeringSequence === "number" && Number.isInteger(payload.appliedSteeringSequence)
+          ? { appliedSteeringSequence: payload.appliedSteeringSequence }
+          : {})
       };
     }
     return {
       missionId,
       userGoal: journal.userGoal,
+      steeringMessages: journal.steeringMessages,
       ...(strategy ? { strategy } : {}),
       capabilityNeeds: [...journal.capabilityNeeds.values()],
       capabilities: [...journal.capabilities.values()],
@@ -351,8 +370,10 @@ export class HostDeliberationProvider implements DeliberationProvider {
     knownNeedIds: Set<string>;
     knownGapIds: Set<string>;
     knownArtifactRefs: Set<string>;
+    knownWorkIds: Set<string>;
   }): WorkItem {
     const object = objectValue(input.value, input.path);
+    const id = optionalNonEmptyString(object.id) ?? `work:${randomUUID()}`;
     const purpose = nonEmptyString(object.purpose, `${input.path}.purpose`) as WorkPurpose;
     if (!WORK_PURPOSES.has(purpose)) throw new Error(`Unsupported work purpose at ${input.path}: ${purpose}`);
     const gapRefs = stringArray(object.gapRefs ?? [], `${input.path}.gapRefs`);
@@ -361,6 +382,11 @@ export class HostDeliberationProvider implements DeliberationProvider {
     for (const ref of inputArtifactRefs) if (!input.knownArtifactRefs.has(ref)) throw new Error(`Unknown artifact ref ${ref} at ${input.path}`);
     const capabilityNeedRefs = stringArray(object.capabilityNeedRefs ?? [], `${input.path}.capabilityNeedRefs`);
     for (const ref of capabilityNeedRefs) if (!input.knownNeedIds.has(ref)) throw new Error(`Unknown capability need ref ${ref} at ${input.path}`);
+    const supersedesWorkItemRefs = stringArray(object.supersedesWorkItemRefs ?? [], `${input.path}.supersedesWorkItemRefs`);
+    for (const ref of supersedesWorkItemRefs) {
+      if (ref === id) throw new Error(`Planner work ${id} cannot supersede itself at ${input.path}`);
+      if (!input.knownWorkIds.has(ref)) throw new Error(`Unknown superseded WorkItem ${ref} at ${input.path}`);
+    }
     const assignedExecutorId = optionalNonEmptyString(object.assignedExecutorId) ?? this.defaultExecutorId;
     if (!assignedExecutorId && this.knownExecutorIds.size > 1) {
       throw new Error(`Planner work ${input.path} omitted assignedExecutorId with multiple routes available`);
@@ -369,11 +395,11 @@ export class HostDeliberationProvider implements DeliberationProvider {
       throw new Error(`Planner selected unknown executor ${assignedExecutorId} at ${input.path}`);
     }
     const requirementRefs = stringArray(object.requirementRefs ?? [], `${input.path}.requirementRefs`);
-    if (purpose !== "exploration" && requirementRefs.length === 0 && gapRefs.length === 0 && inputArtifactRefs.length === 0 && capabilityNeedRefs.length === 0) {
+    if (purpose !== "exploration" && requirementRefs.length === 0 && gapRefs.length === 0 && inputArtifactRefs.length === 0 && capabilityNeedRefs.length === 0 && supersedesWorkItemRefs.length === 0) {
       throw new Error(`Planner produced orphan work at ${input.path}`);
     }
     return {
-      id: optionalNonEmptyString(object.id) ?? `work:${randomUUID()}`,
+      id,
       missionId: input.missionId,
       ...(optionalNonEmptyString(object.workstreamId) ? { workstreamId: optionalNonEmptyString(object.workstreamId) } : {}),
       ...(optionalNonEmptyString(object.parentWorkItemId) ? { parentWorkItemId: optionalNonEmptyString(object.parentWorkItemId) } : {}),
@@ -386,6 +412,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
       expectedOutputs: normalizeExpectedOutputs(object.expectedOutputs ?? [], `${input.path}.expectedOutputs`),
       localAcceptanceCriteria: normalizeAcceptance(object.localAcceptanceCriteria ?? [], `${input.path}.localAcceptanceCriteria`),
       capabilityNeedRefs,
+      ...(supersedesWorkItemRefs.length > 0 ? { supersedesWorkItemRefs } : {}),
       ...(assignedExecutorId ? { assignedExecutorId } : {}),
       priority: finiteNumber(object.priority ?? 0, `${input.path}.priority`),
       graphRevision: input.graphRevision,
@@ -400,6 +427,7 @@ function plannerContext(context: DurablePlannerContext, state: MissionState) {
   return {
     missionId: context.missionId,
     userGoal: context.userGoal,
+    steeringMessages: context.steeringMessages,
     strategy: context.strategy,
     capabilityNeeds: context.capabilityNeeds,
     state: compactState(state),
@@ -450,6 +478,7 @@ function compactState(state: MissionState) {
     missionSpecRevision: state.missionSpecRevision,
     acceptanceRevision: state.acceptanceRevision,
     strategyRevision: state.strategyRevision,
+    strategyAppliedSteeringSequence: state.strategyAppliedSteeringSequence ?? 0,
     graphRevision: state.graphRevision,
     readyWorkItemIds: state.readyWorkItemIds,
     activeWorkItemIds: state.activeWorkItemIds,
