@@ -1,13 +1,16 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { Artifact } from "../../core/domain/artifact.ts";
+import type { InspectionOutcome } from "../../core/domain/inspection.ts";
 import type { Evidence, Finding, VerificationResult } from "../../core/domain/verification.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
 import type { MissionController } from "../../core/mission/controller.ts";
 import type { MissionProjectionReader } from "../../core/events/projection-store.ts";
 import type { WorkerOutputEnvelope } from "../../core/execution/worker-output.ts";
+import { InspectionPlanner } from "../../core/inspection/inspection-planner.ts";
 import type { FileArtifactStore } from "../../execution/artifacts/artifact-store.ts";
 import type { Verifier } from "../../core/verification/verifier.ts";
+import type { ArtifactInspectionService } from "./artifact-inspection-service.ts";
 
 export interface ArtifactPipelineResult {
   ok: boolean;
@@ -20,17 +23,21 @@ export class ArtifactAssurancePipeline {
   private readonly projections: MissionProjectionReader;
   private readonly artifacts: FileArtifactStore;
   private readonly verifier: Verifier;
+  private readonly inspectionService?: ArtifactInspectionService;
+  private readonly inspectionPlanner = new InspectionPlanner();
 
   constructor(input: {
     controller: MissionController;
     projections: MissionProjectionReader;
     artifacts: FileArtifactStore;
     verifier: Verifier;
+    inspectionService?: ArtifactInspectionService;
   }) {
     this.controller = input.controller;
     this.projections = input.projections;
     this.artifacts = input.artifacts;
     this.verifier = input.verifier;
+    this.inspectionService = input.inspectionService;
   }
 
   async process(work: WorkItem, attemptId: string, workspaceRoot: string, envelope: WorkerOutputEnvelope | null): Promise<ArtifactPipelineResult> {
@@ -57,14 +64,35 @@ export class ArtifactAssurancePipeline {
       await this.controller.recordArtifact(work.missionId, artifact);
       const contract = await this.projections.getAcceptanceContract(work.missionId);
       const requirements = await this.projections.listRequirements(work.missionId);
-      const missionArtifacts = await this.projections.listArtifacts(work.missionId);
+      let missionArtifacts = await this.projections.listArtifacts(work.missionId);
       const priorVerifications = await this.projections.listVerificationResults(work.missionId);
-      const verification = await this.verifier.verify(artifact, {
+      const baseContext = {
         acceptanceContract: contract,
         requirements,
         explicitRequirementRefs: output.requirementRefs ?? [],
         artifacts: missionArtifacts,
         priorVerifications
+      };
+      let inspection: InspectionOutcome | undefined;
+      const profile = this.verifier.plan?.(artifact, baseContext);
+      if (profile) {
+        if (this.inspectionService) {
+          inspection = await this.inspectionService.prepare(artifact, profile, missionArtifacts);
+          if (inspection.artifacts.length > 0) missionArtifacts = await this.projections.listArtifacts(work.missionId);
+        } else {
+          const requests = this.inspectionPlanner.plan(artifact, profile);
+          inspection = {
+            required: requests.length > 0,
+            requests,
+            artifacts: [],
+            missingKinds: [...new Set(requests.map(request => request.kind))]
+          };
+        }
+      }
+      const verification = await this.verifier.verify(artifact, {
+        ...baseContext,
+        artifacts: missionArtifacts,
+        inspection
       });
       await this.controller.recordVerification(work.missionId, verification);
       if (verification.overall === "fail" || verification.overall === "inconclusive") {
