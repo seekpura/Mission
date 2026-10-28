@@ -11,7 +11,6 @@ import {
 import { CapabilityAcquisitionTransaction } from "../core/capabilities/acquisition-transaction.ts";
 import { FileAcquisitionReceiptStore } from "../core/capabilities/acquisition-receipt.ts";
 import { RepositoryCapabilityMaterializer } from "../core/capabilities/materialization.ts";
-import { MissionLocalDirectoryActivator } from "../core/capabilities/mission-local-directory-activator.ts";
 import { MissionCapabilityOverlay } from "../core/capabilities/mission-capability-overlay.ts";
 import { AgentSkillsDiscoveryProvider } from "../core/capabilities/providers/agent-skills-provider.ts";
 import { GitHubCapabilityDiscoveryProvider } from "../core/capabilities/providers/github-provider.ts";
@@ -23,7 +22,11 @@ import {
 } from "../core/capabilities/sandbox/isolated-smoke-runner.ts";
 import type { HostAdapter } from "../hosts/deepseek/host-adapter.ts";
 import type { RuntimeApprovalManager } from "./approval-manager.ts";
-import { AgentSkillSmokePlanResolver, DockerSmokeExecutor } from "./agent-skill-runtime.ts";
+import {
+  AgentSkillMissionLocalActivator,
+  AgentSkillSmokePlanResolver,
+  DockerSmokeExecutor
+} from "./agent-skill-runtime.ts";
 import { GitHubCapabilityClient } from "./github-capability-client.ts";
 
 export interface ProductionCapabilityRuntimeOptions {
@@ -68,7 +71,7 @@ export function createProductionAgentSkillCapabilityRuntime(
       smokeExecutor,
       new AgentSkillSmokePlanResolver()
     ),
-    activator: new MissionLocalDirectoryActivator(join(root, "activated")),
+    activator: new AgentSkillMissionLocalActivator(join(root, "activated")),
     overlay: options.overlay,
     receiptStore: new FileAcquisitionReceiptStore(join(root, "receipts")),
     approvalBroker: options.approvals,
