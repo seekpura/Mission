@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
-import type { HostAdapter } from "../hosts/deepseek/host-adapter.ts";
+import type { HostAdapter } from "../hosts/host-adapter.ts";
+import { CodexAppServerHostAdapter } from "../hosts/codex/codex-app-server-host-adapter.ts";
 import { DeepSeekHarnessAdapter } from "../hosts/deepseek/deepseek-host-adapter.ts";
 import { DeepSeekAcpProcessBindings } from "../hosts/deepseek/acp-process-bindings.ts";
 import { MissionDatabase } from "../persistence/sqlite/database.ts";
@@ -57,13 +58,19 @@ export interface ProductionCapabilityAcquisitionOptions {
   maxCandidates?: number;
 }
 
+export type ProductionHostKind = "deepseek" | "codex";
+
 export interface MissionRuntimeOptions {
   rootDir: string;
   schemaPath: string;
   dbPath?: string;
   host?: HostAdapter;
+  hostKind?: ProductionHostKind;
   dshBinary?: string;
   dshArgsPrefix?: string[];
+  codexBinary?: string;
+  codexArgsPrefix?: string[];
+  codexModel?: string;
   executorId?: string;
   approvalTimeoutMs?: number;
   controlTimeoutMs?: number;
@@ -113,21 +120,37 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const sideEffects = new RuntimeSideEffectManager(events, approvals);
   const sideEffectScopes = new HostSideEffectScopeRegistry();
 
-  const baseHost = options.host ?? new DeepSeekHarnessAdapter(new DeepSeekAcpProcessBindings({
-    binary: options.dshBinary,
-    argsPrefix: options.dshArgsPrefix,
-    approvalHandler: request => sideEffects.authorizeHostPermission(sideEffectScopes.enrich(request))
-  }));
+  const hostKind = options.hostKind ?? "deepseek";
+  if (hostKind === "codex" && options.capabilityAcquisition) {
+    throw new Error(
+      "Production Agent Skill acquisition is not yet deliverable through Codex app-server; refusing to project DeepSeek-native .agents/skills semantics into a different HostAdapter"
+    );
+  }
+  const approvalHandler = (request: Parameters<RuntimeSideEffectManager["authorizeHostPermission"]>[0]) =>
+    sideEffects.authorizeHostPermission(sideEffectScopes.enrich(request));
+  const baseHost = options.host ?? (hostKind === "codex"
+    ? new CodexAppServerHostAdapter({
+        binary: options.codexBinary,
+        argsPrefix: options.codexArgsPrefix,
+        model: options.codexModel,
+        approvalHandler
+      })
+    : new DeepSeekHarnessAdapter(new DeepSeekAcpProcessBindings({
+        binary: options.dshBinary,
+        argsPrefix: options.dshArgsPrefix,
+        approvalHandler
+      })));
   const trustedMcp = new TrustedMcpRegistry(options.trustedMcpServers ?? [], {
     allowInsecureHttp: options.allowInsecureTrustedMcpHttp
   });
   const mcpHost = new TrustedMcpHostAdapter(baseHost, trustedMcp);
   const overlay = new MissionCapabilityOverlay();
-  const skillProjection = new MissionAgentSkillWorkspaceProjector(overlay);
-  const capabilityHost = new CapabilityWorkspaceHostAdapter(mcpHost, skillProjection);
+  const capabilityHost = hostKind === "deepseek" || options.host
+    ? new CapabilityWorkspaceHostAdapter(mcpHost, new MissionAgentSkillWorkspaceProjector(overlay))
+    : mcpHost;
   const host = new SideEffectHostAdapter(capabilityHost, sideEffects, { scopeRegistry: sideEffectScopes });
 
-  const executorId = options.executorId?.trim() || "deepseek-host";
+  const executorId = options.executorId?.trim() || (hostKind === "codex" ? "codex-host" : "deepseek-host");
   const controlTransport = new HostAgentJsonTransport(host, {
     workspaceRoot: resolve(root, "control"),
     hardTimeoutMs: options.controlTimeoutMs,
@@ -219,7 +242,9 @@ export function createProductionMissionRuntimeFromEnv(
   cwd: string = process.cwd()
 ): MissionRuntime {
   const rootDir = env.MISSION_HOME ? resolve(env.MISSION_HOME) : resolve(cwd, ".mission");
+  const hostKind = parseProductionHostKind(env.MISSION_HOST_KIND);
   const dshArgsPrefix = parseStringArrayEnv(env.MISSION_DSH_ARGS_PREFIX_JSON, "MISSION_DSH_ARGS_PREFIX_JSON");
+  const codexArgsPrefix = parseStringArrayEnv(env.MISSION_CODEX_ARGS_PREFIX_JSON, "MISSION_CODEX_ARGS_PREFIX_JSON");
   const allowInsecureTrustedMcpHttp = env.MISSION_TRUSTED_MCP_ALLOW_HTTP === "1";
   const trustedMcpServers = parseTrustedMcpServersJson(env.MISSION_TRUSTED_MCP_SERVERS_JSON, {
     allowInsecureHttp: allowInsecureTrustedMcpHttp
@@ -231,9 +256,13 @@ export function createProductionMissionRuntimeFromEnv(
     rootDir,
     dbPath: env.MISSION_DB ? resolve(env.MISSION_DB) : resolve(rootDir, "mission.db"),
     schemaPath: resolve(cwd, "src", "persistence", "sqlite", "schema.sql"),
+    hostKind,
     dshBinary: env.MISSION_DSH_BINARY || "dsh",
     dshArgsPrefix,
-    executorId: env.MISSION_EXECUTOR_ID || "deepseek-host",
+    codexBinary: env.MISSION_CODEX_BINARY || "codex",
+    codexArgsPrefix,
+    codexModel: env.MISSION_CODEX_MODEL?.trim() || undefined,
+    executorId: env.MISSION_EXECUTOR_ID || (hostKind === "codex" ? "codex-host" : "deepseek-host"),
     approvalTimeoutMs: positiveNumber(env.MISSION_APPROVAL_TIMEOUT_MS),
     controlTimeoutMs: positiveNumber(env.MISSION_CONTROL_TIMEOUT_MS),
     workTimeoutMs: positiveNumber(env.MISSION_WORK_TIMEOUT_MS),
@@ -288,6 +317,12 @@ function capabilityAcquisitionFromEnv(env: NodeJS.ProcessEnv): ProductionCapabil
     githubRequestTimeoutMs: positiveNumber(env.MISSION_GITHUB_TIMEOUT_MS),
     maxCandidates: positiveNumber(env.MISSION_CAPABILITY_MAX_CANDIDATES)
   };
+}
+
+function parseProductionHostKind(value: string | undefined): ProductionHostKind {
+  const normalized = value?.trim() || "deepseek";
+  if (normalized === "deepseek" || normalized === "codex") return normalized;
+  throw new Error(`Unsupported MISSION_HOST_KIND: ${normalized}`);
 }
 
 function positiveNumber(value: string | undefined): number | undefined {
