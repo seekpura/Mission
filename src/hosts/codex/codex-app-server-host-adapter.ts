@@ -5,6 +5,7 @@ import { isAbsolute } from "node:path";
 import { createInterface } from "node:readline";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { buildHostCapabilityGraph } from "../../core/capabilities/capability-graph.ts";
+import type { CapabilityDescriptor } from "../../core/domain/capability.ts";
 import type {
   AgentCreateRequest,
   AgentResumeRequest,
@@ -105,7 +106,7 @@ export class CodexAppServerHostAdapter implements HostAdapter {
 
   async snapshotEnvironment(): Promise<EnvironmentSnapshot> {
     const host = await this.describeHost();
-    const capabilities = [
+    const capabilities: CapabilityDescriptor[] = [
       {
         id: "openai-codex.app-server-agent",
         kind: "agent" as const,

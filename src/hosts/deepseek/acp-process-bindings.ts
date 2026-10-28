@@ -447,7 +447,7 @@ function supportsSessionCapability(
   initialized: acp.InitializeResponse,
   capability: "resume" | "close"
 ): boolean {
-  const sessionCapabilities = initialized.agentCapabilities.sessionCapabilities;
+  const sessionCapabilities = initialized.agentCapabilities?.sessionCapabilities;
   return Boolean(sessionCapabilities && capability in sessionCapabilities);
 }
 

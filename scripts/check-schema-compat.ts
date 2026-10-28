@@ -157,13 +157,13 @@ function assertSentinelsPreserved(db: DatabaseSync): void {
   const mission = db.prepare("SELECT status, revision FROM missions WHERE id = ?").get("schema-compat-mission") as
     | { status: string; revision: number }
     | undefined;
-  assert.deepEqual(mission, { status: "active", revision: 7 }, "Migration changed persisted mission sentinel data");
+  assert.deepEqual(mission ? { ...mission } : mission, { status: "active", revision: 7 }, "Migration changed persisted mission sentinel data");
 
   const event = db.prepare("SELECT type, payload_json FROM mission_events WHERE id = ?").get("schema-compat-event") as
     | { type: string; payload_json: string }
     | undefined;
   assert.deepEqual(
-    event,
+    event ? { ...event } : event,
     { type: "mission.created", payload_json: "{}" },
     "Migration changed persisted event sentinel data"
   );
@@ -171,7 +171,7 @@ function assertSentinelsPreserved(db: DatabaseSync): void {
   const readModel = db.prepare("SELECT user_goal, event_sequence FROM rm_missions WHERE mission_id = ?")
     .get("schema-compat-mission") as { user_goal: string; event_sequence: number } | undefined;
   assert.deepEqual(
-    readModel,
+    readModel ? { ...readModel } : readModel,
     { user_goal: "preserve me", event_sequence: 1 },
     "Migration changed persisted read-model sentinel data"
   );

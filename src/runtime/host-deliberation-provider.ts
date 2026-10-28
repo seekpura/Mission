@@ -224,7 +224,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
     const object = objectValue(raw, "completion challenge");
     const objections = arrayValue(object.objections, "completion challenge.objections").map((value, index) => {
       const objection = objectValue(value, `completion challenge.objections[${index}]`);
-      const severity = nonEmptyString(objection.severity, `completion challenge.objections[${index}].severity`);
+      const severity = nonEmptyString(objection.severity, `completion challenge.objections[${index}].severity`) as "blocking" | "non_blocking";
       if (severity !== "blocking" && severity !== "non_blocking") {
         throw new Error(`Unsupported completion objection severity: ${severity}`);
       }

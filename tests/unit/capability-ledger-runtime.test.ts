@@ -63,7 +63,7 @@ function need(): CapabilityNeed {
     desiredInputs: ["document"],
     desiredOutputs: ["presentation"],
     purpose: "production",
-    urgency: "high",
+    urgency: "high-value",
     acquisitionAllowed: true,
     maxRisk: "medium",
     requirementRefs: ["req-1"],

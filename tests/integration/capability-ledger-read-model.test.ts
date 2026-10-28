@@ -134,7 +134,7 @@ test("capability deactivation and revocation atomically remove restart capabilit
       permissions: [],
       scope: "mission",
       functions: ["test.function"],
-      cost: { monetaryClass: "free", latencyClass: "instant", metered: false },
+      cost: { monetaryClass: "negligible", latencyClass: "local", metered: false },
       provenance: { source: "mission", revision: "r1", contentHash: `sha256:${"b".repeat(64)}` }
     };
 

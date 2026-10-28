@@ -244,7 +244,7 @@ function normalizeTree(entries: GitHubTreeEntry[]): NormalizedTreeEntry[] {
     }
     const mode = normalizeMode(entry.mode, entry.type, path);
     const size = entry.type === "blob" ? requireSize(entry.size, path) : 0;
-    return { path, sha, type: entry.type, mode, size };
+    return { path, sha, type: entry.type, mode, size } satisfies NormalizedTreeEntry;
   }).sort((a, b) => a.path.localeCompare(b.path));
 }
 

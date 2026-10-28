@@ -137,6 +137,8 @@ class AcquiringRuntime implements CapabilityRuntime {
     this.restored.splice(0, this.restored.length, ...capabilities);
   }
 
+  deactivateMissionCapability(_missionId: string, _capabilityId: string): void {}
+
   async ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult> {
     this.ensureCalls.push(need.id);
     const restored = this.restored.find(capability => capability.id === this.acquired.id);
