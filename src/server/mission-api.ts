@@ -33,7 +33,7 @@ export function createMissionApi(
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
-      const parts = url.pathname.split("/").filter(Boolean);
+      const parts = url.pathname.split("/").filter(Boolean).map(part => decodeURIComponent(part));
       if (req.method === "GET" && url.pathname === "/") {
         const html = readFileSync(join(process.cwd(), "src", "ui", "mission-control.html"), "utf8");
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
