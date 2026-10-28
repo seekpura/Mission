@@ -12,7 +12,10 @@ import { CapabilityAcquisitionTransaction } from "../core/capabilities/acquisiti
 import { FileAcquisitionReceiptStore } from "../core/capabilities/acquisition-receipt.ts";
 import { RepositoryCapabilityMaterializer } from "../core/capabilities/materialization.ts";
 import { MissionCapabilityOverlay } from "../core/capabilities/mission-capability-overlay.ts";
-import { FileTrustedCapabilityCache } from "../core/capabilities/trusted-capability-cache.ts";
+import {
+  FileTrustedCapabilityCache,
+  type TrustedCapabilityCache
+} from "../core/capabilities/trusted-capability-cache.ts";
 import { AgentSkillsDiscoveryProvider } from "../core/capabilities/providers/agent-skills-provider.ts";
 import { GitHubCapabilityDiscoveryProvider } from "../core/capabilities/providers/github-provider.ts";
 import { PolicyEngine, type PolicyDecision } from "../core/policy/policy-engine.ts";
@@ -42,6 +45,7 @@ export interface ProductionCapabilityRuntimeOptions {
   maxCandidates?: number;
   githubClient?: GitHubCapabilityClient;
   smokeExecutor?: IsolatedSmokeExecutor;
+  trustedCache?: TrustedCapabilityCache;
 }
 
 export function createProductionAgentSkillCapabilityRuntime(
@@ -65,6 +69,7 @@ export function createProductionAgentSkillCapabilityRuntime(
     image: options.dockerImage,
     binary: options.dockerBinary
   });
+  const trustedCache = options.trustedCache ?? new FileTrustedCapabilityCache(join(root, "trusted-cache"));
   const transaction = new CapabilityAcquisitionTransaction({
     materializer,
     sandboxManager: new SandboxManager(join(root, "sandboxes")),
@@ -75,7 +80,7 @@ export function createProductionAgentSkillCapabilityRuntime(
     activator: new AgentSkillMissionLocalActivator(join(root, "activated")),
     overlay: options.overlay,
     receiptStore: new FileAcquisitionReceiptStore(join(root, "receipts")),
-    trustedCache: new FileTrustedCapabilityCache(join(root, "trusted-cache")),
+    trustedCache,
     approvalBroker: options.approvals,
     policy: new ExternalAgentSkillPolicyEngine()
   });
