@@ -1,0 +1,32 @@
+name: agent07-bootstrap-shutdown
+
+on:
+  push:
+    branches:
+      - feat/graceful-shutdown-drain
+    paths:
+      - .github/workflows/agent07-bootstrap-shutdown.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/graceful-shutdown-drain
+      - name: Validate and apply bootstrap patch
+        run: |
+          python -m py_compile scripts/agent07-bootstrap-shutdown.py
+          python scripts/agent07-bootstrap-shutdown.py
+      - name: Commit wiring and remove temporary patch machinery
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/agent07-bootstrap-shutdown.yml scripts/agent07-bootstrap-shutdown.py
+          git add src/runtime/bootstrap.ts
+          git diff --cached --check
+          git commit -m "feat: wire bounded runtime shutdown lifecycle"
+          git push origin HEAD:feat/graceful-shutdown-drain
