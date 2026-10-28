@@ -105,6 +105,7 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
       return resumed;
     },
     close(): void {
+      approvals.dispose();
       database.close();
     }
   };
