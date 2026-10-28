@@ -76,11 +76,16 @@ export class MissionProgressTracker {
       .filter(decision => decision && decision.gapRefs?.some((gap: string) => current.blockingGapRefs.includes(gap)))
       .map(decision => scopeFromDecisionType(String(decision.type)))
       .filter((scope): scope is RepairScope => !!scope);
+    const highestRepairScope = highestScope(repairScopes);
+    const minimumRepairScope = !waitingReason && current.blockingGapRefs.length > 0 && consecutive >= 3
+      ? nextRepairScope(highestRepairScope)
+      : undefined;
     const context: PlateauContext = {
       stagnationCount: consecutive,
       priorRepairCount: current.repairWorkCount,
       priorRepairScopes: repairScopes,
-      highestRepairScope: highestScope(repairScopes),
+      highestRepairScope,
+      minimumRepairScope,
       lastProgressAt: [...history].reverse().find(snapshot => snapshot.signature !== current.signature)?.observedAt,
       waitingReason
     };
@@ -92,7 +97,11 @@ export class MissionProgressTracker {
     if (consecutive >= 5 && strategyAttempts >= 1 && current.repairWorkCount >= 4) {
       return { state: "plateau", reason: "Acceptance metrics remained unchanged after repeated repairs including strategy-level intervention", context };
     }
-    return { state: "stalled", reason: "Acceptance metrics are unchanged across repeated repair cycles; diagnosis should consider a broader intervention", context };
+    return {
+      state: "stalled",
+      reason: `Acceptance metrics are unchanged across repeated repair cycles; next repair must be at least ${minimumRepairScope ?? "work_item"} scope`,
+      context
+    };
   }
 }
 
@@ -121,4 +130,11 @@ function highestScope(scopes: RepairScope[]): RepairScope | undefined {
   let highest = -1;
   for (const scope of scopes) highest = Math.max(highest, SCOPE_ORDER.indexOf(scope));
   return highest >= 0 ? SCOPE_ORDER[highest] : undefined;
+}
+
+function nextRepairScope(highest?: RepairScope): RepairScope {
+  if (!highest) return "work_item";
+  const index = SCOPE_ORDER.indexOf(highest);
+  if (index < 0) return "work_item";
+  return SCOPE_ORDER[Math.min(index + 1, SCOPE_ORDER.length - 1)]!;
 }
