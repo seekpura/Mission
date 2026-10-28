@@ -13,17 +13,18 @@ import type {
   HostCapabilityInvocation,
   HostCapabilityResult,
   HostDescriptor
-} from "../hosts/deepseek/host-adapter.ts";
+} from "../hosts/host-adapter.ts";
 import type { MissionAgentSkillWorkspaceProjector } from "./agent-skill-runtime.ts";
 
 /**
- * Projects Mission-authorized acquired Agent Skills into the attempt-local
- * workspace before delegating to the real HostAdapter. DeepSeek Harness then
- * discovers `.agents/skills/<name>/SKILL.md` through its native filesystem skill
- * provider and exposes the normal model-facing skill catalog/loader.
+ * Projects Mission-authorized acquired Agent Skills into an attempt-local
+ * workspace before delegating to a HostAdapter whose native skill loader is
+ * explicitly compatible with this workspace projection. Production bootstrap
+ * currently applies this delivery layer to DeepSeek Harness; other hosts must
+ * opt in only after their provider-native loading semantics are verified.
  *
- * This outer delivery adapter is also the final environment-snapshot boundary.
- * Any inner wrapper (for example trusted MCP delivery) may extend the flat host
+ * This outer delivery adapter is also an environment-snapshot boundary. Any
+ * inner wrapper (for example trusted MCP delivery) may extend the flat host
  * catalog, so the semantic graph is rebuilt here from the final effective
  * catalog instead of forwarding a stale graph produced by an inner adapter.
  */
