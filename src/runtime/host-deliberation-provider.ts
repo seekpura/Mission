@@ -1,10 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { Artifact } from "../core/domain/artifact.ts";
-import type { CapabilityNeed, RiskLevel } from "../core/domain/capability.ts";
+import type {
+  CapabilityCostClass,
+  CapabilityDeliveryMode,
+  CapabilityKind,
+  CapabilityNeed,
+  CapabilityTrustLevel,
+  RiskLevel
+} from "../core/domain/capability.ts";
 import type { MissionState } from "../core/domain/mission.ts";
 import type { ArtifactExpectation, LocalAcceptanceCriterion, WorkItem, WorkPurpose } from "../core/domain/work-item.ts";
 import type { Gap } from "../core/domain/verification.ts";
 import type { EventStore } from "../core/events/event-store.ts";
+import { CAPABILITY_DELIVERY_MODES } from "../core/capabilities/capability-graph.ts";
 import { projectMissionJournal } from "../core/mission/journal-view.ts";
 import type { MissionReadModelReader } from "../core/mission/mission-reader.ts";
 import type {
@@ -42,6 +50,14 @@ const WORK_PURPOSES = new Set<WorkPurpose>([
 const NEED_PURPOSES = new Set<CapabilityNeed["purpose"]>(["production", "verification", "research", "integration"]);
 const NEED_URGENCY = new Set<CapabilityNeed["urgency"]>(["blocking", "high-value", "optional-improvement"]);
 const RISK_LEVELS = new Set<RiskLevel>(["low", "medium", "high", "blocked"]);
+const CAPABILITY_KINDS = new Set<CapabilityKind>([
+  "skill", "tool", "mcp", "agent", "runtime", "library", "cli", "application", "workflow"
+]);
+const DELIVERY_MODES = new Set<CapabilityDeliveryMode>(CAPABILITY_DELIVERY_MODES.filter(mode => mode !== "unknown"));
+const TRUST_LEVELS = new Set<CapabilityTrustLevel>([
+  "host-native", "operator-trusted", "mission-acquired", "trusted-cache", "unknown"
+]);
+const COST_CLASSES = new Set<Exclude<CapabilityCostClass, "unknown">>(["free", "low", "medium", "high"]);
 const GAP_INTERVENTIONS = new Set<GapDiagnosis["intervention"]>([
   "retry", "revise_work", "replace_capability", "replan_local", "revise_strategy"
 ]);
@@ -112,6 +128,8 @@ export class HostDeliberationProvider implements DeliberationProvider {
         this.defaultExecutorId ? `If no special route is needed, assignedExecutorId may be omitted and Runtime will use ${this.defaultExecutorId}.` : "Every executable work item must name assignedExecutorId.",
         "Return JSON with graphRevision:number, capabilityNeeds:array, workItems:array.",
         "Each capability need may contain id?, objective, requiredFunctions[], desiredInputs[], desiredOutputs[], purpose, urgency, acquisitionAllowed, maxRisk, requirementRefs[], gapRefs[].",
+        "Capability needs may also declare hard constraints: acceptableKinds[], requiredDeliveryModes[], forbiddenPermissions[], acceptableTrust[], maxCostClass?. Use only known values supplied by this schema; omit a constraint when any compatible value is acceptable.",
+        `acceptableKinds values: ${[...CAPABILITY_KINDS].join(", ")}. requiredDeliveryModes values: ${[...DELIVERY_MODES].join(", ")}. acceptableTrust values: ${[...TRUST_LEVELS].join(", ")}. maxCostClass values: ${[...COST_CLASSES].join(", ")}.`,
         "Each work item may contain id?, workstreamId?, parentWorkItemId?, purpose, objective, requirementRefs[], gapRefs[], inputArtifactRefs[], expectedOutputs:[{logicalName,type,required}], localAcceptanceCriteria:[{id?,description,priority}], capabilityNeedRefs[], assignedExecutorId?, priority.",
         "Do not set missionId, status, graphRevision, createdBy or timestamps; Runtime owns those fields."
       ].join(" "),
@@ -211,7 +229,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
     const object = objectValue(raw, "completion challenge");
     const objections = arrayValue(object.objections, "completion challenge.objections").map((value, index) => {
       const objection = objectValue(value, `completion challenge.objections[${index}]`);
-      const severity = nonEmptyString(objection.severity, `completion challenge.objections[${index}].severity`);
+      const severity = nonEmptyString(object.severity, `completion challenge.objections[${index}].severity`);
       if (severity !== "blocking" && severity !== "non_blocking") {
         throw new Error(`Unsupported completion objection severity: ${severity}`);
       }
@@ -292,6 +310,13 @@ export class HostDeliberationProvider implements DeliberationProvider {
     if (!RISK_LEVELS.has(maxRisk)) throw new Error(`Unsupported capability maxRisk at ${path}: ${maxRisk}`);
     const requiredFunctions = stringArray(object.requiredFunctions, `${path}.requiredFunctions`);
     if (requiredFunctions.length === 0) throw new Error(`Capability need requires at least one function at ${path}`);
+    const acceptableKinds = optionalEnumArray(object.acceptableKinds, `${path}.acceptableKinds`, CAPABILITY_KINDS);
+    const requiredDeliveryModes = optionalEnumArray(object.requiredDeliveryModes, `${path}.requiredDeliveryModes`, DELIVERY_MODES);
+    const forbiddenPermissions = optionalStringArray(object.forbiddenPermissions, `${path}.forbiddenPermissions`);
+    const acceptableTrust = optionalEnumArray(object.acceptableTrust, `${path}.acceptableTrust`, TRUST_LEVELS);
+    const maxCostClass = object.maxCostClass === undefined
+      ? undefined
+      : enumValue(object.maxCostClass, `${path}.maxCostClass`, COST_CLASSES);
     return {
       id: optionalNonEmptyString(object.id) ?? `capability-need:${randomUUID()}`,
       missionId,
@@ -303,6 +328,11 @@ export class HostDeliberationProvider implements DeliberationProvider {
       urgency,
       acquisitionAllowed: booleanValue(object.acquisitionAllowed, `${path}.acquisitionAllowed`),
       maxRisk,
+      ...(acceptableKinds?.length ? { acceptableKinds } : {}),
+      ...(requiredDeliveryModes?.length ? { requiredDeliveryModes } : {}),
+      ...(forbiddenPermissions?.length ? { forbiddenPermissions } : {}),
+      ...(acceptableTrust?.length ? { acceptableTrust } : {}),
+      ...(maxCostClass ? { maxCostClass } : {}),
       requirementRefs: stringArray(object.requirementRefs ?? [], `${path}.requirementRefs`),
       gapRefs: stringArray(object.gapRefs ?? [], `${path}.gapRefs`)
     };
@@ -435,6 +465,26 @@ function arrayValue(value: unknown, path: string): unknown[] {
 
 function stringArray(value: unknown, path: string): string[] {
   return arrayValue(value, path).map((item, index) => nonEmptyString(item, `${path}[${index}]`));
+}
+
+function optionalStringArray(value: unknown, path: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  const values = stringArray(value, path);
+  assertUnique(values, path);
+  return values;
+}
+
+function optionalEnumArray<T extends string>(value: unknown, path: string, allowed: Set<T>): T[] | undefined {
+  if (value === undefined) return undefined;
+  const values = stringArray(value, path);
+  assertUnique(values, path);
+  return values.map((item, index) => enumValue(item, `${path}[${index}]`, allowed));
+}
+
+function enumValue<T extends string>(value: unknown, path: string, allowed: Set<T>): T {
+  const normalized = nonEmptyString(value, path) as T;
+  if (!allowed.has(normalized)) throw new Error(`Unsupported value at ${path}: ${normalized}`);
+  return normalized;
 }
 
 function nonEmptyString(value: unknown, path: string): string {
