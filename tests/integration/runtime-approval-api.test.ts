@@ -74,6 +74,7 @@ test("approval request is durable before HTTP decision releases the waiting host
     assert.deepEqual(state.pendingApprovalIds, []);
   } finally {
     await closeServer(server);
+    approvals.dispose();
     database.close();
     await rm(root, { recursive: true, force: true });
   }
