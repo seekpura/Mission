@@ -32,6 +32,54 @@ export interface SideEffectPolicy {
   idempotencyRequired: boolean;
 }
 
+export type SideEffectClass =
+  | "workspace-write"
+  | "external-write"
+  | "destructive-write"
+  | "irreversible-action"
+  | "unknown-effect";
+
+export type SideEffectSource = "host-tool" | "runtime-action" | "local-command" | "capability";
+
+export interface SideEffectIntent {
+  id: string;
+  missionId: string;
+  workItemId?: string;
+  attemptId?: string;
+  executionId?: string;
+  source: SideEffectSource;
+  operationKey: string;
+  fingerprint: string;
+  effectClass: SideEffectClass;
+  type: SideEffectRecord["type"];
+  target: string;
+  reversible: boolean;
+  description: string;
+  createdAt: string;
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+export type SideEffectAdmissionStatus = "admitted" | "denied" | "replay_blocked";
+
+export interface SideEffectAdmission {
+  intentId: string;
+  operationKey: string;
+  status: SideEffectAdmissionStatus;
+  reason: string;
+  approvalRequired: boolean;
+  decidedAt: string;
+}
+
+export type SideEffectCompletionStatus = "succeeded" | "failed" | "unknown";
+
+export interface SideEffectCompletion {
+  intentId: string;
+  operationKey: string;
+  status: SideEffectCompletionStatus;
+  detail?: string;
+  completedAt: string;
+}
+
 export interface ResourceRequest {
   cpu?: number;
   memoryMb?: number;
@@ -94,6 +142,10 @@ export interface SideEffectRecord {
   target: string;
   reversible: boolean;
   result: string;
+  intentId?: string;
+  operationKey?: string;
+  effectClass?: SideEffectClass;
+  status?: SideEffectCompletionStatus | "admitted" | "denied" | "replay_blocked";
 }
 
 export interface ExecutionResult {

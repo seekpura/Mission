@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import type {
+  SideEffectAdmission,
+  SideEffectCompletion,
+  SideEffectIntent,
+  SideEffectPolicy
+} from "../../src/core/domain/execution.ts";
 import type {
   WorkExecutionDriver,
   WorkExecutionInput,
@@ -11,7 +17,10 @@ import type {
 import { ExecutorRouter } from "../../src/core/execution/executor-router.ts";
 import { FileArtifactStore } from "../../src/execution/artifacts/artifact-store.ts";
 import { LocalExecutionBackend } from "../../src/execution/local/local-execution-backend.ts";
-import { LocalCommandWorkExecutionDriver } from "../../src/execution/local/local-command-work-execution-driver.ts";
+import {
+  LocalCommandWorkExecutionDriver,
+  type LocalCommandSideEffectBoundary
+} from "../../src/execution/local/local-command-work-execution-driver.ts";
 import { WorkspaceManager } from "../../src/execution/workspace/workspace-manager.ts";
 
 function executionInput(assignedExecutorId?: string): WorkExecutionInput {
@@ -85,13 +94,53 @@ function executionInput(assignedExecutorId?: string): WorkExecutionInput {
   };
 }
 
-test("LocalCommandWorkExecutionDriver runs only an explicitly trusted host-process plan and returns Artifact entities", async () => {
+class RecordingLocalSideEffects implements LocalCommandSideEffectBoundary {
+  readonly intents: SideEffectIntent[] = [];
+  readonly policies: SideEffectPolicy[] = [];
+  readonly completions: SideEffectCompletion[] = [];
+  status: SideEffectAdmission["status"] = "admitted";
+
+  async authorize(intent: SideEffectIntent, policy: SideEffectPolicy) {
+    this.intents.push(intent);
+    this.policies.push({ ...policy });
+    return {
+      intent,
+      admission: {
+        intentId: intent.id,
+        operationKey: intent.operationKey,
+        status: this.status,
+        reason: this.status === "admitted" ? "test admission" : "test denial",
+        approvalRequired: true,
+        decidedAt: new Date().toISOString()
+      }
+    };
+  }
+
+  async complete(
+    intent: SideEffectIntent,
+    status: SideEffectCompletion["status"],
+    detail?: string
+  ): Promise<SideEffectCompletion> {
+    const completion: SideEffectCompletion = {
+      intentId: intent.id,
+      operationKey: intent.operationKey,
+      status,
+      ...(detail ? { detail } : {}),
+      completedAt: new Date().toISOString()
+    };
+    this.completions.push(completion);
+    return completion;
+  }
+}
+
+test("LocalCommandWorkExecutionDriver durably admits trusted host-process execution and returns its side-effect receipt", async () => {
   const root = mkdtempSync(join(tmpdir(), "mission-local-driver-"));
   try {
     const backend = new LocalExecutionBackend(
       new WorkspaceManager(join(root, "workspaces")),
       new FileArtifactStore(join(root, "artifact-store"))
     );
+    const sideEffects = new RecordingLocalSideEffects();
     const driver = new LocalCommandWorkExecutionDriver(backend, {
       async plan() {
         return {
@@ -103,7 +152,7 @@ test("LocalCommandWorkExecutionDriver runs only an explicitly trusted host-proce
           hardTimeoutMs: 5_000
         };
       }
-    });
+    }, sideEffects);
 
     const outcome = await driver.execute(executionInput("local"));
     assert.equal(outcome.result.state, "succeeded");
@@ -111,6 +160,24 @@ test("LocalCommandWorkExecutionDriver runs only an explicitly trusted host-proce
     assert.equal(outcome.artifacts.length, 1);
     assert.equal(outcome.artifacts[0]?.logicalName, "result");
     assert.equal(outcome.artifacts[0]?.producedByAttemptId, "attempt-1");
+    assert.equal(sideEffects.intents.length, 1);
+    assert.equal(sideEffects.intents[0]?.source, "local-command");
+    assert.equal(sideEffects.intents[0]?.effectClass, "unknown-effect");
+    assert.equal(sideEffects.intents[0]?.type, "system-change");
+    assert.equal(sideEffects.policies[0]?.idempotencyRequired, true);
+    assert.equal(sideEffects.completions[0]?.status, "succeeded");
+    assert.deepEqual(outcome.result.sideEffects, [
+      {
+        type: "system-change",
+        target: sideEffects.intents[0]?.target,
+        reversible: false,
+        result: "succeeded",
+        intentId: sideEffects.intents[0]?.id,
+        operationKey: sideEffects.intents[0]?.operationKey,
+        effectClass: "unknown-effect",
+        status: "succeeded"
+      }
+    ]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -123,6 +190,7 @@ test("LocalCommandWorkExecutionDriver rejects plans without explicit trusted-hos
       new WorkspaceManager(join(root, "workspaces")),
       new FileArtifactStore(join(root, "artifact-store"))
     );
+    const sideEffects = new RecordingLocalSideEffects();
     const driver = new LocalCommandWorkExecutionDriver(backend, {
       async plan() {
         return {
@@ -133,9 +201,42 @@ test("LocalCommandWorkExecutionDriver rejects plans without explicit trusted-hos
           outputFiles: []
         };
       }
-    });
+    }, sideEffects);
 
     await assert.rejects(driver.execute(executionInput("local")), /trusted-host-process admission/);
+    assert.equal(sideEffects.intents.length, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("LocalCommandWorkExecutionDriver never spawns a local process when side-effect admission is denied", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mission-local-driver-denied-"));
+  try {
+    const marker = join(root, "must-not-exist.txt");
+    const backend = new LocalExecutionBackend(
+      new WorkspaceManager(join(root, "workspaces")),
+      new FileArtifactStore(join(root, "artifact-store"))
+    );
+    const sideEffects = new RecordingLocalSideEffects();
+    sideEffects.status = "denied";
+    const driver = new LocalCommandWorkExecutionDriver(backend, {
+      async plan() {
+        return {
+          trust: "trusted-host-process",
+          rationale: "denial test",
+          command: process.execPath,
+          args: ["-e", `require('fs').writeFileSync(${JSON.stringify(marker)},'should not run')`],
+          outputFiles: []
+        };
+      }
+    }, sideEffects);
+
+    const outcome = await driver.execute(executionInput("local"));
+    assert.equal(outcome.result.state, "failed");
+    assert.equal(existsSync(marker), false);
+    assert.equal(sideEffects.completions.length, 0);
+    assert.equal(outcome.result.sideEffects[0]?.status, "denied");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

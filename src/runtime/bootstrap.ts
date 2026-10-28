@@ -22,6 +22,9 @@ import { HostCapabilityRuntime } from "./host-capability-runtime.ts";
 import { HostDeliberationProvider } from "./host-deliberation-provider.ts";
 import { MissionSupervisor } from "./mission-supervisor.ts";
 import { createProductionAgentSkillCapabilityRuntime } from "./production-capability-runtime.ts";
+import { RuntimeSideEffectManager } from "./side-effect-manager.ts";
+import { SideEffectHostAdapter } from "./side-effect-host-adapter.ts";
+import { HostSideEffectScopeRegistry } from "./side-effect-host-scope.ts";
 import {
   TrustedMcpHostAdapter,
   TrustedMcpRegistry,
@@ -64,6 +67,7 @@ export interface MissionRuntime {
   reader: SqliteMissionReader;
   host: HostAdapter;
   approvals: RuntimeApprovalManager;
+  sideEffects: RuntimeSideEffectManager;
   controller: MissionController;
   supervisor: MissionSupervisor;
   recoverExistingMissions(): Promise<string[]>;
@@ -78,11 +82,13 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const catalog = new SqliteMissionCatalog(database);
   const reader = new SqliteMissionReader(database);
   const approvals = new RuntimeApprovalManager(events, { timeoutMs: options.approvalTimeoutMs });
+  const sideEffects = new RuntimeSideEffectManager(events, approvals);
+  const sideEffectScopes = new HostSideEffectScopeRegistry();
 
   const baseHost = options.host ?? new DeepSeekHarnessAdapter(new DeepSeekAcpProcessBindings({
     binary: options.dshBinary,
     argsPrefix: options.dshArgsPrefix,
-    approvalHandler: request => approvals.requestHostApproval(request)
+    approvalHandler: request => sideEffects.authorizeHostPermission(sideEffectScopes.enrich(request))
   }));
   const trustedMcp = new TrustedMcpRegistry(options.trustedMcpServers ?? [], {
     allowInsecureHttp: options.allowInsecureTrustedMcpHttp
@@ -90,7 +96,8 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const mcpHost = new TrustedMcpHostAdapter(baseHost, trustedMcp);
   const overlay = new MissionCapabilityOverlay();
   const skillProjection = new MissionAgentSkillWorkspaceProjector(overlay);
-  const host = new CapabilityWorkspaceHostAdapter(mcpHost, skillProjection);
+  const capabilityHost = new CapabilityWorkspaceHostAdapter(mcpHost, skillProjection);
+  const host = new SideEffectHostAdapter(capabilityHost, sideEffects, { scopeRegistry: sideEffectScopes });
 
   const executorId = options.executorId?.trim() || "deepseek-host";
   const controlTransport = new HostAgentJsonTransport(host, {
@@ -134,6 +141,7 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     reader,
     host,
     approvals,
+    sideEffects,
     controller,
     supervisor,
     async recoverExistingMissions(): Promise<string[]> {

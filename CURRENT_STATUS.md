@@ -7,6 +7,7 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 
 - durable SQLite append-only Mission Event Store
 - optimistic concurrency + idempotent event writes
+- optimistic-concurrency conflicts retain an explicit runtime-recognizable error identity so higher-level durable admission loops can retry safely
 - MissionState projection and snapshots
 - transactional durable read-model projections for Mission / WorkItem / Attempt / Execution / Artifact / Finding / Gap / Decision / Approval / CapabilityNeed / Capability
 - read-model projection and event append share one SQLite transaction; projection failure rolls back the event write
@@ -58,10 +59,14 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - host-agent hard timeout/cancel behavior and lexical + realpath/symlink workspace confinement
 - manifest validation, artifact type checks, Mission-side hash/version/provenance commit
 - host-agent event log capture as execution evidence
+- host execution requests carry Runtime-owned attempt/execution identity into the provider boundary
+- host execution results surface validated durable side-effect receipts instead of returning a permanent empty placeholder
 - LocalExecutionBackend with bounded local process execution and Artifact entity return
 - LocalExecutionBackend output collection confined to the attempt workspace
 - TrustedLocalCommandPlanner / LocalCommandWorkExecutionDriver with explicit `trusted-host-process` admission
 - truthful host-level isolation metadata for local commands; local process execution is not presented as an OS sandbox
+- unsandboxed trusted local commands are classified as `unknown-effect`, require durable Runtime side-effect admission before process spawn, and persist terminal/unknown completion receipts
+- denied or replay-blocked local-command side effects never spawn the process
 - structural file verifier
 - Capability Resolver
 - first-class semantic host capability graph foundation with capability / environment / executor-route nodes and dependency / environment / routing edges
@@ -69,6 +74,8 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - EnvironmentSnapshot can publish a semantic `capabilityGraph` while legacy host adapters remain compatible with the flat capability list
 - graph-aware capability resolution hard-gates unsupported purpose, unavailable/unknown required environments and unavailable capability dependencies before semantic ranking
 - resolver prefers explicit function and I/O semantics over name/description coincidence, includes permissions/cost/routing in deterministic selection, and remains backward-compatible with legacy flat descriptors
+- runtime-owned CapabilityNeed policy gates enforce risk, provider, host-native, execution-mode, permission, isolation and cost constraints before ranking
+- capability semantic matching is Unicode/CJK-aware rather than relying on ASCII-only tokenization
 - host and acquisition-enabled capability runtimes resolve against live environment semantics rather than flat availability flags
 - DeepSeek Harness ACP capability publishes protocol/native identity, session/resume/recovery behavior, approval semantics, routing/isolation, cost class and host provenance into the graph
 - frontier planning and capability-gap diagnosis receive a live graph combining current host capabilities with durable mission-local activated capabilities, so CapabilityNeeds are created against observed capability semantics rather than names alone
@@ -108,6 +115,17 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - `.mission-mcp-projection.json` records only non-secret Work-scoped MCP capability/revision/config-shape metadata and recovery fails closed if the configured revision or shape changes
 - direct caller-supplied MCP declarations are rejected at the trusted delivery boundary, so only the runtime-owned registry can populate provider-native MCP sessions
 - externally discovered/acquired MCP, CLI and general code capabilities remain unsupported and fail-closed until dedicated acquisition, trust, isolation and rollback profiles exist
+- first-class SideEffectIntent / SideEffectAdmission / SideEffectCompletion contracts and durable side-effect lifecycle events
+- RuntimeSideEffectManager evaluates external-write / destructive / irreversible / unknown-effect policy before provider-permission-gated execution
+- durable side-effect operation-key + fingerprint ledger blocks duplicate replay and operation-key content conflicts across retry/recovery
+- host side-effect replay keys include execution identity, preserving replay protection on reconnect while preventing provider tool-call-id reuse from contaminating later executions
+- side-effect approval is a first-class durable Runtime approval kind; raw sensitive provider payloads are fingerprinted but not persisted in approval/intent metadata
+- provider permission callbacks are enriched from a Runtime-owned Mission/Work execution scope registry so provider-supplied values cannot override attempt/execution/workspace/policy identity
+- the same side-effect scope registry is shared by production ACP permission callbacks and the final HostAdapter boundary
+- side-effect scopes are released on terminal observation, creation/resume failure and cancellation
+- SideEffectHostAdapter buffers provider terminal completion, settles admitted observed effects, emits execution receipts, and converts unadmitted effectful tool calls into failed execution
+- read-only provider permission requests continue through the normal host approval path; unknown permission-gated mutations fail closed
+- URL side-effect targets are sanitized before durable persistence; credentials/query/hash are not retained in receipts
 - HostAdapter contract
 - FakeHostAdapter
 - DeepSeekHarnessAdapter boundary via injected bindings
@@ -118,7 +136,7 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - recovery continuation prompt that inspects existing workspace and warns against blindly repeating irreversible side effects
 - exact executor-route recovery even when multiple routes share the same underlying driver id
 - protocol-level fake ACP integration tests including cross-process native-session resume without local DSH credentials
-- production runtime bootstrap composing SQLite/EventStore/read models, DSH HostAdapter, trusted MCP delivery, host planner, ExecutorRouter, host worker driver, independent verifier, capability runtime, supervisor and approvals
+- production runtime bootstrap composing SQLite/EventStore/read models, DSH HostAdapter, trusted MCP delivery, host planner, ExecutorRouter, host worker driver, independent verifier, capability runtime, supervisor, approvals and side-effect manager
 - strict framed-JSON HostAgent control transport for planner/verifier calls; malformed or unframed model output is rejected
 - HostDeliberationProvider uses fresh host sessions while reconstructing current user goal, latest strategy, capability needs, activated capabilities, WorkItems, Artifacts and open Gaps from the durable reader when available
 - planner output cannot set Mission identity, Work status, graph ownership, timestamps, creator or unknown executor routes
@@ -132,22 +150,21 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - HTTP Mission API and SSE event stream
 - browser-native Mission Control view
 - CI workflow
-- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, verifier recovery, verifier-profile routing/fail-closed coverage, semantic capability graph/planner routing, trusted MCP graph consistency and ACP create/resume delivery, acquisition transaction, capability runtime loop, production Agent Skill acquisition/native DSH delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrency
+- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, side-effect admission/replay/execution-scope/cancel behavior, verifier recovery, verifier-profile routing/fail-closed coverage, semantic capability graph/planner routing, trusted MCP graph consistency and ACP create/resume delivery, acquisition transaction, capability runtime loop, production Agent Skill acquisition/native DSH delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrency
 
 ## Next implementation frontier
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. side-effect manager wired consistently across external actions, idempotency, irreversible-operation policy and approval boundaries
-2. capability trust / cost / audit ledgers, trusted-cache reuse and activation lifecycle management
-3. profile-specific verifier evidence collectors/adapters for rendered presentations, browser/runtime web checks, media probe/playback evidence, executable code/test evidence and research-source traceability; profiles now define the obligations but do not fabricate missing inspection evidence
-4. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure and repair/replan
-5. second production host adapter proving HostAdapter portability
-6. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
-7. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
-8. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as host adapters expose them
-9. external MCP discovery/acquisition plus provider-native CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles
-10. operational read-model/query APIs and observability for long-lived high-volume Missions beyond the current runtime-facing reader
+1. capability trust / cost / audit ledgers, trusted-cache reuse and activation lifecycle management
+2. profile-specific verifier evidence collectors/adapters for rendered presentations, browser/runtime web checks, media probe/playback evidence, executable code/test evidence and research-source traceability; profiles now define the obligations but do not fabricate missing inspection evidence
+3. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure, side-effect ambiguity and repair/replan
+4. second production host adapter proving HostAdapter portability
+5. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
+6. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+7. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as host adapters expose them
+8. external MCP discovery/acquisition plus provider-native CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles
+9. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction
 
 ## GitHub source control
 
