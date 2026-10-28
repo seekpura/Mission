@@ -1,5 +1,5 @@
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { CapabilityCandidate, CapabilityDescriptor, CapabilityNeed, SecurityAssessment } from "../domain/capability.ts";
 import type { MaterializedCapability } from "./materialization.ts";
 
@@ -38,7 +38,7 @@ export class MissionLocalDirectoryActivator implements MaterializedCapabilityAct
     );
 
     if (existsSync(destination)) rmSync(destination, { recursive: true, force: true });
-    mkdirSync(destination, { recursive: true });
+    mkdirSync(dirname(destination), { recursive: true });
     cpSync(input.sandboxRoot, destination, { recursive: true, dereference: false });
 
     return {
