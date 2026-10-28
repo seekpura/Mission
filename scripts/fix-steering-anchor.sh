@@ -8,9 +8,9 @@ s=p.read_text()
 marker='''\nfunction diagnosisId(gapId: string, diagnosis: GapDiagnosis, sequence: number): string { return `${gapId}:${diagnosis.intervention}:${sequence}`; }\n'''
 if sys.argv[1] == 'add':
     if 'function diagnosisId(gapId: string, diagnosis: GapDiagnosis, sequence: number): string {' not in s:
-        p.write_text(s + marker)
+        p.write_text(s.rstrip() + marker)
 elif sys.argv[1] == 'remove':
-    p.write_text(s.replace(marker, '\n'))
+    p.write_text(s.replace(marker, '\n').rstrip() + '\n')
 else:
     raise SystemExit('expected add|remove')
 PY
