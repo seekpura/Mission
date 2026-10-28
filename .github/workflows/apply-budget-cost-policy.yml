@@ -17,7 +17,8 @@ jobs:
           node-version: 22
       - name: Apply and verify budget policy
         run: |
-          chmod +x scripts/apply-budget-cost-policy.sh
+          chmod +x scripts/fix-budget-orchestrator-anchor.sh scripts/apply-budget-cost-policy.sh
+          ./scripts/fix-budget-orchestrator-anchor.sh
           ./scripts/apply-budget-cost-policy.sh
           npm test
           npm run smoke
