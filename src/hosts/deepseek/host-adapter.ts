@@ -1,4 +1,5 @@
 import type { CapabilityDescriptor } from "../../core/domain/capability.ts";
+import type { SideEffectRecord } from "../../core/domain/execution.ts";
 
 export interface HostDescriptor {
   type: string;
@@ -43,7 +44,12 @@ export interface HostAgentEvent {
 }
 
 export interface HostCapabilityInvocation {
+  missionId?: string;
+  workItemId?: string;
   capabilityId: string;
+  invocationRef?: string;
+  workspaceRoot?: string;
+  idempotencyKey?: string;
   input: unknown;
 }
 
@@ -51,6 +57,7 @@ export interface HostCapabilityResult {
   ok: boolean;
   output?: unknown;
   error?: string;
+  sideEffects?: SideEffectRecord[];
 }
 
 export interface ApprovalRequest {

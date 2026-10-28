@@ -23,6 +23,8 @@ export class FakeHostAdapter implements HostAdapter {
   readonly capabilities: CapabilityDescriptor[];
   private readonly options: FakeHostOptions;
   private readonly requests = new Map<string, AgentCreateRequest>();
+  readonly agentRequests: AgentCreateRequest[] = [];
+  readonly capabilityInvocations: HostCapabilityInvocation[] = [];
 
   constructor(capabilities: CapabilityDescriptor[] = [], options: FakeHostOptions = {}) {
     this.capabilities = capabilities;
@@ -41,6 +43,7 @@ export class FakeHostAdapter implements HostAdapter {
     };
   }
   async createAgent(request: AgentCreateRequest): Promise<HostAgentHandle> {
+    this.agentRequests.push(request);
     const handle = { id: randomUUID() };
     this.requests.set(handle.id, request);
     return handle;
@@ -61,6 +64,7 @@ export class FakeHostAdapter implements HostAdapter {
     }
   }
   async invokeHostCapability(request: HostCapabilityInvocation): Promise<HostCapabilityResult> {
+    this.capabilityInvocations.push(request);
     return this.options.capabilityInvoker ? this.options.capabilityInvoker(request) : { ok: true, output: {} };
   }
   async requestUserApproval(_request: ApprovalRequest): Promise<ApprovalResult> { return { approved: true, scope: "once" }; }
