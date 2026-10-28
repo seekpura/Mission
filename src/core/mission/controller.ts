@@ -11,7 +11,8 @@ import type { Evidence, Gap, VerificationResult } from "../domain/verification.t
 import type { Artifact } from "../domain/artifact.ts";
 import { AcceptanceEvaluator, type AcceptanceEvaluation } from "../acceptance/acceptance-evaluator.ts";
 import { MissionReadModel } from "./mission-read-model.ts";
-import type { DeliberationProvider, CompletionChallenge } from "../planning/deliberation-provider.ts";
+import type { DeliberationProvider, CompletionChallenge, GapDiagnosis } from "../planning/deliberation-provider.ts";
+import { normalizeGapDiagnosis } from "../planning/repair-scope-policy.ts";
 
 export interface ControllerCycleInput {
   missionId: string;
@@ -183,16 +184,64 @@ export class MissionController {
     const openGaps = await this.readModel.openGaps(input.missionId);
     const blockingGap = openGaps.find(gap => gap.status === "open" && (gap.severity === "critical" || gap.severity === "major"));
     if (this.deliberation && blockingGap) {
-      const existingRepair = (await this.readModel.workItems(input.missionId)).find(work =>
-        work.gapRefs.includes(blockingGap.id) && !["succeeded", "invalidated", "superseded", "abandoned"].includes(work.status)
+      const allWorkItems = await this.readModel.workItems(input.missionId);
+      const relatedWorkItems = allWorkItems.filter(work => work.gapRefs.includes(blockingGap.id));
+      const existingRepair = relatedWorkItems.find(work =>
+        !["succeeded", "invalidated", "superseded", "abandoned"].includes(work.status)
       );
       if (!existingRepair) {
-        const diagnosis = await this.deliberation.diagnoseGap({ state, gap: blockingGap });
+        const findingIds = new Set(blockingGap.findingRefs);
+        const findings = (await this.readModel.findings(input.missionId)).filter(finding => findingIds.has(finding.id));
+        const evidenceIds = new Set(findings.flatMap(finding => finding.evidenceRefs));
+        const evidence = (await this.readModel.evidence(input.missionId)).filter(item => evidenceIds.has(item.id));
+        const priorRepairCount = relatedWorkItems.filter(work => work.purpose === "repair").length;
+        const rawDiagnosis = await this.deliberation.diagnoseGap({
+          state,
+          gap: blockingGap,
+          findings,
+          evidence,
+          relatedWorkItems,
+          priorRepairCount
+        });
+        const diagnosis = normalizeGapDiagnosis(rawDiagnosis, {
+          findingRefs: findings.map(finding => finding.id),
+          evidenceRefs: evidence.map(item => item.id),
+          priorRepairCount
+        });
         const decision = this.decisionForDiagnosis(input.missionId, blockingGap, diagnosis);
-        await this.emit(input.missionId, "decision.created", { decision }, { type: "controller" }, `decision:${blockingGap.id}:${diagnosis.intervention}`);
+        await this.emit(input.missionId, "decision.created", { decision, diagnosis }, { type: "controller" }, `decision:${blockingGap.id}:${diagnosis.intervention}:${priorRepairCount + 1}`);
         decisionsCreated.push(decision.id);
-        if (["retry", "revise_work", "replan_local", "replace_capability"].includes(diagnosis.intervention)) {
-          const repair = this.repairWorkItem(state, blockingGap, diagnosis.rootCause);
+
+        if (diagnosis.intervention === "replan_local" || diagnosis.intervention === "revise_strategy") {
+          if (diagnosis.intervention === "revise_strategy") {
+            const proposal = await this.deliberation.composeStrategy({
+              state,
+              userGoal: await this.readModel.userGoal(input.missionId),
+              acceptanceContract: await this.readModel.acceptanceContract(input.missionId)
+            });
+            const revision = Math.max((state.strategyRevision ?? 0) + 1, proposal.revision);
+            await this.emit(input.missionId, "strategy.revised", { ...proposal, revision }, { type: "planner" }, `strategy:${input.missionId}:${revision}`);
+            state = await this.state(input.missionId);
+          }
+          const frontier = await this.deliberation.planFrontier({
+            state,
+            userGoal: await this.readModel.userGoal(input.missionId),
+            openGaps,
+            acceptanceContract: await this.readModel.acceptanceContract(input.missionId),
+            requirements: await this.readModel.requirements(input.missionId)
+          });
+          if (frontier.graphRevision > state.graphRevision) {
+            await this.emit(input.missionId, "graph.revised", { revision: frontier.graphRevision }, { type: "planner" }, `graph:${input.missionId}:${frontier.graphRevision}`);
+          }
+          for (const need of frontier.capabilityNeeds ?? []) {
+            await this.emit(input.missionId, "capability.need.created", { need }, { type: "planner" }, `capability-need:${need.id}`);
+          }
+          for (const work of frontier.workItems) {
+            await this.proposeWork(work);
+            workItemsCreated.push(work.id);
+          }
+        } else {
+          const repair = this.repairWorkItem(state, blockingGap, diagnosis, priorRepairCount + 1);
           await this.proposeWork(repair);
           workItemsCreated.push(repair.id);
         }
@@ -256,8 +305,9 @@ export class MissionController {
       && state.finalArtifactRefs.length === 0;
   }
 
-  private decisionForDiagnosis(missionId: string, gap: Gap, diagnosis: { intervention: "retry" | "revise_work" | "replace_capability" | "replan_local" | "revise_strategy"; rootCause: string; confidence: number }): MissionDecision {
-    const type: MissionDecision["type"] = diagnosis.intervention === "replace_capability" ? "replace_capability"
+  private decisionForDiagnosis(missionId: string, gap: Gap, diagnosis: GapDiagnosis): MissionDecision {
+    const type: MissionDecision["type"] = diagnosis.intervention === "replace_executor" ? "replace_executor"
+      : diagnosis.intervention === "replace_capability" ? "replace_capability"
       : diagnosis.intervention === "replan_local" ? "replan_local"
       : diagnosis.intervention === "revise_strategy" ? "revise_strategy"
       : diagnosis.intervention === "retry" ? "retry"
@@ -267,11 +317,11 @@ export class MissionController {
       missionId,
       type,
       targetRefs: [gap.id],
-      rationale: diagnosis.rootCause,
-      evidenceRefs: [],
+      rationale: `${diagnosis.rootCause} [repair_scope=${diagnosis.repairScope ?? "work_item"}]`,
+      evidenceRefs: [...(diagnosis.evidenceRefs ?? [])],
       gapRefs: [gap.id],
       requirementRefs: [...gap.requirementRefs],
-      expectedImpact: `Resolve ${gap.severity} gap ${gap.id}`,
+      expectedImpact: `Resolve ${gap.severity} gap ${gap.id} with the minimum sufficient repair scope`,
       confidence: diagnosis.confidence,
       requiresApproval: false,
       status: "proposed",
@@ -279,13 +329,14 @@ export class MissionController {
     };
   }
 
-  private repairWorkItem(state: MissionState, gap: Gap, rootCause: string): WorkItem {
+  private repairWorkItem(state: MissionState, gap: Gap, diagnosis: GapDiagnosis, sequence: number): WorkItem {
     const now = new Date().toISOString();
+    const id = sequence <= 1 ? `repair-${gap.id}` : `repair-${gap.id}-${sequence}`;
     return {
-      id: `repair-${gap.id}`,
+      id,
       missionId: state.missionId,
       purpose: "repair",
-      objective: `Resolve gap: ${gap.description}. Diagnosed cause: ${rootCause}`,
+      objective: `Resolve gap: ${gap.description}. Diagnosed cause: ${diagnosis.rootCause}. Repair scope: ${diagnosis.repairScope ?? "work_item"}`,
       status: "ready",
       requirementRefs: [...gap.requirementRefs],
       gapRefs: [gap.id],

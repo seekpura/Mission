@@ -32,7 +32,22 @@ export class DeterministicDeliberationProvider implements DeliberationProvider {
     return { workItems: [], capabilityNeeds: [], graphRevision: input.state.graphRevision + 1 };
   }
   async diagnoseGap(input: any): Promise<GapDiagnosis> {
-    return { gapId: input.gap.id, rootCause: input.gap.description, intervention: "revise_work", confidence: 0.8 };
+    const findings = Array.isArray(input.findings) ? input.findings : [];
+    const evidenceRefs = [...new Set(findings.flatMap((finding: any) => finding.evidenceRefs ?? []))];
+    return {
+      gapId: input.gap.id,
+      rootCause: input.gap.description,
+      intervention: "revise_work",
+      repairScope: "work_item",
+      confidence: 0.8,
+      evidenceRefs,
+      hypotheses: [{
+        statement: input.gap.description,
+        confidence: 0.8,
+        findingRefs: findings.map((finding: any) => finding.id),
+        evidenceRefs
+      }]
+    };
   }
   async challengeCompletion(): Promise<CompletionChallenge> {
     return { blockingObjection: false, objections: [], confidence: 1 };

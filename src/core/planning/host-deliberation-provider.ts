@@ -168,16 +168,33 @@ Only create a CapabilityNeed when the current environment may not already provid
 You are the Mission Runtime Gap Diagnostician.
 State: ${JSON.stringify(input.state)}
 Gap: ${JSON.stringify(input.gap)}
-Return ONLY JSON: {"gapId":string,"rootCause":string,"intervention":"retry|revise_work|replace_capability|replan_local|revise_strategy","confidence":number}.
-Choose the minimum sufficient repair scope. Repeated semantic failures should escalate beyond retry.
+Findings: ${JSON.stringify(input.findings ?? [])}
+Evidence: ${JSON.stringify(input.evidence ?? [])}
+Related work items: ${JSON.stringify(input.relatedWorkItems ?? [])}
+Prior repair count: ${input.priorRepairCount ?? 0}
+Generate competing root-cause hypotheses before choosing a repair scope. Prefer the minimum sufficient repair. A repeated semantic failure must not be treated as the same transient attempt retry. Do not claim a root cause unsupported by the supplied findings/evidence.
+Return ONLY JSON: {"gapId":string,"rootCause":string,"hypotheses":[{"statement":string,"confidence":number,"findingRefs":string[],"evidenceRefs":string[]}],"repairScope":"attempt|work_item|executor|capability|graph|strategy","intervention":"retry|revise_work|replace_executor|replace_capability|replan_local|revise_strategy","confidence":number,"evidenceRefs":string[],"rootCauseKeyCandidate":string|null}.
 `);
-    const intervention = ["retry", "revise_work", "replace_capability", "replan_local", "revise_strategy"].includes(value.intervention)
+    const allowedInterventions = ["retry", "revise_work", "replace_executor", "replace_capability", "replan_local", "revise_strategy"];
+    const intervention = allowedInterventions.includes(value.intervention)
       ? value.intervention as GapDiagnosis["intervention"] : "revise_work";
+    const allowedScopes = ["attempt", "work_item", "executor", "capability", "graph", "strategy"];
+    const repairScope = allowedScopes.includes(value.repairScope) ? value.repairScope as NonNullable<GapDiagnosis["repairScope"]> : undefined;
+    const hypotheses = arrayValue(value.hypotheses).slice(0, 5).map((raw: any) => ({
+      statement: stringValue(raw?.statement, stringValue(value.rootCause, input.gap.description)),
+      confidence: clamp01(numberValue(raw?.confidence, 0.5)),
+      findingRefs: stringArray(raw?.findingRefs),
+      evidenceRefs: stringArray(raw?.evidenceRefs)
+    }));
     return {
       gapId: input.gap.id,
       rootCause: stringValue(value.rootCause, input.gap.description),
       intervention,
-      confidence: clamp01(numberValue(value.confidence, 0.7))
+      repairScope,
+      confidence: clamp01(numberValue(value.confidence, 0.7)),
+      evidenceRefs: stringArray(value.evidenceRefs),
+      hypotheses,
+      rootCauseKeyCandidate: typeof value.rootCauseKeyCandidate === "string" && value.rootCauseKeyCandidate.trim() ? value.rootCauseKeyCandidate.trim() : undefined
     };
   }
 

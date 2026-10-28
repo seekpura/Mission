@@ -1,6 +1,6 @@
 import type { Artifact } from "../domain/artifact.ts";
 import type { AcceptanceContract, Requirement } from "../domain/mission.ts";
-import type { Evidence, Gap, VerificationResult } from "../domain/verification.ts";
+import type { Evidence, Finding, Gap, VerificationResult } from "../domain/verification.ts";
 import type { WorkItem } from "../domain/work-item.ts";
 import type { EventStore } from "../events/event-store.ts";
 import type { MissionProjectionReader } from "../events/projection-store.ts";
@@ -68,6 +68,13 @@ export class MissionReadModel {
       }
     }
     return [...map.values()].filter(isOpenGap);
+  }
+
+  async findings(missionId: string): Promise<Finding[]> {
+    if (this.projections) return this.projections.listFindings(missionId);
+    return (await this.store.list(missionId))
+      .filter(event => event.type === "finding.created")
+      .map(event => (((event.payload as any).finding ?? event.payload) as Finding));
   }
 
   async acceptanceContract(missionId: string): Promise<AcceptanceContract | null> {
