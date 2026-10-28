@@ -33,6 +33,21 @@ function remove(list: string[], id: string) {
   return list.filter(x => x !== id);
 }
 
+function removeWorkFromStatusLists(state: MissionState, id: string): void {
+  state.activeWorkItemIds = remove(state.activeWorkItemIds, id);
+  state.readyWorkItemIds = remove(state.readyWorkItemIds, id);
+  state.blockedWorkItemIds = remove(state.blockedWorkItemIds, id);
+  state.verifyingWorkItemIds = remove(state.verifyingWorkItemIds, id);
+}
+
+function projectWorkStatus(state: MissionState, id: string, status: string): void {
+  removeWorkFromStatusLists(state, id);
+  if (status === "ready") addUnique(state.readyWorkItemIds, id);
+  if (status === "running") addUnique(state.activeWorkItemIds, id);
+  if (status === "verifying") addUnique(state.verifyingWorkItemIds, id);
+  if (status === "blocked" || status === "waiting") addUnique(state.blockedWorkItemIds, id);
+}
+
 export function projectMissionState(missionId: string, events: MissionEvent[]): MissionState {
   const s = initialMissionState(missionId);
   for (const event of events) {
@@ -66,36 +81,30 @@ export function projectMissionState(missionId: string, events: MissionEvent[]): 
         break;
       case "work.created": {
         const p = event.payload as { id: string; status?: string; workstreamId?: string };
-        if ((p.status ?? "ready") === "ready") addUnique(s.readyWorkItemIds, p.id);
+        projectWorkStatus(s, p.id, p.status ?? "ready");
         if (p.workstreamId) addUnique(s.activeWorkstreamIds, p.workstreamId);
         break;
       }
       case "work.started": {
         const id = (event.payload as { id: string }).id;
-        s.readyWorkItemIds = remove(s.readyWorkItemIds, id);
-        addUnique(s.activeWorkItemIds, id);
+        projectWorkStatus(s, id, "running");
         break;
       }
       case "work.updated": {
         const p = event.payload as { id: string; status: string };
-        if (p.status === "ready") addUnique(s.readyWorkItemIds, p.id);
-        if (p.status === "verifying") addUnique(s.verifyingWorkItemIds, p.id);
-        if (p.status === "blocked") addUnique(s.blockedWorkItemIds, p.id);
+        projectWorkStatus(s, p.id, p.status);
         break;
       }
       case "work.completed":
       case "work.failed":
       case "work.invalidated": {
         const id = (event.payload as { id: string }).id;
-        s.activeWorkItemIds = remove(s.activeWorkItemIds, id);
-        s.readyWorkItemIds = remove(s.readyWorkItemIds, id);
-        s.verifyingWorkItemIds = remove(s.verifyingWorkItemIds, id);
+        removeWorkFromStatusLists(s, id);
         break;
       }
       case "work.blocked": {
         const id = (event.payload as { id: string }).id;
-        s.activeWorkItemIds = remove(s.activeWorkItemIds, id);
-        addUnique(s.blockedWorkItemIds, id);
+        projectWorkStatus(s, id, "blocked");
         break;
       }
       case "execution.started": {
