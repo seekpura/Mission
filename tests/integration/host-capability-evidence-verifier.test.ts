@@ -231,6 +231,18 @@ test("explicit host-native browser evidence becomes durable Runtime Evidence and
     const transientRuntime = hostReviewInput.runtimeEvidence.find((item: any) => item.kind === "browser-runtime");
     assert.equal(transientRuntime.inspectionPayload.evidence.blockingConsoleErrors, 0);
     assert.deepEqual(transientRuntime.inspectionPayload.evidence.interactions, ["primary-navigation", "keyboard-focus"]);
+
+    const durableIds = evidence.map(item => item.id).sort();
+    const second = await verifier.verify(artifact, { state, workItem, gaps: [] });
+    assert.equal(second.overall, "pass");
+    assert.equal(host.invocations.length, 2, "read-only runtime observation may be refreshed on retry");
+    assert.deepEqual(
+      reader.readEvidence(state.missionId, "site@1").map(item => item.id).sort(),
+      durableIds,
+      "byte-/claim-identical Evidence must remain durably idempotent"
+    );
+    const evidenceEvents = (await events.list(state.missionId)).filter(event => event.type === "evidence.collected");
+    assert.equal(evidenceEvents.length, durableIds.length);
   } finally {
     database.close();
     rmSync(root, { recursive: true, force: true });
