@@ -128,13 +128,14 @@ export class MissionOrchestrator {
     const attemptId = `attempt-${work.id}-${randomUUID().slice(0, 8)}`;
     const executionId = `execution-${work.id}-${randomUUID().slice(0, 8)}`;
     const workspace = this.workspaces.allocate(work.missionId, attemptId);
-    const [requirements, knownArtifacts, knownSources, knownTruths] = await Promise.all([
+    const [requirements, knownArtifacts, knownSources, knownTruths, knownGaps] = await Promise.all([
       this.projections.listRequirements(work.missionId),
       this.projections.listArtifacts(work.missionId),
       this.projections.listSources(work.missionId),
-      this.projections.listTruths(work.missionId)
+      this.projections.listTruths(work.missionId),
+      this.projections.listGaps(work.missionId)
     ]);
-    const knowledgeContext = this.knowledgeSelector.select({ workItem: work, truths: knownTruths, sources: knownSources });
+    const knowledgeContext = this.knowledgeSelector.select({ workItem: work, truths: knownTruths, sources: knownSources, gaps: knownGaps });
     const contextPacket = this.contextCompiler.compile({
       state,
       workItem: work,
@@ -149,6 +150,8 @@ export class MissionOrchestrator {
       requirements: requirements.filter(r => work.requirementRefs.includes(r.id)),
       truths: knowledgeContext.truths,
       sources: knowledgeContext.sources,
+      gaps: knowledgeContext.relatedGaps,
+      invalidatedKnowledge: { truths: knowledgeContext.diagnosticTruths, sources: knowledgeContext.diagnosticSources },
       expectedOutputs: work.expectedOutputs,
       capabilities,
       workspaceRoot: workspace.root,

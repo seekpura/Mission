@@ -62,6 +62,7 @@ export class MissionReadModel {
           findingRefs: payload.findingRefs ?? [],
           requirementRefs: payload.requirementRefs ?? [],
           artifactRefs: payload.artifactRefs ?? [],
+          sourceRefs: payload.sourceRefs ?? [],
           status: "open",
           openedAt: event.createdAt
         });
