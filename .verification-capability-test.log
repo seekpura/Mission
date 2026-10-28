@@ -1,0 +1,530 @@
+
+> mission-runtime@0.1.0-dev test
+> node --experimental-strip-types --test tests/unit/*.test.ts tests/integration/*.test.ts tests/e2e/*.test.ts
+
+TAP version 13
+# (node:2202) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: mission autonomously consumes the frontier, commits output, verifies evidence, satisfies acceptance and completes
+ok 1 - mission autonomously consumes the frontier, commits output, verifies evidence, satisfies acceptance and completes
+  ---
+  duration_ms: 52.112183
+  type: 'test'
+  ...
+# (node:2209) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: missing capability becomes acquisition work, activates mission-locally, unblocks original work and completes acceptance
+ok 2 - missing capability becomes acquisition work, activates mission-locally, unblocks original work and completes acceptance
+  ---
+  duration_ms: 112.193551
+  type: 'test'
+  ...
+# (node:2228) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: mission can move through blocking verification gap, targeted repair, verified final and completion
+ok 3 - mission can move through blocking verification gap, targeted repair, verified final and completion
+  ---
+  duration_ms: 20.980894
+  type: 'test'
+  ...
+# (node:2235) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: missing render capability is acquired and verification resumes without regenerating the production artifact
+ok 4 - missing render capability is acquired and verification resumes without regenerating the production artifact
+  ---
+  duration_ms: 100.32537
+  type: 'test'
+  ...
+# (node:2254) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: hard completion gate refuses a final artifact until required Requirement evidence is satisfied
+ok 5 - hard completion gate refuses a final artifact until required Requirement evidence is satisfied
+  ---
+  duration_ms: 10.047462
+  type: 'test'
+  ...
+# Subtest: context compiler scopes work context and resolver prefers available matching capability
+ok 6 - context compiler scopes work context and resolver prefers available matching capability
+  ---
+  duration_ms: 2.889386
+  type: 'test'
+  ...
+# (node:2268) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: controller cycle composes strategy, opens a rolling frontier and can complete after verified work
+ok 7 - controller cycle composes strategy, opens a rolling frontier and can complete after verified work
+  ---
+  duration_ms: 17.189828
+  type: 'test'
+  ...
+# Subtest: controller diagnoses a blocking gap and materializes a repair work item
+ok 8 - controller diagnoses a blocking gap and materializes a repair work item
+  ---
+  duration_ms: 6.229195
+  type: 'test'
+  ...
+# (node:2275) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: controller reconstructs mission after controller replacement and preserves repair state
+ok 9 - controller reconstructs mission after controller replacement and preserves repair state
+  ---
+  duration_ms: 13.972849
+  type: 'test'
+  ...
+# Subtest: official DSH bindings drive the public create/followup/whenIdle surface and expose host events
+ok 10 - official DSH bindings drive the public create/followup/whenIdle surface and expose host events
+  ---
+  duration_ms: 3.442202
+  type: 'test'
+  ...
+# (node:2289) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: runtime recovery marks orphaned in-process executions lost without blind retry
+ok 11 - runtime recovery marks orphaned in-process executions lost without blind retry
+  ---
+  duration_ms: 19.26103
+  type: 'test'
+  ...
+# Subtest: cancelling a local execution releases resource and artifact leases for the next execution
+ok 12 - cancelling a local execution releases resource and artifact leases for the next execution
+  ---
+  duration_ms: 270.790026
+  type: 'test'
+  ...
+# (node:2317) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: orchestrator directly invokes a resolved host tool instead of spawning an agent
+ok 13 - orchestrator directly invokes a resolved host tool instead of spawning an agent
+  ---
+  duration_ms: 28.727664
+  type: 'test'
+  ...
+# Subtest: host-agent execution backend turns host agent completion into an execution result
+ok 14 - host-agent execution backend turns host agent completion into an execution result
+  ---
+  duration_ms: 2.210724
+  type: 'test'
+  ...
+# (node:2332) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: direct invocation persists route, approval and side-effect audit across projection rebuild
+ok 15 - direct invocation persists route, approval and side-effect audit across projection rebuild
+  ---
+  duration_ms: 25.366563
+  type: 'test'
+  ...
+# Subtest: local execution produces and commits a candidate artifact
+ok 16 - local execution produces and commits a candidate artifact
+  ---
+  duration_ms: 46.557471
+  type: 'test'
+  ...
+# (node:2353) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: runtime recovers verified workspace output instead of blindly retrying a lost execution
+ok 17 - runtime recovers verified workspace output instead of blindly retrying a lost execution
+  ---
+  duration_ms: 20.105303
+  type: 'test'
+  ...
+# (node:2360) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: runtime validation executes a structured command and satisfies a test-backed requirement
+ok 18 - runtime validation executes a structured command and satisfies a test-backed requirement
+  ---
+  duration_ms: 68.034215
+  type: 'test'
+  ...
+# Subtest: failing runtime validation creates a blocking artifact gap and leaves requirement unverified
+ok 19 - failing runtime validation creates a blocking artifact gap and leaves requirement unverified
+  ---
+  duration_ms: 37.303323
+  type: 'test'
+  ...
+# Subtest: integration validation verifies specifically named artifacts and AcceptanceEvaluator requires the exact validation check
+ok 20 - integration validation verifies specifically named artifacts and AcceptanceEvaluator requires the exact validation check
+  ---
+  duration_ms: 10.137681
+  type: 'test'
+  ...
+# (node:2381) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: artifact assurance refuses to promote visual requirements when perceptual verifier is unavailable
+not ok 21 - artifact assurance refuses to promote visual requirements when perceptual verifier is unavailable
+  ---
+  duration_ms: 18.278098
+  type: 'test'
+  location: '/home/runner/work/Mission/Mission/tests/integration/typed-verification-assurance.test.ts:52:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///home/runner/work/Mission/Mission/tests/integration/typed-verification-assurance.test.ts:58:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: presentation reviewer cannot pass perceptual verification without derived renders
+not ok 22 - presentation reviewer cannot pass perceptual verification without derived renders
+  ---
+  duration_ms: 7.308989
+  type: 'test'
+  location: '/home/runner/work/Mission/Mission/tests/integration/typed-verification-assurance.test.ts:64:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///home/runner/work/Mission/Mission/tests/integration/typed-verification-assurance.test.ts:71:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: independent host reviewer can satisfy visual requirement only after a derived slide render exists
+ok 23 - independent host reviewer can satisfy visual requirement only after a derived slide render exists
+  ---
+  duration_ms: 10.712097
+  type: 'test'
+  ...
+# Subtest: AcceptanceEvaluator does not let one integration-level PASS satisfy a different validation
+ok 24 - AcceptanceEvaluator does not let one integration-level PASS satisfy a different validation
+  ---
+  duration_ms: 4.821387
+  type: 'test'
+  ...
+# Subtest: Git materializer selects the requested Agent Skill from a multi-skill repository
+ok 25 - Git materializer selects the requested Agent Skill from a multi-skill repository
+  ---
+  duration_ms: 51.441848
+  type: 'test'
+  ...
+# Subtest: artifact store versions immutable committed artifacts
+ok 26 - artifact store versions immutable committed artifacts
+  ---
+  duration_ms: 4.232332
+  type: 'test'
+  ...
+# Subtest: GitHub discovery is need-driven and candidate ranking prefers matching repository
+ok 27 - GitHub discovery is need-driven and candidate ranking prefers matching repository
+  ---
+  duration_ms: 2.137576
+  type: 'test'
+  ...
+# Subtest: mission overlay does not mutate host capability list
+ok 28 - mission overlay does not mutate host capability list
+  ---
+  duration_ms: 1.098008
+  type: 'test'
+  ...
+# Subtest: secure acquisition pins a Git candidate, structurally smokes an instruction skill and activates a mission-local immutable copy
+ok 29 - secure acquisition pins a Git candidate, structurally smokes an instruction skill and activates a mission-local immutable copy
+  ---
+  duration_ms: 85.92511
+  type: 'test'
+  ...
+# Subtest: Agent Skills parser extracts repo@skill and direct tree results without treating prose as candidates
+ok 30 - Agent Skills parser extracts repo@skill and direct tree results without treating prose as candidates
+  ---
+  duration_ms: 2.492722
+  type: 'test'
+  ...
+# Subtest: Agent Skills CLI client pins the package version used for discovery and does not install capabilities
+ok 31 - Agent Skills CLI client pins the package version used for discovery and does not install capabilities
+  ---
+  duration_ms: 0.623969
+  type: 'test'
+  ...
+# Subtest: GitHub REST client searches repository metadata with bounded result count and auth header
+ok 32 - GitHub REST client searches repository metadata with bounded result count and auth header
+  ---
+  duration_ms: 47.488216
+  type: 'test'
+  ...
+# Subtest: routes a single host tool directly
+ok 33 - routes a single host tool directly
+  ---
+  duration_ms: 4.051583
+  type: 'test'
+  ...
+# Subtest: keeps skills and multi-capability composition on a host agent
+ok 34 - keeps skills and multi-capability composition on a host agent
+  ---
+  duration_ms: 0.371216
+  type: 'test'
+  ...
+# Subtest: routes an explicitly structured mission-local CLI directly
+ok 35 - routes an explicitly structured mission-local CLI directly
+  ---
+  duration_ms: 0.307937
+  type: 'test'
+  ...
+# (node:2464) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: inspection service rejects provider products outside the isolated inspection workspace
+ok 36 - inspection service rejects provider products outside the isolated inspection workspace
+  ---
+  duration_ms: 13.902176
+  type: 'test'
+  ...
+# Subtest: ProcessManager cancels an owned process
+ok 37 - ProcessManager cancels an owned process
+  ---
+  duration_ms: 92.737387
+  type: 'test'
+  ...
+# Subtest: scanner blocks destructive privilege escalation
+ok 38 - scanner blocks destructive privilege escalation
+  ---
+  duration_ms: 2.725749
+  type: 'test'
+  ...
+# Subtest: scanner allows inert instruction-only candidate to reach sandbox
+ok 39 - scanner allows inert instruction-only candidate to reach sandbox
+  ---
+  duration_ms: 0.835145
+  type: 'test'
+  ...
+# (node:2492) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: SQLite event store appends in order and enforces optimistic concurrency
+ok 40 - SQLite event store appends in order and enforces optimistic concurrency
+  ---
+  duration_ms: 4.980265
+  type: 'test'
+  ...
+# Subtest: idempotency key returns the already committed event
+ok 41 - idempotency key returns the already committed event
+  ---
+  duration_ms: 2.229408
+  type: 'test'
+  ...
+# (node:2499) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: event append atomically maintains durable mission, work and gap projections
+ok 42 - event append atomically maintains durable mission, work and gap projections
+  ---
+  duration_ms: 9.608228
+  type: 'test'
+  ...
+# Subtest: projection rebuild reproduces current mission state from the event log
+ok 43 - projection rebuild reproduces current mission state from the event log
+  ---
+  duration_ms: 5.485521
+  type: 'test'
+  ...
+# Subtest: unchanged artifact reuses cacheable checks while a changed requirement only reruns its semantic check
+ok 44 - unchanged artifact reuses cacheable checks while a changed requirement only reruns its semantic check
+  ---
+  duration_ms: 32.665664
+  type: 'test'
+  ...
+# Subtest: integration dependency content changes invalidate only the integration check
+ok 45 - integration dependency content changes invalidate only the integration check
+  ---
+  duration_ms: 1.624645
+  type: 'test'
+  ...
+# Subtest: runtime checks are never reused from cache
+ok 46 - runtime checks are never reused from cache
+  ---
+  duration_ms: 2.36373
+  type: 'test'
+  ...
+# Subtest: planner creates a perceptual check for visual review requirements
+ok 47 - planner creates a perceptual check for visual review requirements
+  ---
+  duration_ms: 3.403519
+  type: 'test'
+  ...
+# Subtest: required perceptual verification is inconclusive when no capable verifier exists
+ok 48 - required perceptual verification is inconclusive when no capable verifier exists
+  ---
+  duration_ms: 3.098376
+  type: 'test'
+  ...
+1..48
+# tests 48
+# suites 0
+# pass 46
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7162.347653
+
+> mission-runtime@0.1.0-dev smoke
+> node --experimental-strip-types tests/e2e/smoke.ts
+
+{
+  "state": {
+    "missionId": "smoke",
+    "status": "completed",
+    "revision": 7,
+    "missionSpecRevision": 1,
+    "acceptanceRevision": 1,
+    "strategyRevision": null,
+    "graphRevision": 0,
+    "environmentSnapshotRevision": 0,
+    "activeWorkstreamIds": [],
+    "activeWorkItemIds": [],
+    "readyWorkItemIds": [],
+    "blockedWorkItemIds": [],
+    "verifyingWorkItemIds": [],
+    "openGapIds": [],
+    "blockingGapIds": [],
+    "activeExecutionIds": [],
+    "pendingApprovalIds": [],
+    "finalArtifactRefs": [
+      "artifact@2"
+    ],
+    "lastEventSequence": 7,
+    "updatedAt": "2026-10-28T04:48:14.833Z",
+    "createdAt": "2026-10-28T04:48:14.825Z"
+  },
+  "events": [
+    {
+      "id": "d089d391-6cee-4d15-8141-1f798fd8dd1c",
+      "missionId": "smoke",
+      "sequence": 1,
+      "type": "mission.created",
+      "actor": {
+        "type": "user"
+      },
+      "payload": {
+        "missionId": "smoke",
+        "userGoal": "prove mission durability and completion gating"
+      },
+      "idempotencyKey": "mission-created:smoke",
+      "schemaVersion": 1,
+      "createdAt": "2026-10-28T04:48:14.825Z"
+    },
+    {
+      "id": "fc84c9a7-6ed7-4de4-a1e0-7c1a4419ab63",
+      "missionId": "smoke",
+      "sequence": 2,
+      "type": "mission.spec.revised",
+      "actor": {
+        "type": "controller"
+      },
+      "payload": {
+        "revision": 1,
+        "spec": {
+          "missionId": "smoke",
+          "revision": 1,
+          "objective": "prove mission durability and completion gating",
+          "requestedOutputs": [],
+          "constraints": [],
+          "preferences": [],
+          "sourceRefs": [],
+          "createdAt": "2026-10-28T04:48:14.828Z"
+        },
+        "objective": "prove mission durability and completion gating"
+      },
+      "idempotencyKey": "mission-spec:smoke:1",
+      "schemaVersion": 1,
+      "createdAt": "2026-10-28T04:48:14.828Z"
+    },
+    {
+      "id": "b46d1efe-d8ee-43dd-92ca-f7d4d42e6174",
+      "missionId": "smoke",
+      "sequence": 3,
+      "type": "acceptance.created",
+      "actor": {
+        "type": "controller"
+      },
+      "payload": {
+        "revision": 1,
+        "contract": {
+          "missionId": "smoke",
+          "revision": 1,
+          "requirements": [],
+          "requiredArtifacts": [],
+          "requiredValidations": [],
+          "criticalFailureConditions": [],
+          "createdAt": "2026-10-28T04:48:14.828Z"
+        }
+      },
+      "idempotencyKey": "acceptance:smoke:1",
+      "schemaVersion": 1,
+      "createdAt": "2026-10-28T04:48:14.828Z"
+    },
+    {
+      "id": "4be879a0-5fdb-4f22-8dfe-9e4f81024de8",
+      "missionId": "smoke",
+      "sequence": 4,
+      "type": "gap.opened",
+      "actor": {
+        "type": "verifier"
+      },
+      "payload": {
+        "id": "g1",
+        "severity": "major",
+        "description": "verification gap"
+      },
+      "idempotencyKey": "gap:g1",
+      "schemaVersion": 1,
+      "createdAt": "2026-10-28T04:48:14.828Z"
+    },
+    {
+      "id": "db6fd4e7-70b5-4984-996b-284b6cfbe2b0",
+      "missionId": "smoke",
+      "sequence": 5,
+      "type": "gap.resolved",
+      "actor": {
+        "type": "verifier"
+      },
+      "payload": {
+        "id": "g1"
+      },
+      "idempotencyKey": "gap-resolved:g1",
+      "schemaVersion": 1,
+      "createdAt": "2026-10-28T04:48:14.828Z"
+    },
+    {
+      "id": "d3ab61ae-7336-47ae-b6e7-187efd06ba63",
+      "missionId": "smoke",
+      "sequence": 6,
+      "type": "artifact.validated",
+      "actor": {
+        "type": "verifier"
+      },
+      "payload": {
+        "artifactRef": "artifact@2",
+        "final": true
+      },
+      "idempotencyKey": "artifact-validated:artifact@2:true",
+      "schemaVersion": 1,
+      "createdAt": "2026-10-28T04:48:14.829Z"
+    },
+    {
+      "id": "0e8985e0-98e3-475d-b0ba-a05aadfb4ac5",
+      "missionId": "smoke",
+      "sequence": 7,
+      "type": "mission.completed",
+      "actor": {
+        "type": "controller"
+      },
+      "payload": {
+        "reason": "deterministic completion gate and completion challenge passed"
+      },
+      "idempotencyKey": "mission-completed:6",
+      "schemaVersion": 1,
+      "createdAt": "2026-10-28T04:48:14.833Z"
+    }
+  ]
+}
+(node:2532) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
