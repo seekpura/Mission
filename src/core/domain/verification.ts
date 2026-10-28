@@ -43,6 +43,10 @@ export interface Finding {
   requirementRefs: string[];
   evidenceRefs: string[];
   confidence: number;
+  checkId?: string;
+  fingerprint?: string;
+  rootCauseKey?: string;
+  reproducible?: boolean;
   createdAt: string;
 }
 
@@ -97,6 +101,10 @@ export interface Gap {
   requirementRefs: string[];
   artifactRefs: string[];
   status: "open" | "working" | "resolved" | "accepted" | "blocked";
+  fingerprint?: string;
+  rootCauseKey?: string;
+  occurrenceCount?: number;
+  lastObservedAt?: string;
   openedAt: string;
   resolvedAt?: string;
 }
