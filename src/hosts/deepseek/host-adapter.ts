@@ -1,5 +1,6 @@
 import type { HostCapabilityGraph } from "../../core/capabilities/capability-graph.ts";
 import type { CapabilityDescriptor } from "../../core/domain/capability.ts";
+import type { SideEffectPolicy } from "../../core/domain/execution.ts";
 
 export interface HostDescriptor {
   type: string;
@@ -54,9 +55,14 @@ export type HostMcpServer =
 export interface AgentCreateRequest {
   missionId: string;
   workItemId: string;
+  /** Runtime identity is host-control metadata and is not authored by the Worker. */
+  attemptId?: string;
+  executionId?: string;
   context: unknown;
   allowedCapabilityRefs: string[];
   workspaceRoot?: string;
+  /** Runtime-owned side-effect policy used by provider permission bridges. */
+  sideEffectPolicy?: SideEffectPolicy;
   /** Provider-native MCP declarations selected by a trusted Host delivery layer. */
   mcpServers?: HostMcpServer[];
 }
