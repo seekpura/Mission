@@ -159,7 +159,16 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - an irreversible side-effect admission remains replay-protected across process restart: the same operation key is `replay_blocked` without a second approval, preventing duplicate external action when completion was ambiguous at crash time
 - read-only provider permission requests continue through the normal host approval path; unknown permission-gated mutations fail closed
 - URL side-effect targets are sanitized before durable persistence; credentials/query/hash are not retained in receipts
-- HostAdapter contract
+- provider-neutral `HostAdapter` contract lives at `src/hosts/host-adapter.ts`; core/runtime/execution modules no longer import the contract through a provider namespace and a regression test enforces that boundary
+- FakeHostAdapter consumes the provider-neutral contract directly
+- production OpenAI Codex app-server HostAdapter over native `codex app-server --stdio` JSON-RPC, alongside the existing DeepSeek Harness ACP adapter
+- Codex native thread start/resume, turn start/steer/interrupt, cross-process recovery identity, message/tool event mapping and command/file permission request bridging are implemented
+- Codex control-plane sessions are read-only while production Work sessions use workspace-write so `.mission-output.json` and real deliverables can be produced without granting danger-full-access
+- the generic HostAgentWorkExecutionDriver is proven against Codex by committing a real candidate Artifact through the same Mission output-manifest path used by other Hosts
+- Codex native command approval is routed through RuntimeSideEffectManager and the shared HostSideEffectScopeRegistry, producing durable side-effect intent/admission/completion records and preserving execution-scoped replay keys
+- production host selection is explicit through `MISSION_HOST_KIND=deepseek|codex` with Codex binary/argument/model configuration; unknown host kinds fail closed
+- provider-native Agent Skill delivery remains DeepSeek-specific; Codex and arbitrary custom HostAdapters reject production Agent Skill acquisition until an explicit compatible delivery adapter exists
+- Codex trusted MCP projection and arbitrary `invokeHostCapability` routes remain fail-closed until provider-native adapters are implemented instead of silently reinterpreting DeepSeek/ACP configuration
 - FakeHostAdapter
 - DeepSeekHarnessAdapter boundary via injected bindings
 - production DeepSeek ACP process binding over `dsh --profile acp`
@@ -169,7 +178,7 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - recovery continuation prompt that inspects existing workspace and warns against blindly repeating irreversible side effects
 - exact executor-route recovery even when multiple routes share the same underlying driver id
 - protocol-level fake ACP integration tests including cross-process native-session resume without local DSH credentials
-- production runtime bootstrap composing SQLite/EventStore/read models, DSH HostAdapter, trusted MCP delivery, host planner, ExecutorRouter, host worker driver, independent verifier, capability runtime, supervisor, approvals and side-effect manager
+- production runtime bootstrap composes SQLite/EventStore/read models, a selected production HostAdapter, trusted capability delivery where provider-compatible, host planner, ExecutorRouter, host worker driver, independent verifier, capability runtime, supervisor, approvals and side-effect manager
 - strict framed-JSON HostAgent control transport for planner/verifier calls; malformed or unframed model output is rejected
 - HostDeliberationProvider uses fresh host sessions while reconstructing current user goal, latest strategy, capability needs, activated capabilities, WorkItems, Artifacts and open Gaps from the durable reader when available
 - planner output cannot set Mission identity, Work status, graph ownership, timestamps, creator or unknown executor routes
@@ -186,19 +195,18 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - Reference Mission capability failure coverage proves failed acquisition does not loop indefinitely: Runtime opens a durable blocker, admits an explicit fallback, supersedes the obsolete blocked Work and completes only after independent verification
 - Reference Mission side-effect coverage proves both fail-closed normalization of falsely successful unsettled receipts and the harder crash window where the external irreversible action may already have happened before terminal receipt persistence; restart never duplicates that action
 - CI workflow
-- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, side-effect admission/replay/execution-scope/cancel behavior, verifier recovery, verifier-profile routing/fail-closed/evidence-grounding coverage, durable Evidence projection/rebuild/API/idempotency, built-in Evidence collectors, host-native browser Evidence integration, semantic capability graph/planner routing, trusted MCP graph consistency and ACP create/resume delivery, acquisition transaction, trusted-cache exact reuse/revocation/integrity, capability trust-cost-audit atomic projection/lifecycle/API, capability runtime loop, production Agent Skill acquisition/native DSH delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, Work supersession admission/restart reconciliation, Reference Mission process/session/verifier/capability/side-effect fault injection, restart replay protection, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrency
+- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, side-effect admission/replay/execution-scope/cancel behavior, verifier recovery, verifier-profile routing/fail-closed/evidence-grounding coverage, durable Evidence projection/rebuild/API/idempotency, built-in Evidence collectors, host-native browser Evidence integration, semantic capability graph/planner routing, trusted MCP graph consistency and ACP create/resume delivery, acquisition transaction, trusted-cache exact reuse/revocation/integrity, capability trust-cost-audit atomic projection/lifecycle/API, capability runtime loop, production Agent Skill acquisition/native DSH delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, Work supersession admission/restart reconciliation, Reference Mission process/session/verifier/capability/side-effect fault injection, restart replay protection, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrenc, Codex app-server protocol/create/resume/steer/interrupt/approval/sandbox coverage, generic Codex Artifact-driver portability, Codex durable side-effect admission/settlement and provider-boundary regression coverage
 
 ## Next implementation frontier
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. second production host adapter proving HostAdapter portability
-2. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
-3. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
-4. concrete provider-specific read-only Evidence bindings/adapters for deployed presentation render, browser/accessibility, media probe/playback, executable test/build and research-recency capabilities as hosts expose them; the Runtime Evidence framework and fail-closed gates are implemented, but unavailable host capabilities remain inconclusive
-5. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as host adapters expose them
-6. external MCP discovery/acquisition plus provider-native CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles
-7. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction
+1. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
+2. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+3. concrete provider-specific read-only Evidence bindings/adapters for deployed presentation render, browser/accessibility, media probe/playback, executable test/build and research-recency capabilities as hosts expose them; the Runtime Evidence framework and fail-closed gates are implemented, but unavailable host capabilities remain inconclusive
+4. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as HostAdapters expose them
+5. external MCP discovery/acquisition plus provider-native MCP/Agent-Skill/CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles, including Codex-native delivery instead of reusing DeepSeek/ACP semantics
+6. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction
 
 ## GitHub source control
 
