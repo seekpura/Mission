@@ -7,6 +7,7 @@ export type DecisionType =
   | "revise_work"
   | "invalidate_work"
   | "acquire_capability"
+  | "replace_executor"
   | "replace_capability"
   | "replan_local"
   | "revise_strategy"
