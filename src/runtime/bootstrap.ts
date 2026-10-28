@@ -14,6 +14,7 @@ import {
   FileTrustedCapabilityCache,
   type TrustedCapabilityCache
 } from "../core/capabilities/trusted-capability-cache.ts";
+import type { VerificationEvidenceCollector } from "../core/verification/evidence-collector.ts";
 import { FileArtifactStore } from "../execution/artifacts/artifact-store.ts";
 import { HostAgentWorkExecutionDriver } from "../execution/host/host-agent-work-execution-driver.ts";
 import { WorkspaceManager } from "../execution/workspace/workspace-manager.ts";
@@ -39,6 +40,7 @@ import {
   parseTrustedMcpServersJson,
   type TrustedMcpServerConfig
 } from "./trusted-mcp-runtime.ts";
+import { createDefaultVerificationEvidenceCollectorRegistry } from "./verification-evidence-collectors.ts";
 
 export interface ProductionCapabilityAcquisitionOptions {
   mode: "github-skills";
@@ -66,6 +68,15 @@ export interface MissionRuntimeOptions {
   capabilityAcquisition?: ProductionCapabilityAcquisitionOptions;
   trustedMcpServers?: TrustedMcpServerConfig[];
   allowInsecureTrustedMcpHttp?: boolean;
+  /**
+   * Provider-/deployment-specific collectors for evidence that cannot be
+   * established from artifact bytes alone (browser runtime, native renders,
+   * playback/probe, executable tests/builds, source recency, etc.). Built-in
+   * deterministic collectors are always retained; missing adapters never cause
+   * the Runtime to fabricate evidence and therefore leave affected checks
+   * inconclusive.
+   */
+  verificationEvidenceCollectors?: VerificationEvidenceCollector[];
 }
 
 export interface MissionRuntime {
@@ -122,7 +133,14 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     knownExecutorIds: [executorId],
     defaultExecutorId: executorId
   });
-  const verifier = new HostArtifactVerifier({ transport: controlTransport, events, reader });
+  const verifier = new HostArtifactVerifier({
+    transport: controlTransport,
+    events,
+    reader,
+    evidenceCollectors: createDefaultVerificationEvidenceCollectorRegistry(
+      options.verificationEvidenceCollectors ?? []
+    )
+  });
   const workDriver = new HostAgentWorkExecutionDriver(
     host,
     new WorkspaceManager(resolve(root, "workspaces")),
