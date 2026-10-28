@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS acceptance_contracts (
   PRIMARY KEY(mission_id, revision)
 );
 
+-- Legacy projection tables retained for compatibility. New runtime read models use
+-- rm_* tables below because Mission-local ids are not globally unique.
 CREATE TABLE IF NOT EXISTS work_items (
   id TEXT PRIMARY KEY,
   mission_id TEXT NOT NULL,
@@ -167,4 +169,121 @@ CREATE TABLE IF NOT EXISTS capabilities (
   revision TEXT,
   data_json TEXT NOT NULL,
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rm_projection_checkpoints (
+  projection_name TEXT NOT NULL,
+  mission_id TEXT NOT NULL,
+  event_sequence INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(projection_name, mission_id)
+);
+
+CREATE TABLE IF NOT EXISTS rm_missions (
+  mission_id TEXT PRIMARY KEY,
+  user_goal TEXT NOT NULL DEFAULT '',
+  strategy_json TEXT,
+  event_sequence INTEGER NOT NULL DEFAULT 0,
+  state_json TEXT NOT NULL,
+  created_at TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rm_work_items (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_work_status ON rm_work_items(mission_id, status);
+
+CREATE TABLE IF NOT EXISTS rm_attempts (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  work_item_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_attempt_work ON rm_attempts(mission_id, work_item_id);
+
+CREATE TABLE IF NOT EXISTS rm_executions (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  work_item_id TEXT NOT NULL,
+  attempt_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_execution_status ON rm_executions(mission_id, status);
+
+CREATE TABLE IF NOT EXISTS rm_artifacts (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  logical_name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_artifacts_name ON rm_artifacts(mission_id, logical_name, version);
+
+CREATE TABLE IF NOT EXISTS rm_findings (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS rm_gaps (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_gaps_status ON rm_gaps(mission_id, status, severity);
+
+CREATE TABLE IF NOT EXISTS rm_decisions (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS rm_approvals (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_approvals_status ON rm_approvals(mission_id, status);
+
+CREATE TABLE IF NOT EXISTS rm_capability_needs (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS rm_capabilities (
+  mission_id TEXT NOT NULL,
+  id TEXT NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, id)
 );
