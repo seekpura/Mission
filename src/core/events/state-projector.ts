@@ -138,10 +138,24 @@ export function applyMissionEvent(state: MissionState, event: MissionEvent): Mis
       s.activeExecutionIds = remove(s.activeExecutionIds, id);
       break;
     }
-    case "gap.opened": {
-      const p = event.payload as { id: string; severity: string; blocking?: boolean };
-      addUnique(s.openGapIds, p.id);
-      if (p.blocking ?? (p.severity === "critical" || p.severity === "major")) addUnique(s.blockingGapIds, p.id);
+    case "gap.opened":
+    case "gap.reopened": {
+      const p = event.payload as { id?: string; severity?: string; blocking?: boolean; gap?: { id: string; severity: string; status?: string } };
+      const id = p.gap?.id ?? p.id;
+      const severity = p.gap?.severity ?? p.severity;
+      if (!id) break;
+      addUnique(s.openGapIds, id);
+      if (p.blocking ?? (severity === "critical" || severity === "major")) addUnique(s.blockingGapIds, id);
+      break;
+    }
+    case "gap.updated": {
+      const p = event.payload as { gap?: { id: string; severity: string; status?: string } };
+      const gap = p.gap;
+      if (!gap) break;
+      if (["open", "working", "blocked"].includes(gap.status ?? "open")) addUnique(s.openGapIds, gap.id);
+      else s.openGapIds = remove(s.openGapIds, gap.id);
+      if (["critical", "major"].includes(gap.severity) && ["open", "working", "blocked"].includes(gap.status ?? "open")) addUnique(s.blockingGapIds, gap.id);
+      else s.blockingGapIds = remove(s.blockingGapIds, gap.id);
       break;
     }
     case "gap.resolved":
