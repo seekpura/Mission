@@ -1,0 +1,31 @@
+name: Apply steering impact
+on:
+  push:
+    branches: [build/steering-impact]
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply and verify selective steering
+        run: |
+          chmod +x scripts/apply-steering-impact.sh
+          ./scripts/apply-steering-impact.sh
+          npm test
+          npm run smoke
+          git diff --check
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests integrations
+          git commit -m 'feat: apply selective user steering impact' || exit 0
+          git push origin HEAD:build/steering-impact
