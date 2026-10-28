@@ -12,8 +12,8 @@ def replace(path, old, new):
 p=Path('src/persistence/sqlite/schema.sql'); s=p.read_text()
 block='''\nCREATE TABLE IF NOT EXISTS cost_events (\n  id TEXT PRIMARY KEY,\n  mission_id TEXT NOT NULL,\n  work_item_id TEXT,\n  execution_id TEXT,\n  category TEXT NOT NULL,\n  quantity REAL NOT NULL,\n  unit TEXT NOT NULL,\n  monetary_estimate REAL,\n  data_json TEXT NOT NULL,\n  created_at TEXT NOT NULL\n);\nCREATE INDEX IF NOT EXISTS idx_cost_events_mission ON cost_events(mission_id, category, created_at);\n\nCREATE TABLE IF NOT EXISTS audit_records (\n  id TEXT PRIMARY KEY,\n  mission_id TEXT NOT NULL,\n  action TEXT NOT NULL,\n  actor_type TEXT NOT NULL,\n  target TEXT,\n  data_json TEXT NOT NULL,\n  created_at TEXT NOT NULL\n);\nCREATE INDEX IF NOT EXISTS idx_audit_records_mission ON audit_records(mission_id, created_at);\n\nCREATE TABLE IF NOT EXISTS completion_records (\n  mission_id TEXT NOT NULL,\n  mission_revision INTEGER NOT NULL,\n  data_json TEXT NOT NULL,\n  completed_at TEXT NOT NULL,\n  PRIMARY KEY(mission_id, mission_revision)\n);\n\nCREATE TABLE IF NOT EXISTS capability_trust (\n  mission_id TEXT NOT NULL,\n  capability_id TEXT NOT NULL,\n  purpose TEXT NOT NULL,\n  attempts INTEGER NOT NULL,\n  succeeded INTEGER NOT NULL,\n  failed INTEGER NOT NULL,\n  data_json TEXT NOT NULL,\n  updated_at TEXT NOT NULL,\n  PRIMARY KEY(mission_id, capability_id, purpose)\n);\n'''
 if 'CREATE TABLE IF NOT EXISTS cost_events (' not in s:
-    s=s.rstrip()+block+'\n'
-    p.write_text(s)
+    s=s.rstrip()+block
+p.write_text(s.rstrip()+'\n')
 
 replace('src/core/events/projection-store.ts',
 '''import type { SourceRecord, TruthRecord } from "../domain/knowledge.ts";''',
