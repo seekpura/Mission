@@ -16,10 +16,13 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - gap diagnosis before uncovered-gap replanning
 - frontier admission with graph revision, mission ownership and orphan guards
 - host-independent WorkExecutionDriver boundary
+- explicit ExecutorRouter keyed by WorkItem executor assignment, with no multi-route guessing
 - ready WorkItem dispatch with attempt/execution lifecycle events
 - concrete candidate Artifact registration from execution outcomes
 - required-output enforcement
 - independent Verifier scheduling and verification lifecycle events
+- runtime validation of verifier identity/result shape before trusting verifier output
+- malformed/mismatched verifier results normalized into inconclusive verification events plus blocking runtime gaps
 - synthesized Findings and blocking Gaps from failed verification
 - execution/verifier exceptions converted to runtime gaps
 - only mission-level verification can promote an Artifact to final
@@ -32,9 +35,13 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - versioned content-hashed Artifact Store
 - production HostAgentWorkExecutionDriver for any HostAdapter, including DeepSeek Harness
 - Mission-owned host-agent output manifest contract (`.mission-output.json`)
-- workspace path confinement, manifest validation, artifact type checks, Mission-side hash/version/provenance commit
+- host-agent hard timeout/cancel behavior and lexical + realpath/symlink workspace confinement
+- manifest validation, artifact type checks, Mission-side hash/version/provenance commit
 - host-agent event log capture as execution evidence
-- LocalExecutionBackend with bounded local process execution and output commit
+- LocalExecutionBackend with bounded local process execution and Artifact entity return
+- LocalExecutionBackend output collection confined to the attempt workspace
+- TrustedLocalCommandPlanner / LocalCommandWorkExecutionDriver with explicit `trusted-host-process` admission
+- truthful host-level isolation metadata for local commands; local process execution is not presented as an OS sandbox
 - execution recovery state primitive
 - structural file verifier
 - Capability Resolver
@@ -53,22 +60,22 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - HTTP Mission API and SSE event stream
 - browser-native Mission Control view
 - CI workflow
-- unit, integration, and E2E tests including real FileArtifactStore execution/verification and host-agent artifact-contract slices
+- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, local routing and verifier-recovery slices
 
 ## Next implementation frontier
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. production WorkExecutionDriver adapter for LocalExecutionBackend and executor routing between host-agent/local/tool paths
-2. verifier protocol/identity failures normalized into recoverable verification gaps
+1. GitHub / Agent Skills capability materialization, revision pinning, provenance receipt, sandbox smoke execution and mission-local activation
+2. evidence-backed gap closure after repair verification, without producer self-claims
 3. DSH session resume/reconnect and native session recovery
-4. evidence-backed gap closure after repair verification, without producer self-claims
-5. persistent WorkItem / Artifact / Finding / Gap projections beyond event reconstruction
-6. full verifier profiles for presentations/web/video/code/research
-7. GitHub/Agent Skills materialization and sandbox smoke execution
-8. external capability revision pinning + provenance + activation receipts
-9. host capability graph with native semantics instead of flat availability flags
-10. Reference Mission fault-injection E2E, followed by a second host adapter
+4. persistent WorkItem / Artifact / Finding / Gap projections beyond event reconstruction
+5. full verifier profiles for presentations/web/video/code/research
+6. host capability graph with native semantics instead of flat availability flags
+7. approval and side-effect manager wired across acquisition and external actions
+8. capability trust/cost/audit ledgers and activation receipts
+9. Reference Mission fault-injection E2E
+10. second host adapter proving HostAdapter portability
 
 ## GitHub source control
 
