@@ -1,7 +1,9 @@
+import type { ExecutionRuntimeBinding } from "../domain/execution.ts";
 import type {
   WorkExecutionDriver,
   WorkExecutionInput,
-  WorkExecutionOutcome
+  WorkExecutionOutcome,
+  WorkRecoveryInput
 } from "./work-execution-driver.ts";
 
 export interface ExecutorRoute {
@@ -42,7 +44,22 @@ export class ExecutorRouter implements WorkExecutionDriver {
     const executorId = this.resolveExecutorId(input);
     const driver = this.routes.get(executorId);
     if (!driver) throw new Error(`No execution driver registered for executor: ${executorId}`);
-    return driver.execute(input);
+    return driver.execute({
+      ...input,
+      ...(input.lifecycle ? {
+        lifecycle: {
+          bindRuntime: binding => input.lifecycle!.bindRuntime(withRoute(binding, executorId))
+        }
+      } : {})
+    });
+  }
+
+  async recover(input: WorkRecoveryInput): Promise<WorkExecutionOutcome> {
+    const executorId = input.binding.routeId ?? this.resolveRecoveryRoute(input.binding);
+    const driver = this.routes.get(executorId);
+    if (!driver) throw new Error(`No execution driver registered for recovery route: ${executorId}`);
+    if (!driver.recover) throw new Error(`Execution driver does not support recovery: ${executorId}`);
+    return driver.recover(input);
   }
 
   private resolveExecutorId(input: WorkExecutionInput): string {
@@ -53,4 +70,21 @@ export class ExecutorRouter implements WorkExecutionDriver {
       `Work item ${input.workItem.id} has no assignedExecutorId and multiple executor routes are available`
     );
   }
+
+  private resolveRecoveryRoute(binding: ExecutionRuntimeBinding): string {
+    const matches = [...this.routes.entries()]
+      .filter(([, driver]) => driver.id === binding.driverId)
+      .map(([routeId]) => routeId);
+    if (matches.length === 1) return matches[0]!;
+    if (matches.length === 0) {
+      throw new Error(`No route matches recovered driver id: ${binding.driverId}`);
+    }
+    throw new Error(
+      `Recovered binding ${binding.executionId} has no routeId and driver id ${binding.driverId} is ambiguous`
+    );
+  }
+}
+
+function withRoute(binding: ExecutionRuntimeBinding, routeId: string): ExecutionRuntimeBinding {
+  return { ...binding, routeId };
 }
