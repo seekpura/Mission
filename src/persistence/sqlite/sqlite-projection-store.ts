@@ -1,6 +1,7 @@
 import type { MissionEvent } from "../../core/domain/event.ts";
 import type { InvocationReceipt } from "../../core/domain/invocation.ts";
 import type { SourceRecord, TruthRecord } from "../../core/domain/knowledge.ts";
+import type { AuditRecord, CapabilityTrustProfile, CompletionRecord, CostEvent } from "../../core/domain/governance.ts";
 import type { AcceptanceContract, MissionSpec, MissionState, Requirement } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
 import type { Evidence, Finding, Gap, VerificationResult } from "../../core/domain/verification.ts";
@@ -12,17 +13,20 @@ import type { MissionDatabase } from "./database.ts";
 import { SqliteEntityProjector } from "./sqlite-entity-projector.ts";
 import { SqliteAssuranceProjector } from "./sqlite-assurance-projector.ts";
 import { SqliteKnowledgeProjector } from "./sqlite-knowledge-projector.ts";
+import { SqliteGovernanceProjector } from "./sqlite-governance-projector.ts";
 
 export class SqliteProjectionStore implements MissionProjectionReader, MissionProjectionWriter {
   private readonly database: MissionDatabase;
   private readonly entities: SqliteEntityProjector;
   private readonly assurance: SqliteAssuranceProjector;
   private readonly knowledge: SqliteKnowledgeProjector;
+  private readonly governance: SqliteGovernanceProjector;
   constructor(database: MissionDatabase) {
     this.database = database;
     this.entities = new SqliteEntityProjector(database);
     this.assurance = new SqliteAssuranceProjector(database);
     this.knowledge = new SqliteKnowledgeProjector(database);
+    this.governance = new SqliteGovernanceProjector(database);
   }
 
   apply(event: MissionEvent): void {
@@ -50,6 +54,7 @@ export class SqliteProjectionStore implements MissionProjectionReader, MissionPr
     this.entities.apply(event);
     this.assurance.apply(event);
     this.knowledge.apply(event);
+    this.governance.apply(event);
   }
 
   rebuild(missionId: string, events: MissionEvent[]): void {
@@ -74,6 +79,10 @@ export class SqliteProjectionStore implements MissionProjectionReader, MissionPr
     db.prepare("DELETE FROM capability_candidates WHERE mission_id = ?").run(missionId);
     db.prepare("DELETE FROM acquisition_receipts WHERE mission_id = ?").run(missionId);
     db.prepare("DELETE FROM invocation_receipts WHERE mission_id = ?").run(missionId);
+    db.prepare("DELETE FROM cost_events WHERE mission_id = ?").run(missionId);
+    db.prepare("DELETE FROM audit_records WHERE mission_id = ?").run(missionId);
+    db.prepare("DELETE FROM completion_records WHERE mission_id = ?").run(missionId);
+    db.prepare("DELETE FROM capability_trust WHERE mission_id = ?").run(missionId);
     for (const event of events) this.apply(event);
   }
 
@@ -141,6 +150,26 @@ export class SqliteProjectionStore implements MissionProjectionReader, MissionPr
     const rows = this.database.db.prepare("SELECT data_json FROM acquisition_receipts WHERE mission_id = ? ORDER BY created_at ASC")
       .all(missionId) as Array<{ data_json: string }>;
     return rows.map(row => JSON.parse(row.data_json) as AcquisitionReceipt);
+  }
+
+  async listCostEvents(missionId: string): Promise<CostEvent[]> {
+    const rows = this.database.db.prepare("SELECT data_json FROM cost_events WHERE mission_id = ? ORDER BY created_at ASC").all(missionId) as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as CostEvent);
+  }
+
+  async listAuditRecords(missionId: string): Promise<AuditRecord[]> {
+    const rows = this.database.db.prepare("SELECT data_json FROM audit_records WHERE mission_id = ? ORDER BY created_at ASC").all(missionId) as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as AuditRecord);
+  }
+
+  async listCapabilityTrustProfiles(missionId: string): Promise<CapabilityTrustProfile[]> {
+    const rows = this.database.db.prepare("SELECT data_json FROM capability_trust WHERE mission_id = ? ORDER BY capability_id, purpose").all(missionId) as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as CapabilityTrustProfile);
+  }
+
+  async listCompletionRecords(missionId: string): Promise<CompletionRecord[]> {
+    const rows = this.database.db.prepare("SELECT data_json FROM completion_records WHERE mission_id = ? ORDER BY mission_revision ASC").all(missionId) as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as CompletionRecord);
   }
 
   async listInvocationReceipts(missionId: string): Promise<InvocationReceipt[]> {
