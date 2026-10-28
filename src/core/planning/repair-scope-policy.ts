@@ -1,9 +1,12 @@
 import type { GapDiagnosis, RepairScope } from "./deliberation-provider.ts";
 
+const SCOPE_ORDER: RepairScope[] = ["attempt", "work_item", "executor", "capability", "graph", "strategy"];
+
 export interface RepairScopeContext {
   findingRefs?: string[];
   evidenceRefs?: string[];
   priorRepairCount?: number;
+  minimumRepairScope?: RepairScope;
 }
 
 export function normalizeGapDiagnosis(diagnosis: GapDiagnosis, context: RepairScopeContext = {}): GapDiagnosis {
@@ -13,6 +16,9 @@ export function normalizeGapDiagnosis(diagnosis: GapDiagnosis, context: RepairSc
   const requested = diagnosis.repairScope ?? scopeForIntervention(diagnosis.intervention);
   let repairScope = constrainScope(requested, diagnosis.confidence, supportRefs.length);
   if ((context.priorRepairCount ?? 0) > 0 && repairScope === "attempt") repairScope = "work_item";
+  if (context.minimumRepairScope && scopeRank(repairScope) < scopeRank(context.minimumRepairScope)) {
+    repairScope = context.minimumRepairScope;
+  }
   return {
     ...diagnosis,
     hypotheses,
@@ -50,6 +56,10 @@ function constrainScope(scope: RepairScope, confidence: number, supportCount: nu
   if (scope === "capability" || scope === "executor") return confidence >= 0.65 && supportCount >= 1 ? scope : "work_item";
   if (scope === "work_item") return confidence >= 0.4 ? "work_item" : "attempt";
   return "attempt";
+}
+
+function scopeRank(scope: RepairScope): number {
+  return SCOPE_ORDER.indexOf(scope);
 }
 
 function unique(values: string[]): string[] {
