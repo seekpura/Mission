@@ -14,6 +14,15 @@ export interface LocalAcceptanceCriterion {
   priority: "critical" | "required" | "preferred";
 }
 
+export interface WorkExecutionConstraints {
+  excludeCapabilityRefs?: string[];
+  preferredCapabilityNeedRefs?: string[];
+  excludeExecutorRefs?: string[];
+  avoidRouteKinds?: Array<"host_agent" | "host_capability" | "local_cli">;
+  forceFreshAgent?: boolean;
+  sourceDecisionReason?: string;
+}
+
 export interface WorkItem {
   id: string;
   missionId: string;
@@ -28,6 +37,7 @@ export interface WorkItem {
   expectedOutputs: ArtifactExpectation[];
   localAcceptanceCriteria: LocalAcceptanceCriterion[];
   capabilityNeedRefs: string[];
+  executionConstraints?: WorkExecutionConstraints;
   assignedExecutorId?: string;
   priority: number;
   graphRevision: number;
