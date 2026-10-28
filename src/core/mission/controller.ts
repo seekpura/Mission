@@ -70,6 +70,21 @@ interface GapEvidenceAggregate {
   details: string[];
 }
 
+const SUPERSEDABLE_WORK_STATUSES = new Set<WorkItem["status"]>([
+  "blocked",
+  "failed",
+  "invalidated",
+  "abandoned"
+]);
+const ACTIVE_REPLACEMENT_WORK_STATUSES = new Set<WorkItem["status"]>([
+  "proposed",
+  "ready",
+  "running",
+  "waiting",
+  "verifying",
+  "succeeded"
+]);
+
 export class MissionController {
   private readonly store: EventStore;
   private readonly deliberation?: DeliberationProvider;
@@ -124,7 +139,7 @@ export class MissionController {
   }
 
   async proposeWork(work: WorkItem) {
-    const hasReason = work.purpose === "exploration" || work.requirementRefs.length > 0 || work.gapRefs.length > 0 || work.inputArtifactRefs.length > 0 || work.capabilityNeedRefs.length > 0;
+    const hasReason = work.purpose === "exploration" || work.requirementRefs.length > 0 || work.gapRefs.length > 0 || work.inputArtifactRefs.length > 0 || work.capabilityNeedRefs.length > 0 || (work.supersedesWorkItemRefs?.length ?? 0) > 0;
     if (!hasReason) throw new Error(`Orphan work item rejected: ${work.id}`);
     await this.emit(
       work.missionId,
@@ -214,6 +229,7 @@ export class MissionController {
     }
 
     this.capabilities?.restoreMissionCapabilities(input.missionId, view.journal.capabilities.values());
+    view = await this.applyPendingWorkSupersessions(input.missionId, view);
 
     if (view.state.activeExecutionIds.length > 0) {
       const recovery = await this.recoverActiveExecutions(input.missionId, view);
@@ -300,6 +316,7 @@ export class MissionController {
             workItemsCreated.push(work.id);
           }
           view = await this.cycleView(input.missionId);
+          view = await this.applyPendingWorkSupersessions(input.missionId, view);
         }
       }
     }
@@ -399,6 +416,34 @@ export class MissionController {
   async state(missionId: string) {
     if (this.reader) return this.reader.state(missionId);
     return projectMissionState(missionId, await this.store.list(missionId));
+  }
+
+  private async applyPendingWorkSupersessions(missionId: string, initialView: CycleView): Promise<CycleView> {
+    let changed = false;
+    for (const replacement of initialView.journal.workItems.values()) {
+      const refs = unique(replacement.supersedesWorkItemRefs ?? []);
+      if (refs.length === 0 || !ACTIVE_REPLACEMENT_WORK_STATUSES.has(replacement.status)) continue;
+      for (const targetId of refs) {
+        const currentView = changed ? await this.cycleView(missionId) : initialView;
+        const target = currentView.journal.workItems.get(targetId);
+        if (!target || target.status === "superseded") continue;
+        if (!SUPERSEDABLE_WORK_STATUSES.has(target.status)) continue;
+        await this.emit(
+          missionId,
+          "work.updated",
+          {
+            id: target.id,
+            status: "superseded",
+            supersededByWorkItemId: replacement.id,
+            reason: `Work ${replacement.id} explicitly supersedes ${target.id}`
+          },
+          { type: "controller" },
+          `work-superseded:${target.id}:by:${replacement.id}`
+        );
+        changed = true;
+      }
+    }
+    return changed ? this.cycleView(missionId) : initialView;
   }
 
   private async recoverActiveExecutions(
@@ -1128,18 +1173,32 @@ function admitCapabilityNeeds(
 function admitFrontier(missionId: string, view: CycleView, proposed: WorkItem[]): WorkItem[] {
   const admitted: WorkItem[] = [];
   const seen = new Set<string>();
+  const supersededTargets = new Map<string, string>();
   for (const work of proposed) {
     if (work.missionId !== missionId) throw new Error(`Planner proposed work for wrong mission: ${work.id}`);
     if (seen.has(work.id) || view.journal.workItems.has(work.id)) continue;
     if (work.status !== "ready" && work.status !== "proposed") {
       throw new Error(`Planner frontier work must be proposed or ready: ${work.id} (${work.status})`);
     }
-    const hasReason = work.purpose === "exploration" || work.requirementRefs.length > 0 || work.gapRefs.length > 0 || work.inputArtifactRefs.length > 0 || work.capabilityNeedRefs.length > 0;
+    const hasReason = work.purpose === "exploration" || work.requirementRefs.length > 0 || work.gapRefs.length > 0 || work.inputArtifactRefs.length > 0 || work.capabilityNeedRefs.length > 0 || (work.supersedesWorkItemRefs?.length ?? 0) > 0;
     if (!hasReason) throw new Error(`Planner proposed orphan work item: ${work.id}`);
     for (const needRef of work.capabilityNeedRefs) {
       if (!view.journal.capabilityNeeds.has(needRef)) {
         throw new Error(`Planner work ${work.id} references unknown capability need ${needRef}`);
       }
+    }
+    for (const targetId of unique(work.supersedesWorkItemRefs ?? [])) {
+      if (targetId === work.id) throw new Error(`Planner work ${work.id} cannot supersede itself`);
+      const target = view.journal.workItems.get(targetId);
+      if (!target) throw new Error(`Planner work ${work.id} references unknown superseded WorkItem ${targetId}`);
+      if (!SUPERSEDABLE_WORK_STATUSES.has(target.status)) {
+        throw new Error(`Planner work ${work.id} cannot supersede WorkItem ${targetId} in status ${target.status}`);
+      }
+      const priorReplacement = supersededTargets.get(targetId);
+      if (priorReplacement && priorReplacement !== work.id) {
+        throw new Error(`Planner proposed multiple replacements for WorkItem ${targetId}: ${priorReplacement}, ${work.id}`);
+      }
+      supersededTargets.set(targetId, work.id);
     }
     seen.add(work.id);
     admitted.push(work);
