@@ -38,13 +38,30 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - malformed/mismatched verifier results normalized into inconclusive verification events plus blocking runtime gaps
 - artifact-specific verifier profile registry for presentation / website / video / code / research plus generic fallback
 - deterministic verifier-profile selection by explicit artifact type, then MIME type, then extension, then generic fallback
-- verifier profiles define required checks, evidence expectations, artifact-specific review instructions and bounded inline-content budgets
-- required verifier-profile checks fail closed: omitted checks become inconclusive and duplicate required checks are rejected
+- verifier profiles define required checks, machine-executable evidence policies (`allOf` / `anyOf` / minimum supporting refs), artifact-specific review instructions and bounded inline-content budgets
+- first-class typed Runtime Evidence contracts and durable `evidence.collected` events
+- deterministic built-in Evidence collectors for file integrity, bounded text, website source, code source, research source traceability and bounded PPTX OOXML package/slide-text inspection
+- static/package collectors never claim browser execution, accessibility, native rendering, media playback/probe or executable test/build evidence they did not actually observe
+- Evidence collector adapters are independently fault-isolated across `supports()` failures, synchronous throws, asynchronous rejection and malformed output; affected checks fail closed instead of crashing unrelated collectors
+- collector durable metadata and transient inspection payloads have explicit size/shape bounds, with matching durable projection bounds to prevent internal bypasses
+- Runtime-collected Evidence is transactionally projected into SQLite with its own checkpoint and can rebuild from append-only Mission events after projection loss
+- `SqliteMissionReader.readEvidence()` and `GET /missions/:missionId/evidence` expose durable Evidence, including artifact-subject filtering
+- HostArtifactVerifier registers Runtime Evidence before host review and rejects every host-supplied evidence reference that is not present in the Runtime registry
+- required verifier-profile checks fail closed: omitted checks become inconclusive, duplicate required checks are rejected, and pass/warning/fail judgments require matching supporting Runtime Evidence kinds
+- unsupported negative verifier judgments are downgraded to inconclusive rather than fabricating blocking failures from model opinion alone
+- verifier gap-assessment protocol (`resolved` / `still_open` / `inconclusive`) is grounded in registered Runtime Evidence; a resolved gap must cite at least one `result=supports` Evidence record
+- gaps close only from explicit passing independent-verifier evidence; producer self-claims, inconclusive evidence and contradictory evidence cannot close gaps
+- Evidence identities/idempotency keys are deterministic for artifact/profile/Mission revision/collector/result metadata, so repeated identical verification does not duplicate durable audit evidence
 - selected verification profile id is persisted on VerificationResult
-- verifier gap-assessment protocol (`resolved` / `still_open` / `inconclusive`)
-- gaps close only from explicit passing independent-verifier evidence; producer self-claims cannot close gaps
+- provider/deployment-specific verification collectors can be injected through `MissionRuntimeOptions.verificationEvidenceCollectors` while built-in deterministic collectors remain active
+- explicit read-only host-native Evidence capability adapter maps trusted `HostAdapter.invokeHostCapability` routes into typed Runtime Evidence without creating a second tool protocol
+- host-native Evidence bindings hard-gate live capability availability, host scope, `host-capability` routing, exact semantic function, permission allowlist, metering/cost limits and bounded provider output before invocation
+- host-native Evidence durable claim/provenance remains Runtime-owned; provider summaries/inspection details can be transient verifier input without becoming unbounded durable audit payload
+- production `MISSION_HOST_EVIDENCE_BINDINGS_JSON` configuration validates trusted read-only evidence bindings at startup before any provider invocation
+- browser-runtime integration coverage proves Host capability -> typed Evidence -> transactional SQLite -> website profile evidence gate end to end
+- missing provider-specific render/browser/media/test/recency capability bindings never fabricate evidence; the corresponding profile checks remain inconclusive until a real host capability is explicitly bound
 - conflicting or absent gap evidence leaves the gap open
-- synthesized Findings and blocking Gaps from failed verification
+- synthesized Findings and blocking Gaps from grounded failed verification
 - execution/verifier exceptions converted to runtime gaps
 - only mission-level verification can promote an Artifact to final
 - failed verification feeds the next controller cycle for diagnosis and targeted repair/replan
@@ -162,17 +179,17 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - HTTP Mission API and SSE event stream
 - browser-native Mission Control view
 - CI workflow
-- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, side-effect admission/replay/execution-scope/cancel behavior, verifier recovery, verifier-profile routing/fail-closed coverage, semantic capability graph/planner routing, trusted MCP graph consistency and ACP create/resume delivery, acquisition transaction, trusted-cache exact reuse/revocation/integrity, capability trust-cost-audit atomic projection/lifecycle/API, capability runtime loop, production Agent Skill acquisition/native DSH delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrency
+- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, side-effect admission/replay/execution-scope/cancel behavior, verifier recovery, verifier-profile routing/fail-closed/evidence-grounding coverage, durable Evidence projection/rebuild/API/idempotency, built-in Evidence collectors, host-native browser Evidence integration, semantic capability graph/planner routing, trusted MCP graph consistency and ACP create/resume delivery, acquisition transaction, trusted-cache exact reuse/revocation/integrity, capability trust-cost-audit atomic projection/lifecycle/API, capability runtime loop, production Agent Skill acquisition/native DSH delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrency
 
 ## Next implementation frontier
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. profile-specific verifier evidence collectors/adapters for rendered presentations, browser/runtime web checks, media probe/playback evidence, executable code/test evidence and research-source traceability; profiles now define the obligations but do not fabricate missing inspection evidence
-2. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure, side-effect ambiguity and repair/replan
-3. second production host adapter proving HostAdapter portability
-4. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
-5. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+1. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure, side-effect ambiguity and repair/replan
+2. second production host adapter proving HostAdapter portability
+3. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
+4. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+5. concrete provider-specific read-only Evidence bindings/adapters for deployed presentation render, browser/accessibility, media probe/playback, executable test/build and research-recency capabilities as hosts expose them; the Runtime Evidence framework and fail-closed gates are implemented, but unavailable host capabilities remain inconclusive
 6. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as host adapters expose them
 7. external MCP discovery/acquisition plus provider-native CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles
 8. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction
