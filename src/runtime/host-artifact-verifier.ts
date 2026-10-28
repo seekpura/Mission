@@ -4,12 +4,14 @@ import type { Artifact } from "../core/domain/artifact.ts";
 import type { GapAssessment, VerificationCheckResult, VerificationResult } from "../core/domain/verification.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 import { projectMissionJournal } from "../core/mission/journal-view.ts";
+import type { MissionReadModelReader } from "../core/mission/mission-reader.ts";
 import type { VerificationContext, Verifier } from "../core/verification/verifier.ts";
 import type { HostJsonTransport } from "./host-agent-json-transport.ts";
 
 export interface HostArtifactVerifierOptions {
   transport: HostJsonTransport;
   events: EventStore;
+  reader?: MissionReadModelReader;
   maxInlineBytes?: number;
 }
 
@@ -21,11 +23,13 @@ export class HostArtifactVerifier implements Verifier {
   readonly id = "host-artifact-verifier";
   private readonly transport: HostJsonTransport;
   private readonly events: EventStore;
+  private readonly reader?: MissionReadModelReader;
   private readonly maxInlineBytes: number;
 
   constructor(options: HostArtifactVerifierOptions) {
     this.transport = options.transport;
     this.events = options.events;
+    this.reader = options.reader;
     this.maxInlineBytes = Math.max(1_024, options.maxInlineBytes ?? 64 * 1_024);
   }
 
@@ -58,7 +62,9 @@ export class HostArtifactVerifier implements Verifier {
       });
     }
 
-    const journal = projectMissionJournal(artifact.missionId, await this.events.list(artifact.missionId));
+    const journal = this.reader
+      ? await this.reader.journal(artifact.missionId)
+      : projectMissionJournal(artifact.missionId, await this.events.list(artifact.missionId));
     const inline = inlineArtifact(artifact, this.maxInlineBytes);
     const raw = await this.transport.request({
       missionId: artifact.missionId,
