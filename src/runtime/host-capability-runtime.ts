@@ -3,7 +3,7 @@ import type { CapabilityEnsureResult, CapabilityRuntime } from "../core/capabili
 import { buildHostCapabilityGraph } from "../core/capabilities/capability-graph.ts";
 import { MissionCapabilityOverlay } from "../core/capabilities/mission-capability-overlay.ts";
 import { CapabilityResolver } from "../core/capabilities/resolver.ts";
-import type { HostAdapter } from "../hosts/deepseek/host-adapter.ts";
+import type { HostAdapter } from "../hosts/host-adapter.ts";
 
 /**
  * Production-safe baseline capability runtime. It resolves host-native and
