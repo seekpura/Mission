@@ -85,10 +85,14 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - partial failed capability snapshots are removed from quarantine staging
 - production Agent Skill acquisition is opt-in and requires Docker strong isolation; weak isolation or unknown acquisition modes fail closed
 - Docker capability smoke runs with no network, read-only candidate/root filesystem, dropped capabilities, no-new-privileges, non-root UID/GID and bounded resources, with image pulling disabled
-- Agent Skill smoke validates only a unique non-empty `SKILL.md`; third-party install/build/test scripts are not executed
+- Agent Skill acquisition requires exactly one DSH-compatible `SKILL.md`, validates required YAML frontmatter / kebab-case name / model-invocable semantics, and does not execute third-party install/build/test scripts
 - every external Agent Skill requires explicit durable user approval even after low-risk static scanning because the Skill is behavioral instruction supply-chain content
-- activated Agent Skills are delivered as bounded, hashed mission-local instruction context only to WorkItems whose `allowedCapabilityRefs` explicitly authorize them
-- unreferenced mission-local Skills are not delivered to Workers; planner/verifier/control sessions do not inherit acquired Skills implicitly
+- only the validated Agent Skill bundle is activated mission-locally; unrelated repository files outside the bundle are not promoted into the runtime capability store
+- activated Agent Skill bundles are revalidated for file/byte limits and symlink containment at activation and Work delivery time
+- Work-authorized Agent Skills are projected into the attempt-local `.agents/skills/<skill-name>/` tree and loaded through DeepSeek Harness's native filesystem skill catalog/tool rather than copied into the model prompt
+- resume/reconnect rebuilds the same Work-scoped Agent Skill projection from durable capability refs; unreferenced mission-local Skills are not exposed to the Worker
+- `.mission-skill-projection.json` records the concrete per-attempt capability-to-workspace projection
+- planner/verifier/control sessions do not inherit acquired Skills implicitly; non-Skill mission-local capability kinds remain fail-closed until a dedicated provider-native delivery adapter exists
 - MCP / CLI / general code acquisition remains unsupported and fail-closed until explicit provider-native delivery and safe smoke profiles exist
 - HostAdapter contract
 - FakeHostAdapter
@@ -114,21 +118,21 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - HTTP Mission API and SSE event stream
 - browser-native Mission Control view
 - CI workflow
-- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, verifier recovery, verifier-profile routing/fail-closed coverage, acquisition transaction, capability runtime loop, production Agent Skill acquisition/delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrency
+- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, verifier recovery, verifier-profile routing/fail-closed coverage, acquisition transaction, capability runtime loop, production Agent Skill acquisition/native DSH delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrency
 
 ## Next implementation frontier
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. host capability graph with native semantics, constraints, permissions, costs and routing characteristics instead of flat availability flags
-2. side-effect manager wired consistently across external actions, idempotency, irreversible-operation policy and approval boundaries
-3. capability trust / cost / audit ledgers, trusted-cache reuse and activation lifecycle management
-4. profile-specific verifier evidence collectors/adapters for rendered presentations, browser/runtime web checks, media probe/playback evidence, executable code/test evidence and research-source traceability; profiles now define the obligations but do not fabricate missing inspection evidence
-5. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure and repair/replan
-6. second production host adapter proving HostAdapter portability
-7. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
-8. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
-9. provider-native MCP / CLI / code capability delivery with explicit security, isolation and rollback profiles
+1. provider-native MCP capability delivery over ACP `mcpServers`, with Work-scoped allowlists, secure acquisition/config profiles, restart continuity and rollback
+2. host capability graph with native semantics, constraints, permissions, costs and routing characteristics instead of flat availability flags
+3. side-effect manager wired consistently across external actions, idempotency, irreversible-operation policy and approval boundaries
+4. capability trust / cost / audit ledgers, trusted-cache reuse and activation lifecycle management
+5. profile-specific verifier evidence collectors/adapters for rendered presentations, browser/runtime web checks, media probe/playback evidence, executable code/test evidence and research-source traceability; profiles now define the obligations but do not fabricate missing inspection evidence
+6. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure and repair/replan
+7. second production host adapter proving HostAdapter portability
+8. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
+9. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
 10. operational read-model/query APIs and observability for long-lived high-volume Missions beyond the current runtime-facing reader
 
 ## GitHub source control
