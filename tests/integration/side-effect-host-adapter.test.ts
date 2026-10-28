@@ -74,7 +74,7 @@ class ScriptedHost implements HostAdapter {
   async requestUserApproval() { return { approved: false }; }
 }
 
-function request(): AgentCreateRequest {
+function request(overrides: Partial<AgentCreateRequest> = {}): AgentCreateRequest {
   return {
     missionId: "mission-side-effect-host",
     workItemId: "work-1",
@@ -82,7 +82,8 @@ function request(): AgentCreateRequest {
     executionId: "execution-1",
     context: {},
     allowedCapabilityRefs: [],
-    workspaceRoot: "/tmp/mission-side-effect-host"
+    workspaceRoot: "/tmp/mission-side-effect-host",
+    ...overrides
   };
 }
 
@@ -139,6 +140,8 @@ test("admitted host side effect is durably settled before completed terminal eve
     reason: "send message",
     details: {
       workItemId: "work-1",
+      attemptId: "attempt-1",
+      executionId: "execution-1",
       toolCall: {
         toolCallId: "send-1",
         title: "Send message",
@@ -158,4 +161,18 @@ test("admitted host side effect is durably settled before completed terminal eve
   assert.ok(store.events.some(event => event.type === "side_effect.completed"));
   const completion = store.events.find(event => event.type === "side_effect.completed")?.payload as { status?: string };
   assert.equal(completion.status, "succeeded");
+});
+
+test("cancelling a host session releases its runtime-owned side-effect scope", async () => {
+  const store = new MemoryEventStore();
+  const manager = new RuntimeSideEffectManager(store, new ApprovalBroker());
+  const host = new SideEffectHostAdapter(new ScriptedHost([]), manager);
+
+  const first = await host.createAgent(request());
+  await host.cancelAgent(first);
+
+  await assert.doesNotReject(() => host.createAgent(request({
+    attemptId: "attempt-2",
+    executionId: "execution-2"
+  })));
 });
