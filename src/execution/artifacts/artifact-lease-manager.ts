@@ -23,9 +23,20 @@ export class ArtifactLeaseManager {
         if (released) return;
         released = true;
         for (const name of requested) if (this.writers.get(name) === ownerId) this.writers.delete(name);
-        const waiters = this.waiters.splice(0);
-        for (const waiter of waiters) waiter();
+        this.wakeWaiters();
       }
     };
+  }
+
+  releaseOwner(ownerId: string): void {
+    for (const [name, owner] of [...this.writers.entries()]) if (owner === ownerId) this.writers.delete(name);
+    this.wakeWaiters();
+  }
+
+  isHeld(logicalName: string): boolean { return this.writers.has(logicalName); }
+
+  private wakeWaiters(): void {
+    const waiters = this.waiters.splice(0);
+    for (const waiter of waiters) waiter();
   }
 }

@@ -15,6 +15,7 @@ export interface HostExecutionHandle {
 export class HostAgentExecutionBackend {
   private readonly host: HostAdapter;
   private readonly active = new Map<string, Promise<ExecutionResult>>();
+  private readonly cancelled = new Set<string>();
 
   constructor(host: HostAdapter) { this.host = host; }
 
@@ -40,11 +41,14 @@ export class HostAgentExecutionBackend {
     if (!promise) throw new Error(`Execution not started: ${handle.id}`);
     const result = await promise;
     this.active.delete(handle.id);
+    this.cancelled.delete(handle.id);
     return result;
   }
 
   async cancel(handle: HostExecutionHandle): Promise<void> {
-    if (handle.agent) await this.host.cancelAgent(handle.agent);
+    if (!handle.agent) return;
+    this.cancelled.add(handle.id);
+    await this.host.cancelAgent(handle.agent);
   }
 
   async recover(executionId: string): Promise<"running" | "lost"> {
@@ -62,7 +66,7 @@ export class HostAgentExecutionBackend {
     }
     return {
       executionId: handle.id,
-      state: failure ? "failed" : "succeeded",
+      state: this.cancelled.has(handle.id) ? "cancelled" : failure ? "failed" : "succeeded",
       producedFiles: [],
       committedArtifactRefs: [],
       runtimeObservationRef: completedPayload === undefined ? undefined : JSON.stringify(completedPayload),

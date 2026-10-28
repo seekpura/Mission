@@ -47,6 +47,7 @@ export class LocalExecutionBackend {
 
   async cancel(handle: ExecutionHandle): Promise<void> {
     if (!this.active.has(handle.id)) return;
+    await this.processes.cancel(handle.id);
   }
 
   async recover(executionId: string): Promise<"running" | "lost"> {
@@ -60,6 +61,7 @@ export class LocalExecutionBackend {
       if (process.env[key] !== undefined) env[key] = process.env[key]!;
     }
     const run = await this.processes.run({
+      executionId: r.executionId,
       command: r.localCommand.command,
       args: r.localCommand.args,
       cwd: handle.workspace.root,
@@ -87,7 +89,7 @@ export class LocalExecutionBackend {
     writeFileSync(logPath, `STDOUT\n${run.stdout}\n\nSTDERR\n${run.stderr}`, "utf8");
     return {
       executionId: r.executionId,
-      state: run.timedOut ? "timed_out" : run.exitCode === 0 ? "succeeded" : "failed",
+      state: run.cancelled ? "cancelled" : run.timedOut ? "timed_out" : run.exitCode === 0 ? "succeeded" : "failed",
       exitCode: run.exitCode ?? undefined,
       producedFiles,
       committedArtifactRefs,

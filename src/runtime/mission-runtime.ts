@@ -11,6 +11,7 @@ import { HostAgentExecutionBackend } from "../execution/host/host-agent-executio
 import { HostCapabilityExecutionBackend } from "../execution/host/host-capability-execution-backend.ts";
 import { LocalExecutionBackend } from "../execution/local/local-execution-backend.ts";
 import { WorkExecutionRouter } from "./orchestration/executor-router.ts";
+import { ExecutionRecoveryManager } from "./recovery/execution-recovery-manager.ts";
 import { WorkspaceManager } from "../execution/workspace/workspace-manager.ts";
 import { FileArtifactStore } from "../execution/artifacts/artifact-store.ts";
 import { BasicFileVerifier } from "../core/verification/basic-file-verifier.ts";
@@ -37,6 +38,8 @@ export class MissionRuntime {
   readonly workspaces: WorkspaceManager;
   readonly artifacts: FileArtifactStore;
   readonly orchestrator?: MissionOrchestrator;
+  readonly executionRouter?: WorkExecutionRouter;
+  readonly recovery?: ExecutionRecoveryManager;
 
   constructor(options: MissionRuntimeOptions = {}) {
     const rootDir = options.rootDir ?? join(process.cwd(), ".mission");
@@ -65,6 +68,8 @@ export class MissionRuntime {
           approvalDecided: payload => this.controller.emit(payload.missionId, "approval.decided", payload, { type: "user" }, `approval-decision:${payload.id}`)
         }
       });
+      this.executionRouter = executionRouter;
+      this.recovery = new ExecutionRecoveryManager({ controller: this.controller, events: this.events, projections: this.projections, router: executionRouter });
       this.orchestrator = new MissionOrchestrator({
         controller: this.controller,
         projections: this.projections,
@@ -92,6 +97,17 @@ export class MissionRuntime {
       this.database.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  async cancelExecution(missionId: string, executionId: string): Promise<boolean> {
+    if (!this.executionRouter) return false;
+    await this.controller.emit(missionId, "execution.cancel.requested", { id: executionId }, { type: "user" }, `execution-cancel-request:${executionId}`);
+    return this.executionRouter.cancel(executionId);
+  }
+
+  async recoverMission(missionId: string) {
+    if (!this.recovery) return { running: [], lost: [] };
+    return this.recovery.reconcileMission(missionId);
   }
 
   close(): void { this.database.close(); }
