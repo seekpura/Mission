@@ -86,6 +86,9 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
     if (current.status !== "pending") return current;
 
     const scope = decision.scope ?? "once";
+    if (scope !== "once") {
+      throw new Error(`Approval scope ${scope} is not implemented; current host bridge supports one-shot approval only`);
+    }
     const decidedAt = new Date().toISOString();
     await this.append(missionId, "approval.decided", {
       id: approvalId,
@@ -97,20 +100,18 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
       decidedAt
     }, `approval-decided:${approvalId}`);
 
+    const durable = (await this.list(missionId)).find(record => record.id === approvalId);
+    if (!durable || durable.status === "pending") {
+      throw new Error(`Approval decision was not durably projected: ${approvalId}`);
+    }
+
     const pending = this.pending.get(approvalId);
     if (pending) {
       if (pending.timer) clearTimeout(pending.timer);
       this.pending.delete(approvalId);
-      pending.resolve({ approved: decision.approved, scope });
+      pending.resolve({ approved: durable.status === "approved", scope: "once" });
     }
-
-    return {
-      ...current,
-      status: decision.approved ? "approved" : "rejected",
-      scope,
-      actor: decision.actor ?? "user",
-      decidedAt
-    };
+    return durable;
   }
 
   async list(missionId: string): Promise<RuntimeApprovalRecord[]> {
