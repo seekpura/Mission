@@ -15,6 +15,7 @@ import type {
   HostDescriptor
 } from "../hosts/deepseek/host-adapter.ts";
 import type { RuntimeSideEffectManager } from "./side-effect-manager.ts";
+import { HostSideEffectScopeRegistry } from "./side-effect-host-scope.ts";
 
 interface SessionContext {
   missionId: string;
@@ -24,8 +25,14 @@ interface SessionContext {
   workspaceRoot?: string;
 }
 
+interface ActiveSession {
+  context: SessionContext;
+  releaseScope: () => void;
+}
+
 export interface SideEffectHostAdapterOptions {
   defaultPolicy?: SideEffectPolicy;
+  scopeRegistry?: HostSideEffectScopeRegistry;
 }
 
 const CONSERVATIVE_HOST_POLICY: SideEffectPolicy = {
@@ -46,12 +53,14 @@ export class SideEffectHostAdapter implements HostAdapter {
   private readonly base: HostAdapter;
   private readonly sideEffects: RuntimeSideEffectManager;
   private readonly defaultPolicy: SideEffectPolicy;
-  private readonly sessions = new Map<string, SessionContext>();
+  private readonly scopeRegistry: HostSideEffectScopeRegistry;
+  private readonly sessions = new Map<string, ActiveSession>();
 
   constructor(base: HostAdapter, sideEffects: RuntimeSideEffectManager, options: SideEffectHostAdapterOptions = {}) {
     this.base = base;
     this.sideEffects = sideEffects;
     this.defaultPolicy = { ...(options.defaultPolicy ?? CONSERVATIVE_HOST_POLICY) };
+    this.scopeRegistry = options.scopeRegistry ?? new HostSideEffectScopeRegistry();
   }
 
   describeHost(): Promise<HostDescriptor> {
@@ -64,16 +73,32 @@ export class SideEffectHostAdapter implements HostAdapter {
 
   async createAgent(request: AgentCreateRequest): Promise<HostAgentHandle> {
     const normalized = this.withPolicy(request);
-    const handle = await this.base.createAgent(normalized);
-    this.sessions.set(handle.id, sessionContext(normalized));
-    return handle;
+    const releaseScope = this.scopeRegistry.register(normalized);
+    try {
+      const handle = await this.base.createAgent(normalized);
+      this.sessions.set(handle.id, { context: sessionContext(normalized), releaseScope });
+      return handle;
+    } catch (error) {
+      releaseScope();
+      throw error;
+    }
   }
 
   async resumeAgent(request: AgentResumeRequest): Promise<HostAgentResumeResult> {
     const normalized = this.withPolicy(request);
-    const resumed = await this.base.resumeAgent(normalized);
-    if (resumed.status === "resumed") this.sessions.set(resumed.handle.id, sessionContext(normalized));
-    return resumed;
+    const releaseScope = this.scopeRegistry.register(normalized);
+    try {
+      const resumed = await this.base.resumeAgent(normalized);
+      if (resumed.status === "resumed") {
+        this.sessions.set(resumed.handle.id, { context: sessionContext(normalized), releaseScope });
+      } else {
+        releaseScope();
+      }
+      return resumed;
+    } catch (error) {
+      releaseScope();
+      throw error;
+    }
   }
 
   steerAgent(handle: HostAgentHandle, delta: ContextDelta): Promise<void> {
@@ -85,7 +110,8 @@ export class SideEffectHostAdapter implements HostAdapter {
   }
 
   async *observeAgent(handle: HostAgentHandle): AsyncIterable<HostAgentEvent> {
-    const context = this.sessions.get(handle.id);
+    const active = this.sessions.get(handle.id);
+    const context = active?.context;
     const observed: HostAgentEvent[] = [];
     let terminal: HostAgentEvent | undefined;
     try {
@@ -141,6 +167,7 @@ export class SideEffectHostAdapter implements HostAdapter {
       if (terminal) yield terminal;
     } finally {
       this.sessions.delete(handle.id);
+      active?.releaseScope();
     }
   }
 
@@ -149,7 +176,7 @@ export class SideEffectHostAdapter implements HostAdapter {
   }
 
   requestUserApproval(request: ApprovalRequest): Promise<ApprovalResult> {
-    return this.sideEffects.authorizeHostPermission(request);
+    return this.sideEffects.authorizeHostPermission(this.scopeRegistry.enrich(request));
   }
 
   private withPolicy<T extends AgentCreateRequest | AgentResumeRequest>(request: T): T {
