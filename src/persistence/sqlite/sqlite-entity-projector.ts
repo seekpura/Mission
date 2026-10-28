@@ -260,6 +260,18 @@ export class SqliteEntityProjector {
           .run(receipt.id, event.missionId, receipt.capabilityNeedRef, receipt.candidateId, receipt.status, JSON.stringify(receipt), receipt.createdAt ?? event.createdAt);
         return;
       }
+      case "capability.invalidated": {
+        const capabilityId = payload.id ?? payload.capabilityRef;
+        if (!capabilityId) return;
+        const row = db.prepare("SELECT data_json FROM capabilities WHERE id = ? AND mission_id = ?").get(capabilityId, event.missionId) as { data_json: string } | undefined;
+        if (!row) return;
+        const capability = JSON.parse(row.data_json) as CapabilityDescriptor;
+        capability.available = false;
+        capability.metadata = { ...(capability.metadata ?? {}), invalidatedAt: event.createdAt, invalidationReason: payload.reason };
+        db.prepare("UPDATE capabilities SET status = 'unavailable', data_json = ? WHERE id = ? AND mission_id = ?")
+          .run(JSON.stringify(capability), capabilityId, event.missionId);
+        return;
+      }
       case "capability.activated": {
         const capability = (payload.capability ?? payload) as CapabilityDescriptor;
         if (!capability?.id) return;

@@ -44,12 +44,20 @@ export class CapabilityCoordinator {
       this.projections.listCapabilities(work.missionId),
       this.projections.listCapabilityNeeds(work.missionId)
     ]);
-    const effective = mergeCapabilities(environment.capabilities, missionCapabilities);
-    const requested = work.capabilityNeedRefs.map(id => needs.find(need => need.id === id)).filter((need): need is CapabilityNeed => !!need);
+    const excludedCapabilityRefs = new Set(work.executionConstraints?.excludeCapabilityRefs ?? []);
+    const effective = mergeCapabilities(environment.capabilities, missionCapabilities)
+      .filter(capability => !excludedCapabilityRefs.has(capability.id));
+    const requestedIds = [...new Set([
+      ...work.capabilityNeedRefs,
+      ...(work.executionConstraints?.preferredCapabilityNeedRefs ?? [])
+    ])];
+    const requested = requestedIds.map(id => needs.find(need => need.id === id)).filter((need): need is CapabilityNeed => !!need);
     const capabilities: CapabilityDescriptor[] = [];
     const missingNeeds: CapabilityNeed[] = [];
     for (const need of requested) {
-      const resolvedByRef = need.resolvedCapabilityRef ? effective.find(cap => cap.id === need.resolvedCapabilityRef && cap.available) : undefined;
+      const resolvedByRef = need.resolvedCapabilityRef && !excludedCapabilityRefs.has(need.resolvedCapabilityRef)
+        ? effective.find(cap => cap.id === need.resolvedCapabilityRef && cap.available)
+        : undefined;
       if (resolvedByRef) { capabilities.push(resolvedByRef); continue; }
       const resolution = this.resolver.resolve(need, effective);
       if (resolution.status === "resolved" && resolution.capability) {

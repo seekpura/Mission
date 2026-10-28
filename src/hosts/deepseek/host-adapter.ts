@@ -35,6 +35,9 @@ export interface AgentCreateRequest {
   context: unknown;
   allowedCapabilityRefs: string[];
   workspaceRoot?: string;
+  preferredExecutorRefs?: string[];
+  excludeExecutorRefs?: string[];
+  forceFreshAgent?: boolean;
 }
 
 export interface HostAgentEvent {
