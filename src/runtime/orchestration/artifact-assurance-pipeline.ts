@@ -12,6 +12,7 @@ import { InspectionPlanner } from "../../core/inspection/inspection-planner.ts";
 import { inspectionCapabilityNeed } from "../../core/inspection/inspection-capability-need.ts";
 import type { FileArtifactStore } from "../../execution/artifacts/artifact-store.ts";
 import type { Verifier } from "../../core/verification/verifier.ts";
+import { FindingGapManager } from "../../core/verification/finding-gap-manager.ts";
 import type { ArtifactInspectionService } from "./artifact-inspection-service.ts";
 
 export interface ArtifactPipelineResult {
@@ -34,6 +35,7 @@ export class ArtifactAssurancePipeline {
   private readonly projections: MissionProjectionReader;
   private readonly artifacts: FileArtifactStore;
   private readonly verifier: Verifier;
+  private readonly findingGaps: FindingGapManager;
   private readonly inspectionService?: ArtifactInspectionService;
   private readonly inspectionPlanner = new InspectionPlanner();
 
@@ -43,11 +45,13 @@ export class ArtifactAssurancePipeline {
     artifacts: FileArtifactStore;
     verifier: Verifier;
     inspectionService?: ArtifactInspectionService;
+    findingGaps?: FindingGapManager;
   }) {
     this.controller = input.controller;
     this.projections = input.projections;
     this.artifacts = input.artifacts;
     this.verifier = input.verifier;
+    this.findingGaps = input.findingGaps ?? new FindingGapManager({ controller: input.controller, projections: input.projections });
     this.inspectionService = input.inspectionService;
   }
 
@@ -163,9 +167,17 @@ export class ArtifactAssurancePipeline {
     await this.controller.recordVerification(artifact.missionId, verification);
     if (verification.overall === "fail" || verification.overall === "inconclusive") {
       const finding = this.verificationFinding(artifact, verification);
-      await this.controller.emit(artifact.missionId, "finding.created", { finding }, { type: "verifier" }, `finding:${finding.id}`);
       const capabilityNeeds = inspection?.missingCapabilityNeeds ?? [];
-      if (capabilityNeeds.length > 0 && verification.overall === "inconclusive") {
+      const capabilityBlocked = capabilityNeeds.length > 0 && verification.overall === "inconclusive";
+      await this.findingGaps.record(finding, {
+        createGap: !capabilityBlocked,
+        category: "quality",
+        severity: finding.severity === "critical" ? "critical" : "major",
+        description: finding.observation,
+        artifactRefs: [`${artifact.id}@${artifact.version}`],
+        requirementRefs: explicitRequirementRefs
+      });
+      if (capabilityBlocked) {
         return {
           status: "verification_blocked",
           reason: `verification blocked by missing inspection capability: ${capabilityNeeds.map(need => need.objective).join("; ")}`,
@@ -173,15 +185,6 @@ export class ArtifactAssurancePipeline {
           capabilityNeeds
         };
       }
-      await this.controller.openGap(artifact.missionId, {
-        id: `verification-${artifact.id}-${artifact.version}`,
-        severity: finding.severity === "critical" ? "critical" : "major",
-        description: finding.observation,
-        category: "quality",
-        artifactRefs: [`${artifact.id}@${artifact.version}`],
-        findingRefs: [finding.id],
-        requirementRefs: explicitRequirementRefs
-      });
       return { status: "failed", reason: `artifact verification failed: ${artifact.logicalName}`, artifactRef: `${artifact.id}@${artifact.version}`, capabilityNeeds: [] };
     }
     const evidenceIds = await this.recordVerificationEvidence(artifact, verification);
@@ -282,6 +285,8 @@ export class ArtifactAssurancePipeline {
       requirementRefs: failedCheck?.requirementRefs ?? [],
       evidenceRefs: verification.evidenceRefs,
       confidence: 1,
+      checkId: failedCheck?.id,
+      reproducible: failedCheck?.method === "deterministic" || failedCheck?.method === "runtime" || failedCheck?.method === "integration",
       createdAt: new Date().toISOString()
     };
   }

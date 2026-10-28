@@ -4,7 +4,7 @@ import type { MissionEvent } from "../domain/event.ts";
 import type { InvocationReceipt } from "../domain/invocation.ts";
 import type { AcceptanceContract, MissionSpec, MissionState, Requirement } from "../domain/mission.ts";
 import type { WorkItem } from "../domain/work-item.ts";
-import type { Evidence, Gap, VerificationResult } from "../domain/verification.ts";
+import type { Evidence, Finding, Gap, VerificationResult } from "../domain/verification.ts";
 
 export interface MissionProjectionReader {
   getMissionState(missionId: string): Promise<MissionState | null>;
@@ -19,6 +19,7 @@ export interface MissionProjectionReader {
   listInvocationReceipts(missionId: string): Promise<InvocationReceipt[]>;
   listVerificationResults(missionId: string): Promise<VerificationResult[]>;
   listWorkItems(missionId: string): Promise<WorkItem[]>;
+  listFindings(missionId: string): Promise<Finding[]>;
   listGaps(missionId: string): Promise<Gap[]>;
 }
 

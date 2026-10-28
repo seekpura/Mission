@@ -40,6 +40,8 @@ export type MissionEventType =
   | "finding.created"
   | "evidence.created"
   | "gap.opened"
+  | "gap.updated"
+  | "gap.reopened"
   | "gap.resolved"
   | "gap.accepted"
   | "decision.created"
