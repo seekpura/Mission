@@ -16,6 +16,7 @@ import type {
   CapabilityResolutionEvidence,
   CapabilityRuntime
 } from "../core/capabilities/capability-coordinator.ts";
+import type { TrustedCapabilityCache } from "../core/capabilities/trusted-capability-cache.ts";
 import type { MissionEvent, MissionEventType } from "../core/domain/event.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 
@@ -169,10 +170,16 @@ export class CapabilityLedgerRuntime implements CapabilityRuntime {
 export class RuntimeCapabilityLifecycleManager {
   private readonly capabilities: CapabilityRuntime;
   private readonly events: EventStore;
+  private readonly trustedCache?: TrustedCapabilityCache;
 
-  constructor(capabilities: CapabilityRuntime, events: EventStore) {
+  constructor(
+    capabilities: CapabilityRuntime,
+    events: EventStore,
+    trustedCache?: TrustedCapabilityCache
+  ) {
     this.capabilities = capabilities;
     this.events = events;
+    this.trustedCache = trustedCache;
   }
 
   async deactivate(input: {
@@ -228,6 +235,47 @@ export class RuntimeCapabilityLifecycleManager {
     // Durable state is authoritative. Only mutate the in-memory overlay after
     // the lifecycle Event and its read-model projections commit successfully.
     this.capabilities.deactivateMissionCapability(input.missionId, input.capabilityId);
+  }
+
+  async revokeTrustedCache(input: {
+    missionId: string;
+    cacheKey: string;
+    reason: string;
+  }): Promise<void> {
+    if (!this.trustedCache) {
+      throw new Error("Trusted capability cache is unavailable in this Runtime");
+    }
+    if (!input.missionId.trim() || !input.cacheKey.trim() || !input.reason.trim()) {
+      throw new Error("Trusted capability cache revocation requires missionId, cacheKey and reason");
+    }
+
+    const reason = input.reason.trim();
+    // Safety is authoritative over audit availability: revoke reusable trust on
+    // disk first. If the audit append fails, a retry remains idempotent because
+    // the cache revocation marker already exists and the Event uses a stable key.
+    await this.trustedCache.revoke(input.cacheKey, reason);
+
+    const token = createHash("sha256").update(stableJson({
+      missionId: input.missionId,
+      cacheKey: input.cacheKey,
+      reason
+    })).digest("hex");
+    const audit: CapabilityAuditRecord = {
+      id: `capability-audit-cache-revoked:${token.slice(0, 24)}`,
+      missionId: input.missionId,
+      decision: "revoked",
+      resolutionSource: "none",
+      cacheKey: input.cacheKey,
+      reason: `Trusted capability cache revoked: ${reason}`,
+      attempts: [],
+      recordedAt: new Date().toISOString()
+    };
+    await appendAudit(
+      this.events,
+      input.missionId,
+      audit,
+      `capability-cache-revoked:${token}`
+    );
   }
 }
 
@@ -362,6 +410,33 @@ async function appendLifecycle(
   payload: unknown,
   idempotencyKey: string
 ): Promise<MissionEvent> {
+  return appendRuntimeEvent(events, missionId, type, payload, idempotencyKey, "runtime-capability-lifecycle");
+}
+
+async function appendAudit(
+  events: EventStore,
+  missionId: string,
+  audit: CapabilityAuditRecord,
+  idempotencyKey: string
+): Promise<MissionEvent> {
+  return appendRuntimeEvent(
+    events,
+    missionId,
+    "capability.audit.recorded",
+    audit,
+    idempotencyKey,
+    "runtime-capability-lifecycle"
+  );
+}
+
+async function appendRuntimeEvent(
+  events: EventStore,
+  missionId: string,
+  type: MissionEventType,
+  payload: unknown,
+  idempotencyKey: string,
+  actorId: string
+): Promise<MissionEvent> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const expected = await events.lastSequence(missionId);
     try {
@@ -369,7 +444,7 @@ async function appendLifecycle(
         id: randomUUID(),
         missionId,
         type,
-        actor: { type: "system", id: "runtime-capability-lifecycle" },
+        actor: { type: "system", id: actorId },
         payload,
         idempotencyKey,
         schemaVersion: 1,
