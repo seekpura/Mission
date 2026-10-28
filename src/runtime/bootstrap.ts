@@ -36,6 +36,13 @@ import { HostArtifactVerifier } from "./host-artifact-verifier.ts";
 import { HostCapabilityRuntime } from "./host-capability-runtime.ts";
 import { HostDeliberationProvider } from "./host-deliberation-provider.ts";
 import { MissionSupervisor } from "./mission-supervisor.ts";
+import { DrainableHostAdapter } from "./drainable-host-adapter.ts";
+import {
+  closeMissionRuntimeIfIdle,
+  shutdownMissionRuntime,
+  type RuntimeShutdownOptions,
+  type RuntimeShutdownResult
+} from "./runtime-shutdown.ts";
 import { createProductionAgentSkillCapabilityRuntime } from "./production-capability-runtime.ts";
 import { RuntimeSideEffectManager } from "./side-effect-manager.ts";
 import { SideEffectHostAdapter } from "./side-effect-host-adapter.ts";
@@ -106,6 +113,7 @@ export interface MissionRuntime {
   controller: MissionController;
   supervisor: MissionSupervisor;
   recoverExistingMissions(): Promise<string[]>;
+  shutdown(options?: RuntimeShutdownOptions): Promise<RuntimeShutdownResult>;
   close(): void;
 }
 
@@ -153,7 +161,8 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const capabilityHost = !options.host && hostKind === "deepseek"
     ? new CapabilityWorkspaceHostAdapter(mcpHost, new MissionAgentSkillWorkspaceProjector(overlay))
     : mcpHost;
-  const host = new SideEffectHostAdapter(capabilityHost, sideEffects, { scopeRegistry: sideEffectScopes });
+  const sideEffectHost = new SideEffectHostAdapter(capabilityHost, sideEffects, { scopeRegistry: sideEffectScopes });
+  const host = new DrainableHostAdapter(sideEffectHost);
 
   const executorId = options.executorId?.trim() || (hostKind === "codex" ? "codex-host" : "deepseek-host");
   const controlTransport = new HostAgentJsonTransport(host, {
@@ -212,6 +221,9 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   );
   const controller = new MissionController(events, deliberation, execution, verifier, capabilities, reader);
   const supervisor = new MissionSupervisor(controller, events, { maxCyclesPerWake: options.maxSupervisorCycles });
+  let closed = false;
+  let shutdownPromise: Promise<RuntimeShutdownResult> | undefined;
+  const lifecycle = { supervisor, host, approvals, database };
 
   return {
     database,
@@ -235,9 +247,26 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
       }
       return resumed;
     },
+    shutdown(shutdownOptions: RuntimeShutdownOptions = {}): Promise<RuntimeShutdownResult> {
+      if (closed) {
+        return Promise.resolve({ forced: false, cancelledHandleIds: [], cancellationFailures: [] });
+      }
+      if (shutdownPromise) return shutdownPromise;
+      shutdownPromise = shutdownMissionRuntime(lifecycle, shutdownOptions)
+        .then(result => {
+          closed = true;
+          return result;
+        })
+        .catch(error => {
+          shutdownPromise = undefined;
+          throw error;
+        });
+      return shutdownPromise;
+    },
     close(): void {
-      approvals.dispose();
-      database.close();
+      if (closed) return;
+      closeMissionRuntimeIfIdle(lifecycle);
+      closed = true;
     }
   };
 }
