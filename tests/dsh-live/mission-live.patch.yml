@@ -1,0 +1,14 @@
+- id: headless-startup
+  disabled: true
+
+- id: headless-runner
+  disabled: true
+
+- id: session-telemetry-otel
+  disabled: true
+
+- insert:
+    - id: mission-live-mock-llm
+      name: '@mission-runtime/dsh-live-mock'
+    - id: mission-runtime
+      name: '@mission-runtime/deepseek-plugin'
