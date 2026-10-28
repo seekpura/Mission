@@ -284,7 +284,7 @@ export class MissionOrchestrator {
       }
       const outcome = await this.assurance.process(work, attemptId, workspace.root, envelope);
       if (!outcome.ok) {
-        await this.failWork(work, attemptId, outcome.reason);
+        await this.failWork(work, attemptId, outcome.reason, false);
         return;
       }
       await this.knowledgeIngestor?.ingest({ work, attemptId, envelope, artifactRefs: outcome.artifactRefs });
@@ -330,10 +330,10 @@ export class MissionOrchestrator {
     await this.controller.emit(work.missionId, "work.completed", { id: work.id, summary: outcome.reason }, { type: "system" }, `work-completed:${work.id}:${attemptId}`);
   }
 
-  private async failWork(work: WorkItem, attemptId: string, reason: string): Promise<void> {
+  private async failWork(work: WorkItem, attemptId: string, reason: string, openRuntimeGap = true): Promise<void> {
     await this.controller.emit(work.missionId, "attempt.completed", { id: attemptId, workItemId: work.id, status: "failed", reason }, { type: "worker" }, `attempt-completed:${attemptId}`);
     await this.controller.emit(work.missionId, "work.failed", { id: work.id, reason }, { type: "worker" }, `work-failed:${work.id}:${attemptId}`);
-    await this.assurance.openGap(work, `execution-${attemptId}`, reason, "runtime");
+    if (openRuntimeGap) await this.assurance.openGap(work, `execution-${attemptId}`, reason, "runtime");
   }
 
   private async promoteProposedWork(parent: WorkItem, envelope: WorkerOutputEnvelope | null): Promise<void> {
