@@ -59,10 +59,12 @@ jobs:
           mkdir -p node_modules/@mission-runtime
           ln -s "$GITHUB_WORKSPACE/integrations/deepseek-plugin" node_modules/@mission-runtime/deepseek-plugin
           ln -s "$GITHUB_WORKSPACE/tests/dsh-live/mock-llm" node_modules/@mission-runtime/dsh-live-mock
+          ln -s "$GITHUB_WORKSPACE/tests/dsh-live/launcher-host" node_modules/@mission-runtime/dsh-live-launcher-host
 
-          mkdir -p integrations/deepseek-plugin/node_modules tests/dsh-live/mock-llm/node_modules
+          mkdir -p integrations/deepseek-plugin/node_modules tests/dsh-live/mock-llm/node_modules tests/dsh-live/launcher-host/node_modules
           ln -s "$GITHUB_WORKSPACE/.dsh/node_modules/@deepseek-ai" integrations/deepseek-plugin/node_modules/@deepseek-ai
           ln -s "$GITHUB_WORKSPACE/.dsh/node_modules/@deepseek-ai" tests/dsh-live/mock-llm/node_modules/@deepseek-ai
+          ln -s "$GITHUB_WORKSPACE/.dsh/node_modules/@deepseek-ai" tests/dsh-live/launcher-host/node_modules/@deepseek-ai
 
       - name: Boot real DSH Loader composition and run Mission
         shell: bash
