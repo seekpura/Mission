@@ -7,6 +7,7 @@ export interface VerificationContext {
   requirements?: Requirement[];
   explicitRequirementRefs?: string[];
   artifacts?: Artifact[];
+  priorVerifications?: VerificationResult[];
 }
 
 export interface Verifier {
