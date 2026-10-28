@@ -68,8 +68,10 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   await shutdownTask;
 }
 
-process.once("SIGTERM", () => { void shutdown("SIGTERM"); });
-process.once("SIGINT", () => { void shutdown("SIGINT"); });
+// Keep listeners installed during the drain so a second signal has explicit
+// force-exit semantics instead of relying on platform default signal behavior.
+process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
+process.on("SIGINT", () => { void shutdown("SIGINT"); });
 
 server.listen(port, "127.0.0.1", () => {
   console.log(`Mission Runtime listening on http://127.0.0.1:${port}`);
