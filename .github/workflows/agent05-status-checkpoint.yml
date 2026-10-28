@@ -1,0 +1,80 @@
+name: agent05-status-checkpoint
+
+on:
+  push:
+    branches:
+      - feat/codex-production-host-adapter
+    paths:
+      - .github/workflows/agent05-status-checkpoint.yml
+
+permissions:
+  contents: write
+
+jobs:
+  checkpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/codex-production-host-adapter
+          fetch-depth: 0
+      - name: Update current status and frontier
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('CURRENT_STATUS.md')
+          lines = path.read_text(encoding='utf-8').splitlines()
+
+          def replace_line(old, replacements):
+              hits = [i for i, line in enumerate(lines) if line == old]
+              if len(hits) != 1:
+                  raise SystemExit(f'expected one status line, found {len(hits)}: {old}')
+              i = hits[0]
+              lines[i:i+1] = replacements
+
+          replace_line('- HostAdapter contract', [
+              '- provider-neutral `HostAdapter` contract lives at `src/hosts/host-adapter.ts`; core/runtime/execution modules no longer import the contract through a provider namespace and a regression test enforces that boundary',
+              '- FakeHostAdapter consumes the provider-neutral contract directly',
+              '- production OpenAI Codex app-server HostAdapter over native `codex app-server --stdio` JSON-RPC, alongside the existing DeepSeek Harness ACP adapter',
+              '- Codex native thread start/resume, turn start/steer/interrupt, cross-process recovery identity, message/tool event mapping and command/file permission request bridging are implemented',
+              '- Codex control-plane sessions are read-only while production Work sessions use workspace-write so `.mission-output.json` and real deliverables can be produced without granting danger-full-access',
+              '- the generic HostAgentWorkExecutionDriver is proven against Codex by committing a real candidate Artifact through the same Mission output-manifest path used by other Hosts',
+              '- Codex native command approval is routed through RuntimeSideEffectManager and the shared HostSideEffectScopeRegistry, producing durable side-effect intent/admission/completion records and preserving execution-scoped replay keys',
+              '- production host selection is explicit through `MISSION_HOST_KIND=deepseek|codex` with Codex binary/argument/model configuration; unknown host kinds fail closed',
+              '- provider-native Agent Skill delivery remains DeepSeek-specific; Codex and arbitrary custom HostAdapters reject production Agent Skill acquisition until an explicit compatible delivery adapter exists',
+              '- Codex trusted MCP projection and arbitrary `invokeHostCapability` routes remain fail-closed until provider-native adapters are implemented instead of silently reinterpreting DeepSeek/ACP configuration'
+          ])
+          replace_line(
+              '- production runtime bootstrap composing SQLite/EventStore/read models, DSH HostAdapter, trusted MCP delivery, host planner, ExecutorRouter, host worker driver, independent verifier, capability runtime, supervisor, approvals and side-effect manager',
+              ['- production runtime bootstrap composes SQLite/EventStore/read models, a selected production HostAdapter, trusted capability delivery where provider-compatible, host planner, ExecutorRouter, host worker driver, independent verifier, capability runtime, supervisor, approvals and side-effect manager']
+          )
+          test_line = next((line for line in lines if line.startswith('- unit, integration, and E2E tests including ')), None)
+          if test_line is None:
+              raise SystemExit('test coverage status line not found')
+          replace_line(test_line, [test_line[:-1] + ', Codex app-server protocol/create/resume/steer/interrupt/approval/sandbox coverage, generic Codex Artifact-driver portability, Codex durable side-effect admission/settlement and provider-boundary regression coverage'])
+
+          start = lines.index('## Next implementation frontier')
+          end = lines.index('## GitHub source control')
+          lines[start:end] = [
+              '## Next implementation frontier',
+              '',
+              'Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:',
+              '',
+              '1. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests',
+              '2. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions',
+              '3. concrete provider-specific read-only Evidence bindings/adapters for deployed presentation render, browser/accessibility, media probe/playback, executable test/build and research-recency capabilities as hosts expose them; the Runtime Evidence framework and fail-closed gates are implemented, but unavailable host capabilities remain inconclusive',
+              '4. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as HostAdapters expose them',
+              '5. external MCP discovery/acquisition plus provider-native MCP/Agent-Skill/CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles, including Codex-native delivery instead of reusing DeepSeek/ACP semantics',
+              '6. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction',
+              '',
+          ]
+          path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+      - name: Commit status checkpoint and remove this temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/agent05-status-checkpoint.yml
+          git add CURRENT_STATUS.md
+          git diff --cached --check
+          git commit -m "docs: checkpoint production Codex host portability"
+          git push origin HEAD:feat/codex-production-host-adapter
