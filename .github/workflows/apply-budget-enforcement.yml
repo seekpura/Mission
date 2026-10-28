@@ -1,0 +1,28 @@
+name: Apply budget enforcement
+on:
+  push:
+    branches: [build/budget-enforcement]
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply and verify budget enforcement
+        run: |
+          bash scripts/apply-budget-enforcement.sh
+          npm test
+          npm run smoke
+          git diff --check
+      - name: Commit implementation
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/core/domain/mission.ts src/core/domain/event.ts src/core/events/state-projector.ts src/runtime/mission-runtime.ts src/runtime/orchestration/mission-orchestrator.ts
+          git commit -m "feat: enforce durable observable mission budgets"
+          git push
