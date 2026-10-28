@@ -5,7 +5,12 @@ import type { MissionDatabase } from "./database.ts";
 import { rowToMissionEvent, type SqliteMissionEventRow } from "./sqlite-event-row.ts";
 import { SqliteReadModelProjector } from "./sqlite-read-model-projector.ts";
 
-export class ConcurrencyConflictError extends Error {}
+export class ConcurrencyConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConcurrencyConflictError";
+  }
+}
 
 export class SqliteEventStore implements EventStore {
   private readonly database: MissionDatabase;
