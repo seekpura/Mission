@@ -1,0 +1,40 @@
+name: agent06-final-type-fix
+
+on:
+  push:
+    branches:
+      - feat/production-typecheck-schema-gates
+    paths:
+      - .github/workflows/agent06-final-type-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/production-typecheck-schema-gates
+      - name: Normalize Codex persistence semantics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/hosts/codex/codex-app-server-host-adapter.ts')
+          text = path.read_text(encoding='utf-8')
+          old = '          persistence: ["thread", "resume", "recovery"]\n'
+          new = '          persistence: ["session", "resume", "recovery"]\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one persistence semantic match, got {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/agent06-final-type-fix.yml
+          git add src/hosts/codex/codex-app-server-host-adapter.ts
+          git diff --cached --check
+          git commit -m "fix: normalize Codex persistence capability semantics"
+          git push origin HEAD:feat/production-typecheck-schema-gates
