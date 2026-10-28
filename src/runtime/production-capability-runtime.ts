@@ -12,6 +12,7 @@ import { CapabilityAcquisitionTransaction } from "../core/capabilities/acquisiti
 import { FileAcquisitionReceiptStore } from "../core/capabilities/acquisition-receipt.ts";
 import { RepositoryCapabilityMaterializer } from "../core/capabilities/materialization.ts";
 import { MissionCapabilityOverlay } from "../core/capabilities/mission-capability-overlay.ts";
+import { FileTrustedCapabilityCache } from "../core/capabilities/trusted-capability-cache.ts";
 import { AgentSkillsDiscoveryProvider } from "../core/capabilities/providers/agent-skills-provider.ts";
 import { GitHubCapabilityDiscoveryProvider } from "../core/capabilities/providers/github-provider.ts";
 import { PolicyEngine, type PolicyDecision } from "../core/policy/policy-engine.ts";
@@ -74,6 +75,7 @@ export function createProductionAgentSkillCapabilityRuntime(
     activator: new AgentSkillMissionLocalActivator(join(root, "activated")),
     overlay: options.overlay,
     receiptStore: new FileAcquisitionReceiptStore(join(root, "receipts")),
+    trustedCache: new FileTrustedCapabilityCache(join(root, "trusted-cache")),
     approvalBroker: options.approvals,
     policy: new ExternalAgentSkillPolicyEngine()
   });
@@ -108,7 +110,7 @@ export function createProductionAgentSkillCapabilityRuntime(
  * Static scanning can reject obvious dangerous content, but it cannot establish
  * that the instructions are semantically trustworthy. Production therefore
  * requires one explicit user approval for every non-blocked external skill
- * before isolated smoke and mission-local activation.
+ * activation, including exact trusted-cache reuse in a different Mission.
  */
 class ExternalAgentSkillPolicyEngine extends PolicyEngine {
   override evaluateSecurity(assessment: SecurityAssessment): PolicyDecision {
@@ -117,8 +119,8 @@ class ExternalAgentSkillPolicyEngine extends PolicyEngine {
     }
     return {
       action: "require_approval",
-      reason: `External Agent Skill instructions require explicit approval even after ${assessment.overall}-risk static scanning`,
-      constraints: ["mission-local", "instruction-only", "one-shot-user-approval", "strong-isolation-smoke"]
+      reason: `External Agent Skill instructions require explicit approval even after ${assessment.overall}-risk static scanning or byte-identical trusted-cache reuse`,
+      constraints: ["mission-local", "instruction-only", "one-shot-user-approval", "strong-isolation-smoke-or-exact-trusted-cache"]
     };
   }
 }
