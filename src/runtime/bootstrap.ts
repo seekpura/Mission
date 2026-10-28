@@ -25,6 +25,11 @@ import {
   RuntimeCapabilityLifecycleManager
 } from "./capability-ledger-runtime.ts";
 import { CapabilityWorkspaceHostAdapter } from "./capability-context-host-adapter.ts";
+import {
+  createTrustedHostCapabilityEvidenceCollectors,
+  parseTrustedHostCapabilityEvidenceBindingsJson,
+  type TrustedHostCapabilityEvidenceBinding
+} from "./host-capability-evidence-collector.ts";
 import { HostAgentJsonTransport } from "./host-agent-json-transport.ts";
 import { HostArtifactVerifier } from "./host-artifact-verifier.ts";
 import { HostCapabilityRuntime } from "./host-capability-runtime.ts";
@@ -70,13 +75,16 @@ export interface MissionRuntimeOptions {
   allowInsecureTrustedMcpHttp?: boolean;
   /**
    * Provider-/deployment-specific collectors for evidence that cannot be
-   * established from artifact bytes alone (browser runtime, native renders,
-   * playback/probe, executable tests/builds, source recency, etc.). Built-in
-   * deterministic collectors are always retained; missing adapters never cause
-   * the Runtime to fabricate evidence and therefore leave affected checks
-   * inconclusive.
+   * established from artifact bytes alone. These are trusted in-process
+   * adapters supplied by the embedding Runtime.
    */
   verificationEvidenceCollectors?: VerificationEvidenceCollector[];
+  /**
+   * Explicit read-only bindings from live HostAdapter capabilities into typed
+   * Runtime Evidence. No host capability is auto-invoked merely because it
+   * exists in the semantic capability graph.
+   */
+  hostEvidenceCapabilities?: TrustedHostCapabilityEvidenceBinding[];
 }
 
 export interface MissionRuntime {
@@ -133,13 +141,18 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     knownExecutorIds: [executorId],
     defaultExecutorId: executorId
   });
+  const hostEvidenceCollectors = createTrustedHostCapabilityEvidenceCollectors(
+    host,
+    options.hostEvidenceCapabilities ?? []
+  );
   const verifier = new HostArtifactVerifier({
     transport: controlTransport,
     events,
     reader,
-    evidenceCollectors: createDefaultVerificationEvidenceCollectorRegistry(
-      options.verificationEvidenceCollectors ?? []
-    )
+    evidenceCollectors: createDefaultVerificationEvidenceCollectorRegistry([
+      ...hostEvidenceCollectors,
+      ...(options.verificationEvidenceCollectors ?? [])
+    ])
   });
   const workDriver = new HostAgentWorkExecutionDriver(
     host,
@@ -152,9 +165,6 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     { defaultExecutorId: executorId }
   );
 
-  // One shared immutable-byte cache is the trust authority for both acquisition
-  // reuse and operator revocation. Creating separate instances/roots would let
-  // lifecycle revocation disagree with what the acquisition path can reuse.
   const trustedCapabilityCache: TrustedCapabilityCache | undefined = options.capabilityAcquisition
     ? new FileTrustedCapabilityCache(resolve(root, "capabilities", "trusted-cache"))
     : undefined;
@@ -214,6 +224,9 @@ export function createProductionMissionRuntimeFromEnv(
   const trustedMcpServers = parseTrustedMcpServersJson(env.MISSION_TRUSTED_MCP_SERVERS_JSON, {
     allowInsecureHttp: allowInsecureTrustedMcpHttp
   });
+  const hostEvidenceCapabilities = parseTrustedHostCapabilityEvidenceBindingsJson(
+    env.MISSION_HOST_EVIDENCE_BINDINGS_JSON
+  );
   return createMissionRuntime({
     rootDir,
     dbPath: env.MISSION_DB ? resolve(env.MISSION_DB) : resolve(rootDir, "mission.db"),
@@ -228,7 +241,8 @@ export function createProductionMissionRuntimeFromEnv(
     retainControlWorkspaces: env.MISSION_RETAIN_CONTROL_WORKSPACES === "1",
     capabilityAcquisition: capabilityAcquisitionFromEnv(env),
     trustedMcpServers,
-    allowInsecureTrustedMcpHttp
+    allowInsecureTrustedMcpHttp,
+    hostEvidenceCapabilities
   });
 }
 
