@@ -58,6 +58,37 @@ test("DeepSeek ACP binding runs initialize/session/prompt/update/permission/stop
   }
 });
 
+test("DeepSeek ACP binding prefers protocol cancellation before process fallback", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "mission-dsh-cancel-"));
+
+  try {
+    const bindings = new DeepSeekAcpProcessBindings({
+      binary: process.execPath,
+      argsPrefix: [fixture],
+      cancelGraceMs: 500
+    });
+    const adapter = new DeepSeekHarnessAdapter(bindings);
+    const handle = await adapter.createAgent({
+      missionId: "mission-acp-test",
+      workItemId: "work-cancel",
+      context: { waitForCancel: true },
+      allowedCapabilityRefs: [],
+      workspaceRoot: workspace
+    });
+
+    await adapter.cancelAgent(handle);
+
+    const events = [];
+    for await (const event of adapter.observeAgent(handle)) events.push(event);
+
+    assert.equal(events[0]?.type, "started");
+    assert.equal(events.at(-1)?.type, "completed");
+    assert.equal((events.at(-1)?.payload as { stopReason?: string })?.stopReason, "cancelled");
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test("DeepSeek ACP binding rejects relative workspaces before launching a process", async () => {
   const bindings = new DeepSeekAcpProcessBindings({
     binary: process.execPath,
