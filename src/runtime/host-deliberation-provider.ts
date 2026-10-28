@@ -27,6 +27,8 @@ export interface HostDeliberationProviderOptions {
 interface DurablePlannerContext {
   missionId: string;
   userGoal: string;
+  strategy?: StrategyProposal;
+  capabilityNeeds: CapabilityNeed[];
   workItems: WorkItem[];
   artifacts: Artifact[];
   openGaps: Gap[];
@@ -133,7 +135,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
       throw new Error(`Planner frontier exceeds work item limit ${this.maxFrontierWorkItems}`);
     }
     const knownNeedIds = new Set([
-      ...context.workItems.flatMap(work => work.capabilityNeedRefs),
+      ...context.capabilityNeeds.map(need => need.id),
       ...capabilityNeeds.map(need => need.id)
     ]);
     const knownGapIds = new Set(context.openGaps.map(gap => gap.id));
@@ -228,10 +230,32 @@ export class HostDeliberationProvider implements DeliberationProvider {
   }
 
   private async context(missionId: string): Promise<DurablePlannerContext> {
-    const journal = projectMissionJournal(missionId, await this.events.list(missionId));
+    const events = await this.events.list(missionId);
+    const journal = projectMissionJournal(missionId, events);
+    let strategy: StrategyProposal | undefined;
+    for (const event of events) {
+      if (event.type !== "strategy.created" && event.type !== "strategy.revised") continue;
+      const payload = event.payload as Partial<StrategyProposal>;
+      if (typeof payload.framing !== "string" || typeof payload.approach !== "string" ||
+          !Array.isArray(payload.workstreams) || typeof payload.revision !== "number") continue;
+      strategy = {
+        framing: payload.framing,
+        approach: payload.approach,
+        workstreams: payload.workstreams.map((workstream, index) => {
+          const item = objectValue(workstream, `strategy event workstreams[${index}]`);
+          return {
+            id: nonEmptyString(item.id, `strategy event workstreams[${index}].id`),
+            objective: nonEmptyString(item.objective, `strategy event workstreams[${index}].objective`)
+          };
+        }),
+        revision: payload.revision
+      };
+    }
     return {
       missionId,
       userGoal: journal.userGoal,
+      ...(strategy ? { strategy } : {}),
+      capabilityNeeds: [...journal.capabilityNeeds.values()],
       workItems: [...journal.workItems.values()],
       artifacts: [...journal.artifacts.values()],
       openGaps: [...journal.gaps.values()].filter(gap => gap.status === "open" || gap.status === "working" || gap.status === "blocked")
@@ -323,6 +347,8 @@ function plannerContext(context: DurablePlannerContext, state: MissionState) {
   return {
     missionId: context.missionId,
     userGoal: context.userGoal,
+    strategy: context.strategy,
+    capabilityNeeds: context.capabilityNeeds,
     state: compactState(state),
     workItems: context.workItems,
     artifacts: context.artifacts,
