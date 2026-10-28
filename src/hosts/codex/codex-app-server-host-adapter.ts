@@ -161,7 +161,7 @@ export class CodexAppServerHostAdapter implements HostAdapter {
             "command-approval",
             "file-change-approval"
           ],
-          persistence: ["thread", "resume", "recovery"]
+          persistence: ["session", "resume", "recovery"]
         },
         provenance: {
           source: "host" as const,
