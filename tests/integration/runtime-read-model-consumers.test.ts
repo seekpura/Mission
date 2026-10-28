@@ -52,16 +52,23 @@ class VerifierTransport implements HostJsonTransport {
   requests: HostJsonRequest[] = [];
   async request(input: HostJsonRequest): Promise<unknown> {
     this.requests.push(input);
-    const profile = (input.input as { verificationProfile?: { checks?: Array<{ id?: string }> } }).verificationProfile;
-    const checks = profile?.checks ?? [];
+    const payload = input.input as {
+      verificationProfile?: { checks?: Array<{ id?: string }> };
+      runtimeEvidence?: Array<{ id?: string; result?: string }>;
+    };
+    const checks = payload.verificationProfile?.checks ?? [];
+    const evidenceRefs = (payload.runtimeEvidence ?? [])
+      .filter(evidence => evidence.result === "supports" && typeof evidence.id === "string" && evidence.id)
+      .map(evidence => evidence.id as string);
+    assert.ok(evidenceRefs.length > 0);
     return {
       overall: "pass",
       checkResults: checks.map(check => ({
         id: check.id,
         status: "pass",
-        evidenceRefs: ["evidence:artifact-content"]
+        evidenceRefs
       })),
-      evidenceRefs: ["evidence:artifact-content"],
+      evidenceRefs,
       gapAssessments: []
     };
   }
@@ -162,6 +169,9 @@ test("host planner and independent verifier read Mission context without replayi
     assert.equal(noReplay.listCalls, 0);
     assert.equal((verifierTransport.requests[0]!.input as { userGoal?: string }).userGoal,
       "prove planner and verifier continuity from durable current views");
+    const evidence = reader.readEvidence(missionId, "deliverable@1");
+    assert.ok(evidence.some(item => item.kind === "file-integrity"));
+    assert.ok(evidence.some(item => item.kind === "text-content"));
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });
