@@ -6,10 +6,14 @@ import type { MissionController } from "../core/mission/controller.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 import type { MissionProjectionReader } from "../core/events/projection-store.ts";
 import type { MissionOrchestrator } from "../runtime/orchestration/mission-orchestrator.ts";
+import type { MissionBudget } from "../core/domain/budget.ts";
+import type { MissionGovernanceViewBuilder } from "../core/governance/mission-governance-view.ts";
 
 export interface MissionApiOptions {
   projections?: MissionProjectionReader;
   orchestrator?: MissionOrchestrator;
+  governance?: MissionGovernanceViewBuilder;
+  configureBudget?: (budget: MissionBudget) => Promise<void>;
   steer?: (missionId: string, message: string) => Promise<unknown>;
 }
 
@@ -21,6 +25,13 @@ export function createMissionApi(controller: MissionController, events: EventSto
     for (const res of subscribers.get(missionId) ?? []) {
       res.write(`event: mission.updated\ndata: ${JSON.stringify(latest)}\n\n`);
     }
+  }
+
+  async function governanceView(missionId: string, url: URL) {
+    if (!options.governance) throw new Error("Governance view is unavailable");
+    const requested = Number(url.searchParams.get("auditLimit") ?? 20);
+    const auditLimit = Number.isFinite(requested) ? Math.max(0, Math.min(100, Math.floor(requested))) : 20;
+    return options.governance.build(missionId, auditLimit);
   }
 
   return createServer(async (req, res) => {
@@ -67,6 +78,23 @@ export function createMissionApi(controller: MissionController, events: EventSto
         if (req.method === "GET" && parts[2] === "gaps") return json(res, 200, await options.projections?.listGaps(missionId) ?? []);
         if (req.method === "GET" && parts[2] === "artifacts") return json(res, 200, await options.projections?.listArtifacts(missionId) ?? []);
         if (req.method === "GET" && parts[2] === "evidence") return json(res, 200, await options.projections?.listEvidence(missionId) ?? []);
+
+        if (req.method === "GET" && parts[2] === "governance") return json(res, 200, await governanceView(missionId, url));
+        if (req.method === "GET" && parts[2] === "budget") return json(res, 200, (await governanceView(missionId, url)).budget);
+        if (req.method === "POST" && parts[2] === "budget") {
+          if (!options.configureBudget) throw new Error("Budget configuration is unavailable");
+          const body = await readJson(req);
+          const budget = { ...body, missionId } as MissionBudget;
+          await options.configureBudget(budget);
+          options.orchestrator?.wake(missionId);
+          await publish(missionId);
+          return json(res, 200, (await governanceView(missionId, url)).budget);
+        }
+        if (req.method === "GET" && parts[2] === "cost") return json(res, 200, (await governanceView(missionId, url)).observedCost);
+        if (req.method === "GET" && parts[2] === "audit") return json(res, 200, (await governanceView(missionId, url)).recentAudit);
+        if (req.method === "GET" && parts[2] === "trust") return json(res, 200, (await governanceView(missionId, url)).trust);
+        if (req.method === "GET" && parts[2] === "completion") return json(res, 200, (await governanceView(missionId, url)).completion);
+
         if (req.method === "GET" && parts[2] === "events") {
           res.writeHead(200, {
             "Content-Type": "text/event-stream",

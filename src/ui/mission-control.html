@@ -1,29 +1,102 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Mission Control</title>
 <style>
-:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}body{margin:0}.shell{max-width:1180px;margin:0 auto;padding:40px 24px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#666}.title{font-size:42px;line-height:1;margin:8px 0}.muted{color:#666}.grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-top:28px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.03)}.metric{font-size:28px;font-weight:650}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:12px}.wide{grid-column:1/-1}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.title{font-size:32px}}
+:root{font-family:Inter,"PingFang SC","Microsoft YaHei",ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}*{box-sizing:border-box}body{margin:0}.shell{max-width:1240px;margin:0 auto;padding:36px 24px 64px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#777}.title{font-size:40px;line-height:1;margin:8px 0 10px}.muted{color:#666}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px;margin-top:24px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:19px;box-shadow:0 8px 28px rgba(0,0,0,.025)}.span3{grid-column:span 3}.span4{grid-column:span 4}.span6{grid-column:span 6}.span8{grid-column:span 8}.span12{grid-column:1/-1}.metric{font-size:27px;font-weight:680;margin-top:5px}.metric.small{font-size:21px}.row{display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid #eee;align-items:flex-start}.row:last-child{border:0}.row-main{min-width:0}.row-title{font-size:14px;font-weight:600;overflow-wrap:anywhere}.row-sub{font-size:12px;color:#777;margin-top:3px;overflow-wrap:anywhere}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:11px;white-space:nowrap}.pill.warn{background:#fff2cf}.pill.block{background:#ffe0dc}.section-note{font-size:12px;color:#777;margin-top:5px}.progress{height:6px;background:#eee;border-radius:99px;overflow:hidden;margin:8px 0 2px}.progress>i{display:block;height:100%;background:#333;border-radius:99px}.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}.empty{font-size:13px;color:#888;padding:12px 0}.audit{max-height:330px;overflow:auto}.raw{white-space:pre-wrap;word-break:break-word;font-size:11px;max-height:260px;overflow:auto;background:#fafafa;border-radius:12px;padding:12px}.good{color:#235c31}.bad{color:#8d251b}details summary{cursor:pointer;font-size:13px;font-weight:600}@media(max-width:900px){.span3,.span4,.span6,.span8{grid-column:span 6}}@media(max-width:640px){.grid{grid-template-columns:1fr}.span3,.span4,.span6,.span8,.span12{grid-column:auto}.top{align-items:flex-start}.title{font-size:32px}.split{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <div class="shell">
-  <div class="top"><div><div class="eyebrow">Mission Runtime</div><div class="title">Mission Control</div><div class="muted">State, blockers, artifacts and decisions—not fake progress percentages.</div></div><div class="pill" id="connection">offline</div></div>
+  <div class="top">
+    <div><div class="eyebrow">Mission Runtime</div><div class="title">Mission Control</div><div class="muted">看真实状态、阻塞、预算与证据，不制造“假进度条”。</div></div>
+    <div class="pill" id="connection">offline</div>
+  </div>
+
   <div class="grid">
-    <section class="card"><div class="eyebrow">Mission</div><div class="metric" id="status">—</div><div class="muted" id="mission">Open /?mission=&lt;id&gt;</div></section>
-    <section class="card"><div class="eyebrow">Blocking gaps</div><div class="metric" id="gaps">0</div></section>
-    <section class="card"><div class="eyebrow">Active work</div><div id="work"></div></section>
-    <section class="card"><div class="eyebrow">Artifacts</div><div id="artifacts"></div></section>
-    <section class="card wide"><div class="eyebrow">Current state</div><pre id="raw">Waiting for mission id…</pre></section>
+    <section class="card span6"><div class="eyebrow">Mission</div><div class="metric" id="status">—</div><div class="section-note" id="mission">打开 /?mission=&lt;id&gt;</div></section>
+    <section class="card span3"><div class="eyebrow">Blocking gaps</div><div class="metric" id="gaps">0</div><div class="section-note">会阻止 truthful completion</div></section>
+    <section class="card span3"><div class="eyebrow">Observed runtime</div><div class="metric small" id="runtimeCost">—</div><div class="section-note" id="sideEffects">外部副作用 0</div></section>
+
+    <section class="card span6"><div class="eyebrow">Budget / 预算</div><div id="budget"></div></section>
+    <section class="card span6"><div class="eyebrow">Capability trust / 能力可靠性</div><div id="trust"></div></section>
+
+    <section class="card span6"><div class="eyebrow">Active work / 当前工作</div><div id="work"></div></section>
+    <section class="card span6"><div class="eyebrow">Artifacts / 最终产物</div><div id="artifacts"></div></section>
+
+    <section class="card span8"><div class="eyebrow">Recent governance events / 关键治理记录</div><div class="audit" id="audit"></div></section>
+    <section class="card span4"><div class="eyebrow">Completion basis / 完成依据</div><div id="completion"></div></section>
+
+    <section class="card span12"><details><summary>原始 Mission State</summary><pre class="raw" id="raw">Waiting for mission id…</pre></details></section>
   </div>
 </div>
 <script>
 const missionId=new URLSearchParams(location.search).get('mission');
-if(missionId){document.getElementById('mission').textContent=missionId;const es=new EventSource('/missions/'+encodeURIComponent(missionId)+'/events');es.onopen=()=>connection.textContent='live';es.onerror=()=>connection.textContent='reconnecting';es.addEventListener('mission.updated',e=>render(JSON.parse(e.data)));fetch('/missions/'+encodeURIComponent(missionId)).then(r=>r.json()).then(render)}
-function render(s){status.textContent=s.status;gaps.textContent=s.blockingGapIds.length;work.innerHTML=[...s.activeWorkItemIds,...s.readyWorkItemIds].map(x=>'<div class="row"><span>'+esc(x)+'</span><span class="pill">work</span></div>').join('')||'<div class="muted">No active work</div>';artifacts.innerHTML=s.finalArtifactRefs.map(x=>'<div class="row"><span>'+esc(x)+'</span><span class="pill">final</span></div>').join('')||'<div class="muted">No final artifacts</div>';raw.textContent=JSON.stringify(s,null,2)}
-function esc(x){return String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+const $=id=>document.getElementById(id);
+let latestState=null;
+if(missionId){
+  $('mission').textContent=missionId;
+  const es=new EventSource('/missions/'+encodeURIComponent(missionId)+'/events');
+  es.onopen=()=>$('connection').textContent='live';
+  es.onerror=()=>$('connection').textContent='reconnecting';
+  es.addEventListener('mission.updated',e=>{renderState(JSON.parse(e.data));refreshGovernance()});
+  fetch('/missions/'+encodeURIComponent(missionId)).then(r=>r.json()).then(s=>{renderState(s);refreshGovernance()});
+}
+function renderState(s){
+  latestState=s;
+  $('status').textContent=s.status;
+  $('gaps').textContent=s.blockingGapIds.length;
+  $('work').innerHTML=[...s.activeWorkItemIds,...s.readyWorkItemIds].map(x=>row(x,'work')).join('')||empty('暂无 active / ready work');
+  $('artifacts').innerHTML=s.finalArtifactRefs.map(x=>row(x,'final')).join('')||empty('尚无 final artifact');
+  $('raw').textContent=JSON.stringify(s,null,2);
+}
+async function refreshGovernance(){
+  if(!missionId)return;
+  try{
+    const r=await fetch('/missions/'+encodeURIComponent(missionId)+'/governance?auditLimit=20');
+    if(!r.ok)throw new Error('governance '+r.status);
+    renderGovernance(await r.json());
+  }catch(e){$('budget').innerHTML=empty('治理视图暂不可用');}
+}
+function renderGovernance(g){
+  $('runtimeCost').textContent=formatDuration(g.observedCost.executionWallTimeMs);
+  $('sideEffects').textContent='外部副作用 '+g.observedCost.externalSideEffects+(g.observedCost.monetaryCoverage==='unavailable'?' · 金额未知':' · 金额 '+formatMoney(g.observedCost.monetaryEstimate));
+  renderBudget(g.budget);
+  renderTrust(g.trust||[]);
+  renderAudit(g.recentAudit||[]);
+  renderCompletion(g.completion);
+}
+function renderBudget(b){
+  if(!b||!b.policy){$('budget').innerHTML=empty('未配置预算；Runtime 仅记录可观测消耗');return}
+  const findings=b.assessment?.findings||[];
+  $('budget').innerHTML=findings.map(f=>{
+    const ratio=f.limit===0?(f.used>0?1:0):Math.min(1,f.used/f.limit);
+    const tag=f.exceeded?'exhausted':f.warning?'warning':f.enforcement;
+    const cls=f.exceeded?'pill block':f.warning?'pill warn':'pill';
+    return '<div class="row"><div class="row-main"><div class="row-title">'+esc(metricLabel(f.metric))+'</div><div class="progress"><i style="width:'+Math.round(ratio*100)+'%"></i></div><div class="row-sub">'+esc(formatMetric(f.metric,f.used))+' / '+esc(formatMetric(f.metric,f.limit))+' · remaining '+esc(formatMetric(f.metric,f.remaining))+'</div></div><span class="'+cls+'">'+esc(tag)+'</span></div>';
+  }).join('')||empty('Budget revision '+b.policy.revision+' 未设置 limit');
+}
+function renderTrust(items){
+  $('trust').innerHTML=items.slice().sort((a,b)=>b.attempts-a.attempts).slice(0,8).map(t=>'<div class="row"><div class="row-main"><div class="row-title">'+esc(t.capabilityId)+'</div><div class="row-sub">'+esc(t.purpose)+' · '+t.succeeded+'/'+t.attempts+' success'+(t.averageWallTimeMs!==undefined?' · avg '+formatDuration(t.averageWallTimeMs):'')+'</div></div><span class="pill">'+Math.round((t.successRate||0)*100)+'%</span></div>').join('')||empty('尚无 capability execution 样本');
+}
+function renderAudit(items){
+  $('audit').innerHTML=items.map(a=>'<div class="row"><div class="row-main"><div class="row-title">'+esc(a.action)+'</div><div class="row-sub">'+esc(a.target||a.actorType)+' · '+esc(formatTime(a.createdAt))+'</div></div></div>').join('')||empty('尚无高影响审计记录');
+}
+function renderCompletion(c){
+  if(!c){$('completion').innerHTML=empty(latestState?.status==='completed'?'完成记录尚未投影':'Mission 尚未完成');return}
+  const req=(c.criticalRequirementsSatisfied+c.requiredRequirementsSatisfied)+' / '+(c.criticalRequirementsTotal+c.requiredRequirementsTotal);
+  $('completion').innerHTML='<div class="metric small good">verified</div><div class="row"><span>Requirements</span><strong>'+esc(req)+'</strong></div><div class="row"><span>Verification</span><strong>'+c.verificationCount+'</strong></div><div class="row"><span>Blocking gaps</span><strong>'+c.blockingGapRefs.length+'</strong></div><div class="row"><span>Observed runtime</span><strong>'+formatDuration(c.totalObservedWallTimeMs)+'</strong></div>'+(c.unresolvedAdvisories.length?'<div class="section-note">Advisories: '+esc(c.unresolvedAdvisories.join(', '))+'</div>':'');
+}
+function row(text,tag){return '<div class="row"><span class="row-title">'+esc(text)+'</span><span class="pill">'+esc(tag)+'</span></div>'}
+function empty(text){return '<div class="empty">'+esc(text)+'</div>'}
+function metricLabel(m){return ({observed_execution_ms:'执行耗时',attempts:'Attempts',capability_acquisitions:'Capability acquisitions',external_side_effects:'External side effects',concurrent_executions:'Concurrent executions'})[m]||m}
+function formatMetric(m,v){return m==='observed_execution_ms'?formatDuration(v):String(v)}
+function formatDuration(ms){if(!Number.isFinite(ms))return '—';if(ms<1000)return Math.round(ms)+' ms';if(ms<60000)return (ms/1000).toFixed(1)+' s';return (ms/60000).toFixed(1)+' min'}
+function formatMoney(v){return Number.isFinite(v)?Number(v).toFixed(2):'unknown'}
+function formatTime(v){try{return new Date(v).toLocaleString()}catch{return v}}
+function esc(x){return String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 </script>
 </body>
 </html>
