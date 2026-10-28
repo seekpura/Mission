@@ -90,7 +90,12 @@ function fakeReader() {
 
 class CapturingTransport implements HostJsonTransport {
   readonly requests: HostJsonRequest[] = [];
-  constructor(private readonly response: (request: HostJsonRequest) => unknown) {}
+  private readonly response: (request: HostJsonRequest) => unknown;
+
+  constructor(response: (request: HostJsonRequest) => unknown) {
+    this.response = response;
+  }
+
   async request(input: HostJsonRequest): Promise<unknown> {
     this.requests.push(input);
     return this.response(input);
