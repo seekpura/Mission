@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Artifact, ArtifactType } from "../../core/domain/artifact.ts";
 import type { ExecutionResult, ProducedFile } from "../../core/domain/execution.ts";
@@ -286,6 +285,7 @@ function assertWithin(root: string, candidate: string, label: string): void {
 }
 
 function writeHostEventLog(path: string, events: HostAgentEvent[]): void {
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(
     path,
     events.map(event => JSON.stringify(event)).join("\n") + (events.length > 0 ? "\n" : ""),
