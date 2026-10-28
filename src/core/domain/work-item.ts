@@ -8,6 +8,12 @@ export interface ArtifactExpectation {
   path?: string;
 }
 
+export interface ArtifactDependency {
+  logicalName: string;
+  type?: string;
+  minimumStatus?: "candidate" | "verified" | "final";
+}
+
 export interface LocalAcceptanceCriterion {
   id: string;
   description: string;
@@ -34,6 +40,7 @@ export interface WorkItem {
   requirementRefs: string[];
   gapRefs: string[];
   inputArtifactRefs: string[];
+  artifactDependencies?: ArtifactDependency[];
   expectedOutputs: ArtifactExpectation[];
   localAcceptanceCriteria: LocalAcceptanceCriterion[];
   capabilityNeedRefs: string[];

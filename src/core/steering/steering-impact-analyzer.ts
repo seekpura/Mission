@@ -52,7 +52,8 @@ export class SteeringImpactAnalyzer {
           if (affectedWork.has(work.id)) continue;
           const parentAffected = !!work.parentWorkItemId && affectedWork.has(work.parentWorkItemId);
           const artifactAffected = work.inputArtifactRefs.some(ref => affectedArtifacts.has(ref) || hasLogicalArtifact(affectedArtifacts, ref));
-          if (parentAffected || artifactAffected) {
+          const logicalDependencyAffected = (work.artifactDependencies ?? []).some(dependency => hasLogicalName(affectedArtifacts, dependency.logicalName));
+          if (parentAffected || artifactAffected || logicalDependencyAffected) {
             affectedWork.add(work.id);
             changed = true;
           }
@@ -95,7 +96,10 @@ export class SteeringImpactAnalyzer {
 function artifactRef(artifact: Artifact): string { return `${artifact.id}@${artifact.version}`; }
 function hasLogicalArtifact(refs: Set<string>, ref: string): boolean {
   const id = ref.split("@")[0];
-  for (const candidate of refs) if (candidate.split("@")[0] === id) return true;
+  return hasLogicalName(refs, id);
+}
+function hasLogicalName(refs: Set<string>, logicalName: string): boolean {
+  for (const candidate of refs) if (candidate.split("@")[0] === logicalName) return true;
   return false;
 }
 function terminalWork(status: WorkItem["status"]): boolean {

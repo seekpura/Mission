@@ -66,13 +66,29 @@ test("mission autonomously consumes the frontier, commits output, verifies evide
   assert.equal(state.status, "completed");
   assert.equal(state.blockingGapIds.length, 0);
   assert.equal(state.finalArtifactRefs.length, 1);
+
   const requirements = await runtime.projections.listRequirements("m-auto");
   assert.equal(requirements[0]?.status, "satisfied");
-  assert.equal(requirements[0]?.evidenceRefs.length, 1);
+
   const artifacts = await runtime.projections.listArtifacts("m-auto");
   assert.equal(artifacts[0]?.status, "final");
-  const verification = await runtime.projections.listVerificationResults("m-auto");
-  assert.equal(verification[0]?.overall, "pass");
+
+  const verifications = await runtime.projections.listVerificationResults("m-auto");
+  assert.equal(verifications[0]?.overall, "pass");
+  const requirementChecks = verifications[0]?.checkResults.filter(check => check.status === "pass" && check.requirementRefs?.includes("R1")) ?? [];
+  assert.ok(requirementChecks.length >= 2, "artifact requirement should have concrete passing verification checks");
+
+  const evidence = await runtime.projections.listEvidence("m-auto");
+  const requirementEvidenceRefs = requirements[0]?.evidenceRefs ?? [];
+  assert.equal(requirementEvidenceRefs.length, requirementChecks.length);
+  for (const evidenceRef of requirementEvidenceRefs) {
+    const item = evidence.find(candidate => candidate.id === evidenceRef);
+    assert.ok(item, `missing requirement evidence ${evidenceRef}`);
+    assert.equal(item.subjectRef, "deliverable@1");
+    assert.equal(item.result, "supports");
+    assert.equal(item.validity ?? "active", "active");
+  }
+
   const events = await runtime.events.list("m-auto");
   for (const type of ["attempt.created", "execution.started", "artifact.created", "verification.completed", "evidence.created", "requirement.status.changed", "mission.completed"]) {
     assert.ok(events.some(event => event.type === type), `missing event ${type}`);

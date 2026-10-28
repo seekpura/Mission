@@ -11,9 +11,12 @@ export interface VerificationPlanningContext {
 export class VerificationPlanner {
   plan(artifact: Artifact, context: VerificationPlanningContext = {}): VerificationProfile {
     const linked = this.linkedRequirements(artifact, context);
+    const artifactRequirementRefs = linked
+      .filter(requirement => methodForRequirement(requirement) === "deterministic")
+      .map(requirement => requirement.id);
     const checks: VerificationCheck[] = [
-      check("file-exists", "Artifact file exists", "structural", "structural", "deterministic", "critical", []),
-      check("file-non-empty", "Artifact file is non-empty", "structural", "structural", "deterministic", "critical", [])
+      check("file-exists", "Artifact file exists", "structural", "structural", "deterministic", "critical", artifactRequirementRefs),
+      check("file-non-empty", "Artifact file is non-empty", "structural", "structural", "deterministic", "critical", artifactRequirementRefs)
     ];
 
     for (const requirement of linked) {
@@ -108,7 +111,7 @@ function dedupe(checks: VerificationCheck[]): VerificationCheck[] {
 
 function fingerprint(checks: VerificationCheck[]): string {
   let hash = 2166136261;
-  for (const char of checks.map(check => `${check.id}:${check.method}:${check.priority}:${JSON.stringify(check.config ?? {})}`).sort().join("|")) {
+  for (const char of checks.map(check => `${check.id}:${check.method}:${check.priority}:${check.requirementRefs.join(",")}:${JSON.stringify(check.config ?? {})}`).sort().join("|")) {
     hash ^= char.charCodeAt(0);
     hash = Math.imul(hash, 16777619);
   }
