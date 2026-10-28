@@ -44,6 +44,47 @@ test("Agent Skill metadata preserves disable-model-invocation as a hard delivery
   assert.equal(metadata.modelInvocable, false);
 });
 
+test("workspace projection refuses a model-disabled acquired skill even if it appears in the overlay", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mission-skill-projection-manual-only-"));
+  try {
+    const bundle = join(root, "bundle");
+    const workspace = join(root, "workspace");
+    mkdirSync(bundle);
+    mkdirSync(workspace);
+    writeFileSync(join(bundle, "SKILL.md"), [
+      "---",
+      "name: manual-only",
+      "description: This skill is intentionally unavailable to the model.",
+      "disable-model-invocation: true",
+      "---",
+      "# Manual Only",
+      ""
+    ].join("\n"), "utf8");
+
+    const overlay = new MissionCapabilityOverlay();
+    overlay.activate("mission-manual-only", {
+      id: "acquired:manual-only",
+      kind: "skill",
+      name: "manual-only",
+      description: "This skill is intentionally unavailable to the model.",
+      hostNative: false,
+      available: true,
+      invocationRef: bundle,
+      permissions: [],
+      revision: "commit-manual-only",
+      scope: "mission"
+    });
+
+    const projector = new MissionAgentSkillWorkspaceProjector(overlay);
+    assert.throws(
+      () => projector.project("mission-manual-only", ["acquired:manual-only"], workspace),
+      /disables model invocation/
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("workspace projection refuses a symlinked .agents root", { skip: process.platform === "win32" }, async () => {
   const root = await mkdtemp(join(tmpdir(), "mission-skill-projection-symlink-"));
   try {
