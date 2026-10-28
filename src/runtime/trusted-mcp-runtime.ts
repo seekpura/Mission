@@ -19,7 +19,7 @@ import type {
   HostDescriptor,
   HostMcpNameValue,
   HostMcpServer
-} from "../hosts/deepseek/host-adapter.ts";
+} from "../hosts/host-adapter.ts";
 
 export type TrustedMcpServerConfig =
   | {
