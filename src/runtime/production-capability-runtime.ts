@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import type { CapabilityCandidate, CapabilityNeed } from "../core/domain/capability.ts";
+import type { CapabilityCandidate, CapabilityNeed, SecurityAssessment } from "../core/domain/capability.ts";
 import type { CapabilityDiscoveryProvider } from "../core/capabilities/discovery-provider.ts";
 import { CandidateRanker, type RankedCandidate } from "../core/capabilities/candidate-ranker.ts";
 import {
@@ -15,6 +15,7 @@ import { MissionLocalDirectoryActivator } from "../core/capabilities/mission-loc
 import { MissionCapabilityOverlay } from "../core/capabilities/mission-capability-overlay.ts";
 import { AgentSkillsDiscoveryProvider } from "../core/capabilities/providers/agent-skills-provider.ts";
 import { GitHubCapabilityDiscoveryProvider } from "../core/capabilities/providers/github-provider.ts";
+import { PolicyEngine, type PolicyDecision } from "../core/policy/policy-engine.ts";
 import { SandboxManager } from "../core/capabilities/sandbox/sandbox-manager.ts";
 import {
   IsolatedCapabilitySmokeRunner,
@@ -70,7 +71,8 @@ export function createProductionAgentSkillCapabilityRuntime(
     activator: new MissionLocalDirectoryActivator(join(root, "activated")),
     overlay: options.overlay,
     receiptStore: new FileAcquisitionReceiptStore(join(root, "receipts")),
-    approvalBroker: options.approvals
+    approvalBroker: options.approvals,
+    policy: new ExternalAgentSkillPolicyEngine()
   });
   const hostCapabilities: HostCapabilitySource = {
     async listHostCapabilities() {
@@ -85,6 +87,26 @@ export function createProductionAgentSkillCapabilityRuntime(
     acquirer: transaction,
     maxCandidates: options.maxCandidates ?? 4
   });
+}
+
+/**
+ * External Agent Skills are behavioral instructions, not merely inert files.
+ * Static scanning can reject obvious dangerous content, but it cannot establish
+ * that the instructions are semantically trustworthy. Production therefore
+ * requires one explicit user approval for every non-blocked external skill
+ * before isolated smoke and mission-local activation.
+ */
+class ExternalAgentSkillPolicyEngine extends PolicyEngine {
+  override evaluateSecurity(assessment: SecurityAssessment): PolicyDecision {
+    if (assessment.overall === "blocked") {
+      return { action: "deny", reason: "Blocked security finding in external Agent Skill", constraints: [] };
+    }
+    return {
+      action: "require_approval",
+      reason: `External Agent Skill instructions require explicit approval even after ${assessment.overall}-risk static scanning`,
+      constraints: ["mission-local", "instruction-only", "one-shot-user-approval", "strong-isolation-smoke"]
+    };
+  }
 }
 
 class SkillOnlyRankedDiscovery implements CapabilityCandidateDiscovery {
