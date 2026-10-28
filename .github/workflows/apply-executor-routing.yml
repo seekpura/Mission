@@ -1,0 +1,28 @@
+name: Apply executor routing batch
+on:
+  push:
+    branches: [build/executor-routing]
+    paths:
+      - scripts/apply-executor-routing.sh
+      - .github/workflows/apply-executor-routing.yml
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/executor-routing
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply and verify
+        run: bash scripts/apply-executor-routing.sh
+      - name: Commit batch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests
+          git commit -m 'build: apply executor routing batch'
+          git push origin HEAD:build/executor-routing
