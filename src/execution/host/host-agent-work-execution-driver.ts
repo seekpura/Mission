@@ -286,7 +286,6 @@ async function nextWithTimeout<T>(
       iterator.next(),
       new Promise<typeof TIMEOUT>(resolve => {
         timer = setTimeout(() => resolve(TIMEOUT), timeoutMs);
-        timer.unref();
       })
     ]);
   } finally {
