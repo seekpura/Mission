@@ -14,7 +14,11 @@ function schemaPath() {
 
 class NoReplayEventStore implements EventStore {
   listCalls = 0;
-  constructor(private readonly delegate: EventStore) {}
+  private readonly delegate: EventStore;
+
+  constructor(delegate: EventStore) {
+    this.delegate = delegate;
+  }
 
   append<T>(event: Omit<MissionEvent<T>, "sequence">, expectedSequence: number): Promise<MissionEvent<T>> {
     return this.delegate.append(event, expectedSequence);
