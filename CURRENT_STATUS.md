@@ -26,6 +26,9 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - HostAdapter contract
 - FakeHostAdapter
 - DeepSeekHarnessAdapter boundary via injected bindings
+- production DeepSeek ACP process binding over `dsh --profile acp`
+- ACP initialize / session creation / prompt / update observation / one-shot permission bridge / graceful cancel / close lifecycle
+- protocol-level fake ACP integration tests that do not require local DSH credentials
 - event-driven MissionController boundary
 - HTTP Mission API and SSE event stream
 - browser-native Mission Control view
@@ -36,16 +39,16 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. real DSH binding implementation against the installed harness API
-2. persistent WorkItem / Artifact / Finding / Gap projections beyond event reconstruction
-3. actual Strategy / Frontier / Gap diagnosis model provider
-4. full verifier profiles for presentations/web/video/code/research
-5. GitHub/Agent Skills materialization and sandbox smoke execution
-6. external capability revision pinning + acquisition receipts
-7. process cancellation tree + stronger recovery
+1. DSH session resume/reconnect and native session recovery
+2. real MissionController strategy -> frontier -> dispatch -> verify -> diagnose -> replan loop
+3. persistent WorkItem / Artifact / Finding / Gap projections beyond event reconstruction
+4. completion challenge as an enforced pre-completion phase
+5. full verifier profiles for presentations/web/video/code/research
+6. GitHub/Agent Skills materialization and sandbox smoke execution
+7. external capability revision pinning + provenance + activation receipts
 8. approvals and side-effect manager
-9. capability trust/cost/audit ledgers
-10. Reference Mission live E2E with fault injection
+9. host capability graph with native semantics instead of flat availability flags
+10. Reference Mission live E2E with fault injection, followed by a second host adapter
 
 ## GitHub source control
 
