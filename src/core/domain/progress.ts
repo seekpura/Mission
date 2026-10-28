@@ -20,6 +20,7 @@ export interface PlateauContext {
   priorRepairCount: number;
   priorRepairScopes: RepairScope[];
   highestRepairScope?: RepairScope;
+  minimumRepairScope?: RepairScope;
   lastProgressAt?: string;
   waitingReason?: "approval" | "capability" | "execution" | "ready-work";
 }
