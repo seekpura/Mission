@@ -1,0 +1,31 @@
+name: Apply budget cost policy
+on:
+  push:
+    branches: [build/budget-cost-policy]
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply and verify budget policy
+        run: |
+          chmod +x scripts/apply-budget-cost-policy.sh
+          ./scripts/apply-budget-cost-policy.sh
+          npm test
+          npm run smoke
+          git diff --check
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests
+          git commit -m 'feat: enforce mission budget and measured cost policy' || exit 0
+          git push origin HEAD:build/budget-cost-policy
