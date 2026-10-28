@@ -1,0 +1,29 @@
+name: Reference acceptance diagnostics
+on:
+  push:
+    branches: [build/reference-mission-e2e]
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Instrument and capture reference mission diagnostics
+        shell: bash
+        run: |
+          set +e
+          bash scripts/apply-progressive-dependencies.sh
+          bash scripts/instrument-reference-acceptance.sh
+          npm test > .reference-acceptance.log 2>&1
+          code=$?
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .reference-acceptance.log
+          git commit -m "diagnostic: capture reference mission acceptance" || true
+          git push || true
+          exit $code
