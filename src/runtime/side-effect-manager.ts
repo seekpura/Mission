@@ -10,7 +10,7 @@ import type {
 } from "../core/domain/execution.ts";
 import type { MissionEvent, MissionEventType } from "../core/domain/event.ts";
 import type { EventStore } from "../core/events/event-store.ts";
-import type { ApprovalRequest, ApprovalResult, HostAgentEvent } from "../hosts/deepseek/host-adapter.ts";
+import type { ApprovalRequest, ApprovalResult, HostAgentEvent } from "../hosts/host-adapter.ts";
 
 export interface SideEffectApprovalRequest {
   missionId: string;

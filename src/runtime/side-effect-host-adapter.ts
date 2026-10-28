@@ -13,7 +13,7 @@ import type {
   HostCapabilityInvocation,
   HostCapabilityResult,
   HostDescriptor
-} from "../hosts/deepseek/host-adapter.ts";
+} from "../hosts/host-adapter.ts";
 import type { RuntimeSideEffectManager } from "./side-effect-manager.ts";
 import { HostSideEffectScopeRegistry } from "./side-effect-host-scope.ts";
 

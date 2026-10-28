@@ -15,7 +15,7 @@ import type {
   GapDiagnosis,
   StrategyProposal
 } from "../core/planning/deliberation-provider.ts";
-import type { HostAdapter } from "../hosts/deepseek/host-adapter.ts";
+import type { HostAdapter } from "../hosts/host-adapter.ts";
 import type { HostJsonTransport } from "./host-agent-json-transport.ts";
 
 export interface HostDeliberationProviderOptions {
