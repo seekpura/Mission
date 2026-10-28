@@ -377,7 +377,9 @@ export class MissionController {
     }
 
     const acceptanceBeforePlanning = await this.acceptanceEvaluation(input.missionId);
-    if (this.deliberation && !acceptanceBeforePlanning.satisfied && (this.shouldPlanFrontier(state) || (input.trigger === "user_steering" && state.blockingGapIds.length === 0))) {
+    const existingWorkBeforePlanning = await this.readModel.workItems(input.missionId);
+    const needsBootstrapFrontier = existingWorkBeforePlanning.length === 0 && state.finalArtifactRefs.length === 0;
+    if (this.deliberation && (!acceptanceBeforePlanning.satisfied || needsBootstrapFrontier) && (this.shouldPlanFrontier(state) || (input.trigger === "user_steering" && state.blockingGapIds.length === 0))) {
       const frontier = await this.deliberation.planFrontier({
         state,
         userGoal: await this.readModel.userGoal(input.missionId),
