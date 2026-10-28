@@ -1,5 +1,5 @@
 import type { SideEffectPolicy } from "../core/domain/execution.ts";
-import type { AgentCreateRequest, AgentResumeRequest, ApprovalRequest } from "../hosts/deepseek/host-adapter.ts";
+import type { AgentCreateRequest, AgentResumeRequest, ApprovalRequest } from "../hosts/host-adapter.ts";
 
 interface HostSideEffectScope {
   missionId: string;
