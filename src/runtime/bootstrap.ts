@@ -14,8 +14,8 @@ import { FileArtifactStore } from "../execution/artifacts/artifact-store.ts";
 import { HostAgentWorkExecutionDriver } from "../execution/host/host-agent-work-execution-driver.ts";
 import { WorkspaceManager } from "../execution/workspace/workspace-manager.ts";
 import { RuntimeApprovalManager } from "./approval-manager.ts";
-import { MissionAgentSkillContextResolver } from "./agent-skill-runtime.ts";
-import { CapabilityContextHostAdapter } from "./capability-context-host-adapter.ts";
+import { MissionAgentSkillWorkspaceProjector } from "./agent-skill-runtime.ts";
+import { CapabilityWorkspaceHostAdapter } from "./capability-context-host-adapter.ts";
 import { HostAgentJsonTransport } from "./host-agent-json-transport.ts";
 import { HostArtifactVerifier } from "./host-artifact-verifier.ts";
 import { HostCapabilityRuntime } from "./host-capability-runtime.ts";
@@ -77,8 +77,8 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     approvalHandler: request => approvals.requestHostApproval(request)
   }));
   const overlay = new MissionCapabilityOverlay();
-  const skillContexts = new MissionAgentSkillContextResolver(overlay);
-  const host = new CapabilityContextHostAdapter(baseHost, skillContexts);
+  const skillProjection = new MissionAgentSkillWorkspaceProjector(overlay);
+  const host = new CapabilityWorkspaceHostAdapter(baseHost, skillProjection);
 
   const executorId = options.executorId?.trim() || "deepseek-host";
   const controlTransport = new HostAgentJsonTransport(host, {
