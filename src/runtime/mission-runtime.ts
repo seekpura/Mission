@@ -16,6 +16,7 @@ import { WorkspaceManager } from "../execution/workspace/workspace-manager.ts";
 import { FileArtifactStore } from "../execution/artifacts/artifact-store.ts";
 import { BasicFileVerifier } from "../core/verification/basic-file-verifier.ts";
 import { MissionOrchestrator } from "./orchestration/mission-orchestrator.ts";
+import { ArtifactAssurancePipeline } from "./orchestration/artifact-assurance-pipeline.ts";
 import { CapabilityCoordinator } from "./orchestration/capability-coordinator.ts";
 import type { SecureAcquisitionService } from "../core/capabilities/secure-acquisition-service.ts";
 
@@ -68,15 +69,18 @@ export class MissionRuntime {
           approvalDecided: payload => this.controller.emit(payload.missionId, "approval.decided", payload, { type: "user" }, `approval-decision:${payload.id}`)
         }
       });
+      const verifier = new BasicFileVerifier();
+      const assurance = new ArtifactAssurancePipeline({ controller: this.controller, projections: this.projections, artifacts: this.artifacts, verifier });
       this.executionRouter = executionRouter;
-      this.recovery = new ExecutionRecoveryManager({ controller: this.controller, events: this.events, projections: this.projections, router: executionRouter });
+      this.recovery = new ExecutionRecoveryManager({ controller: this.controller, events: this.events, projections: this.projections, router: executionRouter, workspaces: this.workspaces, assurance });
       this.orchestrator = new MissionOrchestrator({
         controller: this.controller,
         projections: this.projections,
         hostBackend: hostAgentBackend,
         workspaces: this.workspaces,
         artifacts: this.artifacts,
-        verifier: new BasicFileVerifier(),
+        verifier,
+        assurance,
         capabilityCoordinator: new CapabilityCoordinator({ controller: this.controller, projections: this.projections, host: options.host, acquisition: options.acquisition }),
         executionRouter,
         options: { maxConcurrency: options.maxConcurrency }
@@ -106,7 +110,7 @@ export class MissionRuntime {
   }
 
   async recoverMission(missionId: string) {
-    if (!this.recovery) return { running: [], lost: [] };
+    if (!this.recovery) return { running: [], recovered: [], lost: [] };
     return this.recovery.reconcileMission(missionId);
   }
 

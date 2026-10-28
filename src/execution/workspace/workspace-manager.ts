@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 export interface WorkspaceHandle {
@@ -19,6 +19,11 @@ export class WorkspaceManager {
     const path = join(this.root, missionId, "working", attemptId);
     mkdirSync(path, { recursive: true });
     return { id: `${missionId}:${attemptId}`, missionId, attemptId, root: path };
+  }
+
+  locate(missionId: string, attemptId: string): WorkspaceHandle | null {
+    const path = join(this.root, missionId, "working", attemptId);
+    return existsSync(path) ? { id: `${missionId}:${attemptId}`, missionId, attemptId, root: path } : null;
   }
 
   cleanup(handle: WorkspaceHandle) {

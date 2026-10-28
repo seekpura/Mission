@@ -1,5 +1,7 @@
 import type { ArtifactType } from "../domain/artifact.ts";
 
+export const WORKER_RECOVERY_FILE = ".mission-worker-output.json";
+
 export interface WorkerOutputFile {
   path: string;
   logicalName: string;
@@ -21,7 +23,7 @@ export function workerProtocolInstruction(workspaceRoot: string): string {
 WORKER OUTPUT CONTRACT
 You are executing one Mission WorkItem. Work only on the assigned objective and available context.
 Write user-facing files inside this workspace: ${workspaceRoot}
-When finished, your FINAL assistant message MUST be one JSON object (no markdown fence):
+When finished, first write the exact JSON object below to ${workspaceRoot}/${WORKER_RECOVERY_FILE}. Then your FINAL assistant message MUST be the same JSON object (no markdown fence):
 {
   "status":"completed|partial|failed",
   "summary":"what was actually accomplished",
@@ -30,7 +32,7 @@ When finished, your FINAL assistant message MUST be one JSON object (no markdown
   "proposedWork":[],
   "warnings":[]
 }
-Do not claim files that do not exist. proposedWork is advisory only; Mission Control decides whether to promote it.
+The recovery file is part of the execution protocol and must be written before the final response so Mission Control can recover from a runtime crash. Do not claim files that do not exist. proposedWork is advisory only; Mission Control decides whether to promote it.
 `;
 }
 

@@ -5,6 +5,7 @@ export interface ArtifactExpectation {
   logicalName: string;
   type: string;
   required: boolean;
+  path?: string;
 }
 
 export interface LocalAcceptanceCriterion {
