@@ -67,6 +67,12 @@ export function applyMissionEvent(state: MissionState, event: MissionEvent): Mis
     case "mission.spec.revised":
       s.missionSpecRevision = (event.payload as { revision: number }).revision;
       break;
+    case "budget.configured":
+      if (s.status === "budget_exhausted") s.status = "active";
+      break;
+    case "budget.exhausted":
+      s.status = "budget_exhausted";
+      break;
     case "acceptance.created":
     case "acceptance.revised":
       s.acceptanceRevision = (event.payload as { revision: number }).revision;

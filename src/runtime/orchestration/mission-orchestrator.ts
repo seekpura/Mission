@@ -17,6 +17,7 @@ import { writeExecutionRecoveryManifest } from "../recovery/recovery-manifest.ts
 import type { WorkerKnowledgeIngestor } from "../../core/knowledge/worker-knowledge-ingestor.ts";
 import { KnowledgeContextSelector } from "../../core/context/knowledge-context-selector.ts";
 import type { KnowledgeStalenessManager } from "../../core/knowledge/knowledge-staleness-manager.ts";
+import type { BudgetManager } from "../../core/budget/budget-manager.ts";
 
 export interface MissionOrchestratorOptions {
   maxConcurrency?: number;
@@ -38,6 +39,7 @@ export class MissionOrchestrator {
   private readonly executionRouter?: WorkExecutionRouter;
   private readonly knowledgeIngestor?: WorkerKnowledgeIngestor;
   private readonly knowledge?: KnowledgeStalenessManager;
+  private readonly budget?: BudgetManager;
   private readonly knowledgeSelector = new KnowledgeContextSelector();
   private readonly running = new Map<string, Promise<void>>();
   private readonly rerunRequested = new Set<string>();
@@ -55,6 +57,7 @@ export class MissionOrchestrator {
     executionRouter?: WorkExecutionRouter;
     knowledgeIngestor?: WorkerKnowledgeIngestor;
     knowledge?: KnowledgeStalenessManager;
+    budget?: BudgetManager;
     assurance?: ArtifactAssurancePipeline;
     options?: MissionOrchestratorOptions;
   }) {
@@ -71,6 +74,7 @@ export class MissionOrchestrator {
     this.executionRouter = input.executionRouter;
     this.knowledgeIngestor = input.knowledgeIngestor;
     this.knowledge = input.knowledge;
+    this.budget = input.budget;
     this.assurance = input.assurance ?? new ArtifactAssurancePipeline({ controller: input.controller, projections: input.projections, artifacts: input.artifacts, verifier: input.verifier });
   }
 
@@ -104,27 +108,65 @@ export class MissionOrchestrator {
   async runUntilQuiescent(missionId: string): Promise<void> {
     for (let cycle = 0; cycle < this.maxCyclesPerWake; cycle++) {
       await this.knowledge?.scanFreshness(missionId);
+      const beforeCycle = await this.controller.state(missionId);
+      if (beforeCycle.status === "budget_exhausted") return;
       await this.controller.runControllerCycle({ missionId, trigger: cycle === 0 ? "manual" : "execution_event" });
       const state = await this.controller.state(missionId);
-      if (["completed", "cancelled", "failed", "blocked", "plateau"].includes(state.status)) return;
+      if (["completed", "cancelled", "failed", "blocked", "plateau", "budget_exhausted"].includes(state.status)) return;
+
+      const budgetAssessment = this.budget ? await this.budget.assess(missionId) : undefined;
+      if (budgetAssessment && this.budget) {
+        await this.budget.emitWarnings(budgetAssessment);
+        if (this.budget.isGloballyExhausted(budgetAssessment)) {
+          await this.budget.markExhausted(budgetAssessment);
+          return;
+        }
+      }
+
       const ready = (await this.projections.listWorkItems(missionId))
         .filter(work => work.status === "ready")
         .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt));
       if (ready.length === 0) return;
-      const dispatchable: Array<{ work: WorkItem; capabilities: CapabilityDescriptor[] }> = [];
+      const maxDispatch = budgetAssessment && this.budget
+        ? this.budget.effectiveConcurrency(this.maxConcurrency, budgetAssessment)
+        : this.maxConcurrency;
+      const reservation = this.budget?.emptyReservation();
+      const budgetBlockedMetrics = new Set<import("../../core/domain/budget.ts").BudgetMetric>();
+      const dispatchable: Array<{ work: WorkItem; capabilities: CapabilityDescriptor[]; route?: ExecutionRoute }> = [];
       for (const work of ready) {
-        if (dispatchable.length >= this.maxConcurrency) break;
-        if (work.purpose === "acquisition") { dispatchable.push({ work, capabilities: [] }); continue; }
+        if (dispatchable.length >= maxDispatch) break;
+        if (work.purpose === "acquisition") {
+          if (budgetAssessment && this.budget && reservation && !this.budget.canReserve(work, budgetAssessment, reservation)) {
+            this.budget.exhaustedMetricsForBlockedWork(work, budgetAssessment).forEach(metric => budgetBlockedMetrics.add(metric));
+            continue;
+          }
+          if (this.budget && reservation) this.budget.reserve(work, reservation);
+          dispatchable.push({ work, capabilities: [] });
+          continue;
+        }
         const preparation = this.capabilityCoordinator ? await this.capabilityCoordinator.prepare(work) : { status: "ready" as const, capabilities: [], missingNeeds: [] };
-        if (preparation.status === "ready") dispatchable.push({ work, capabilities: preparation.capabilities });
+        if (preparation.status !== "ready") continue;
+        const route = this.executionRouter?.select(work, preparation.capabilities);
+        if (budgetAssessment && this.budget && reservation && !this.budget.canReserve(work, budgetAssessment, reservation, route)) {
+          this.budget.exhaustedMetricsForBlockedWork(work, budgetAssessment, route).forEach(metric => budgetBlockedMetrics.add(metric));
+          continue;
+        }
+        if (this.budget && reservation) this.budget.reserve(work, reservation, route);
+        dispatchable.push({ work, capabilities: preparation.capabilities, route });
       }
-      if (dispatchable.length === 0) continue;
-      await Promise.all(dispatchable.map(item => this.executeWork(item.work, item.capabilities)));
+      if (dispatchable.length === 0) {
+        if (budgetAssessment && this.budget && budgetBlockedMetrics.size > 0) {
+          await this.budget.markExhausted(budgetAssessment, [...budgetBlockedMetrics]);
+          return;
+        }
+        continue;
+      }
+      await Promise.all(dispatchable.map(item => this.executeWork(item.work, item.capabilities, item.route)));
     }
     await this.controller.emit(missionId, "mission.status.changed", { status: "plateau", reason: "orchestrator cycle budget exhausted" }, { type: "system" }, `plateau:cycle-budget:${missionId}`);
   }
 
-  private async executeWork(work: WorkItem, capabilities: CapabilityDescriptor[] = []): Promise<void> {
+  private async executeWork(work: WorkItem, capabilities: CapabilityDescriptor[] = [], reservedRoute?: ExecutionRoute): Promise<void> {
     if (work.purpose === "acquisition") {
       await this.executeAcquisitionWork(work);
       return;
@@ -163,7 +205,7 @@ export class MissionOrchestrator {
       outputProtocol: workerProtocolInstruction(workspace.root)
     };
 
-    const selectedRoute: ExecutionRoute = this.executionRouter?.select(work, capabilities) ?? { kind: "host_agent", reason: "legacy host-agent route", cancellable: true, sideEffectPolicy: { externalWrites: "approval", destructiveWrites: "approval", irreversibleActions: "approval", idempotencyRequired: true }, resourceRequest: {}, requiresApproval: false };
+    const selectedRoute: ExecutionRoute = reservedRoute ?? this.executionRouter?.select(work, capabilities) ?? { kind: "host_agent", reason: "legacy host-agent route", cancellable: true, sideEffectPolicy: { externalWrites: "approval", destructiveWrites: "approval", irreversibleActions: "approval", idempotencyRequired: true }, resourceRequest: {}, requiresApproval: false };
     await this.controller.emit(work.missionId, "attempt.created", { id: attemptId, workItemId: work.id, executorId: selectedRoute.kind, contextPacketId: contextPacket.id }, { type: "controller" }, `attempt:${attemptId}`);
     await this.controller.emit(work.missionId, "work.started", { id: work.id }, { type: "controller" }, `work-started:${work.id}:${attemptId}`);
     await this.controller.emit(work.missionId, "execution.created", { id: executionId, workItemId: work.id, attemptId, executorType: selectedRoute.kind, routeReason: selectedRoute.reason }, { type: "controller" }, `execution-created:${executionId}`);
