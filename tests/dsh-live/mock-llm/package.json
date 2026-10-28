@@ -1,0 +1,13 @@
+{
+  "name": "@mission-runtime/dsh-live-mock",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.mjs",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "*"
+  }
+}
