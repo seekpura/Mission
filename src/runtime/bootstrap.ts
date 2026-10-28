@@ -10,6 +10,10 @@ import { MissionController } from "../core/mission/controller.ts";
 import { ExecutorRouter } from "../core/execution/executor-router.ts";
 import { MissionCapabilityOverlay } from "../core/capabilities/mission-capability-overlay.ts";
 import type { CapabilityRuntime } from "../core/capabilities/capability-coordinator.ts";
+import {
+  FileTrustedCapabilityCache,
+  type TrustedCapabilityCache
+} from "../core/capabilities/trusted-capability-cache.ts";
 import { FileArtifactStore } from "../execution/artifacts/artifact-store.ts";
 import { HostAgentWorkExecutionDriver } from "../execution/host/host-agent-work-execution-driver.ts";
 import { WorkspaceManager } from "../execution/workspace/workspace-manager.ts";
@@ -129,15 +133,27 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     [{ executorId, driver: workDriver }],
     { defaultExecutorId: executorId }
   );
+
+  // One shared immutable-byte cache is the trust authority for both acquisition
+  // reuse and operator revocation. Creating separate instances/roots would let
+  // lifecycle revocation disagree with what the acquisition path can reuse.
+  const trustedCapabilityCache: TrustedCapabilityCache | undefined = options.capabilityAcquisition
+    ? new FileTrustedCapabilityCache(resolve(root, "capabilities", "trusted-cache"))
+    : undefined;
   const baseCapabilities = createCapabilityRuntime({
     root,
     host,
     overlay,
     approvals,
-    acquisition: options.capabilityAcquisition
+    acquisition: options.capabilityAcquisition,
+    trustedCache: trustedCapabilityCache
   });
   const capabilities = new CapabilityLedgerRuntime(baseCapabilities, events);
-  const capabilityLifecycle = new RuntimeCapabilityLifecycleManager(capabilities, events);
+  const capabilityLifecycle = new RuntimeCapabilityLifecycleManager(
+    capabilities,
+    events,
+    trustedCapabilityCache
+  );
   const controller = new MissionController(events, deliberation, execution, verifier, capabilities, reader);
   const supervisor = new MissionSupervisor(controller, events, { maxCyclesPerWake: options.maxSupervisorCycles });
 
@@ -204,6 +220,7 @@ function createCapabilityRuntime(input: {
   overlay: MissionCapabilityOverlay;
   approvals: RuntimeApprovalManager;
   acquisition?: ProductionCapabilityAcquisitionOptions;
+  trustedCache?: TrustedCapabilityCache;
 }): CapabilityRuntime {
   if (!input.acquisition) return new HostCapabilityRuntime(input.host, input.overlay);
   return createProductionAgentSkillCapabilityRuntime({
@@ -215,7 +232,8 @@ function createCapabilityRuntime(input: {
     dockerImage: input.acquisition.dockerImage,
     dockerBinary: input.acquisition.dockerBinary,
     githubRequestTimeoutMs: input.acquisition.githubRequestTimeoutMs,
-    maxCandidates: input.acquisition.maxCandidates
+    maxCandidates: input.acquisition.maxCandidates,
+    trustedCache: input.trustedCache
   });
 }
 
