@@ -24,7 +24,7 @@ import {
   IsolatedCapabilitySmokeRunner,
   type IsolatedSmokeExecutor
 } from "../core/capabilities/sandbox/isolated-smoke-runner.ts";
-import type { HostAdapter } from "../hosts/deepseek/host-adapter.ts";
+import type { HostAdapter } from "../hosts/host-adapter.ts";
 import type { RuntimeApprovalManager } from "./approval-manager.ts";
 import {
   AgentSkillMissionLocalActivator,
