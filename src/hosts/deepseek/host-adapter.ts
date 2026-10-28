@@ -31,12 +31,34 @@ export interface HostAgentHandle {
   nativeRef?: string;
 }
 
+export interface HostMcpNameValue {
+  name: string;
+  value: string;
+}
+
+export type HostMcpServer =
+  | {
+      transport: "stdio";
+      name: string;
+      command: string;
+      args: string[];
+      env: HostMcpNameValue[];
+    }
+  | {
+      transport: "http";
+      name: string;
+      url: string;
+      headers: HostMcpNameValue[];
+    };
+
 export interface AgentCreateRequest {
   missionId: string;
   workItemId: string;
   context: unknown;
   allowedCapabilityRefs: string[];
   workspaceRoot?: string;
+  /** Provider-native MCP declarations selected by a trusted Host delivery layer. */
+  mcpServers?: HostMcpServer[];
 }
 
 export interface AgentResumeRequest extends AgentCreateRequest {
