@@ -661,7 +661,10 @@ export class MissionController {
       await this.openGap(missionId, {
         id: `runtime-gap:${work.id}:${attemptId}`,
         severity: "major",
-        description: `Execution ${executionId} ended in state ${outcome.result.state}.`,
+        description: [
+          `Execution ${executionId} ended in state ${outcome.result.state}.`,
+          outcome.result.runtimeObservationRef ? `Runtime observation: ${outcome.result.runtimeObservationRef}.` : ""
+        ].filter(Boolean).join(" "),
         blocking: true,
         category: "runtime",
         requirementRefs: work.requirementRefs,
@@ -1250,6 +1253,16 @@ function assertExecutionOutcome(
 ): void {
   if (outcome.result.executionId !== executionId) {
     throw new Error(`Execution driver returned wrong execution id for ${work.id}`);
+  }
+  if (
+    outcome.result.state === "succeeded" &&
+    outcome.result.sideEffects.some(effect => effect.status !== "succeeded")
+  ) {
+    const marker = "side-effect-completion-not-fully-succeeded";
+    outcome.result.state = "partial";
+    outcome.result.runtimeObservationRef = outcome.result.runtimeObservationRef
+      ? `${outcome.result.runtimeObservationRef};${marker}`
+      : marker;
   }
   const refs = new Set(outcome.artifacts.map(artifactRef));
   for (const artifact of outcome.artifacts) {
