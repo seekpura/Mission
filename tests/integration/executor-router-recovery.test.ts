@@ -6,9 +6,13 @@ import { ExecutorRouter } from "../../src/core/execution/executor-router.ts";
 
 class RouteDriver implements WorkExecutionDriver {
   readonly id = "shared-host-driver";
+  readonly label: string;
   executeCalls = 0;
   recoverCalls = 0;
-  constructor(readonly label: string) {}
+
+  constructor(label: string) {
+    this.label = label;
+  }
 
   async execute(input: WorkExecutionInput) {
     this.executeCalls += 1;
