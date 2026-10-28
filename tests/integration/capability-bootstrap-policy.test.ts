@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createProductionMissionRuntimeFromEnv } from "../../src/runtime/bootstrap.ts";
+import { FakeHostAdapter } from "../../src/hosts/fake/fake-host-adapter.ts";
+import { createMissionRuntime, createProductionMissionRuntimeFromEnv } from "../../src/runtime/bootstrap.ts";
 
 test("production bootstrap refuses Agent Skill acquisition unless Docker strong isolation is explicitly selected", () => {
   assert.throws(
@@ -73,6 +74,27 @@ test("production bootstrap rejects unknown host kinds and DeepSeek-native Skill 
         MISSION_CAPABILITY_ISOLATION: "docker"
       }, process.cwd()),
       /not yet deliverable through Codex app-server/
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("custom HostAdapters do not silently inherit DeepSeek-native Agent Skill delivery", () => {
+  const root = mkdtempSync(join(tmpdir(), "mission-custom-host-skill-gate-"));
+  try {
+    assert.throws(
+      () => createMissionRuntime({
+        rootDir: root,
+        schemaPath: join(process.cwd(), "src", "persistence", "sqlite", "schema.sql"),
+        host: new FakeHostAdapter(),
+        capabilityAcquisition: {
+          mode: "github-skills",
+          isolation: "docker",
+          dockerImage: "alpine:3.20"
+        }
+      }),
+      /custom HostAdapter cannot use production Agent Skill acquisition/
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
