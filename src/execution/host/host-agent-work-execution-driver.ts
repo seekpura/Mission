@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Artifact, ArtifactType } from "../../core/domain/artifact.ts";
-import type { ExecutionResult, ExecutionRuntimeBinding } from "../../core/domain/execution.ts";
+import type { ExecutionResult, ExecutionRuntimeBinding, SideEffectRecord } from "../../core/domain/execution.ts";
 import type {
   WorkExecutionDriver,
   WorkExecutionInput,
@@ -50,6 +50,33 @@ const ARTIFACT_TYPES = new Set<ArtifactType>([
   "dataset",
   "research",
   "other"
+]);
+
+const SIDE_EFFECT_TYPES = new Set<SideEffectRecord["type"]>([
+  "filesystem",
+  "network",
+  "external-write",
+  "deployment",
+  "message",
+  "purchase",
+  "system-change"
+]);
+
+const SIDE_EFFECT_CLASSES = new Set<NonNullable<SideEffectRecord["effectClass"]>>([
+  "workspace-write",
+  "external-write",
+  "destructive-write",
+  "irreversible-action",
+  "unknown-effect"
+]);
+
+const SIDE_EFFECT_STATUSES = new Set<NonNullable<SideEffectRecord["status"]>>([
+  "succeeded",
+  "failed",
+  "unknown",
+  "admitted",
+  "denied",
+  "replay_blocked"
 ]);
 
 export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
@@ -185,6 +212,8 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
     return {
       missionId: input.workItem.missionId,
       workItemId: input.workItem.id,
+      attemptId: input.attemptId,
+      executionId: input.executionId,
       workspaceRoot,
       allowedCapabilityRefs: [...input.contextPacket.allowedCapabilityRefs],
       context: {
@@ -238,9 +267,10 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
       observed.events.map(event => JSON.stringify(event)).join("\n") + (observed.events.length ? "\n" : ""),
       "utf8"
     );
+    const sideEffects = sideEffectsFromEvents(observed.events);
 
     if (observed.timedOut) {
-      return { result: executionResult({ input, state: "timed_out", startedAt, logRef }), artifacts: [] };
+      return { result: executionResult({ input, state: "timed_out", startedAt, logRef, sideEffects }), artifacts: [] };
     }
     if (observed.terminal === "failed") {
       return {
@@ -249,6 +279,7 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
           state: "failed",
           startedAt,
           logRef,
+          sideEffects,
           runtimeObservationRef: observed.failurePayload === undefined
             ? undefined
             : JSON.stringify(observed.failurePayload)
@@ -257,7 +288,7 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
       };
     }
     if (observed.terminal !== "completed") {
-      return { result: executionResult({ input, state: "lost", startedAt, logRef }), artifacts: [] };
+      return { result: executionResult({ input, state: "lost", startedAt, logRef, sideEffects }), artifacts: [] };
     }
 
     const committed = this.commitDeclaredOutputs(input, workspaceRoot, manifestPath);
@@ -267,6 +298,7 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
         state: "succeeded",
         startedAt,
         logRef,
+        sideEffects,
         producedFiles: committed.map(artifact => ({
           path: artifact.uri,
           logicalName: artifact.logicalName,
@@ -447,6 +479,48 @@ function parseManifest(raw: string): OutputManifest {
   return { outputs };
 }
 
+function sideEffectsFromEvents(events: HostAgentEvent[]): SideEffectRecord[] {
+  const records: SideEffectRecord[] = [];
+  for (const event of events) {
+    if (event.type !== "tool" || !event.payload || typeof event.payload !== "object") continue;
+    const payload = event.payload as Record<string, unknown>;
+    if (payload.sessionUpdate !== "mission_side_effect_receipt" || !Array.isArray(payload.sideEffects)) continue;
+    for (const candidate of payload.sideEffects) {
+      const record = parseSideEffectRecord(candidate);
+      if (record) records.push(record);
+    }
+  }
+  return records;
+}
+
+function parseSideEffectRecord(value: unknown): SideEffectRecord | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const input = value as Record<string, unknown>;
+  if (typeof input.type !== "string" || !SIDE_EFFECT_TYPES.has(input.type as SideEffectRecord["type"])) return undefined;
+  if (typeof input.target !== "string" || typeof input.reversible !== "boolean" || typeof input.result !== "string") {
+    return undefined;
+  }
+  if (input.intentId !== undefined && typeof input.intentId !== "string") return undefined;
+  if (input.operationKey !== undefined && typeof input.operationKey !== "string") return undefined;
+  if (input.effectClass !== undefined && (
+    typeof input.effectClass !== "string" || !SIDE_EFFECT_CLASSES.has(input.effectClass as NonNullable<SideEffectRecord["effectClass"]>)
+  )) return undefined;
+  if (input.status !== undefined && (
+    typeof input.status !== "string" || !SIDE_EFFECT_STATUSES.has(input.status as NonNullable<SideEffectRecord["status"]>)
+  )) return undefined;
+
+  return {
+    type: input.type as SideEffectRecord["type"],
+    target: input.target,
+    reversible: input.reversible,
+    result: input.result,
+    ...(typeof input.intentId === "string" ? { intentId: input.intentId } : {}),
+    ...(typeof input.operationKey === "string" ? { operationKey: input.operationKey } : {}),
+    ...(typeof input.effectClass === "string" ? { effectClass: input.effectClass as NonNullable<SideEffectRecord["effectClass"]> } : {}),
+    ...(typeof input.status === "string" ? { status: input.status as NonNullable<SideEffectRecord["status"]> } : {})
+  };
+}
+
 function resolveWorkspaceFile(workspaceRoot: string, declaredPath: string): string {
   if (isAbsolute(declaredPath)) throw new Error(`Host output path must be relative: ${declaredPath}`);
 
@@ -483,6 +557,7 @@ function executionResult(input: {
   producedFiles?: ExecutionResult["producedFiles"];
   committedArtifactRefs?: string[];
   runtimeObservationRef?: string;
+  sideEffects?: SideEffectRecord[];
 }): ExecutionResult {
   return {
     executionId: input.input.executionId,
@@ -491,7 +566,7 @@ function executionResult(input: {
     committedArtifactRefs: input.committedArtifactRefs ?? [],
     ...(input.runtimeObservationRef ? { runtimeObservationRef: input.runtimeObservationRef } : {}),
     logRef: input.logRef,
-    sideEffects: [],
+    sideEffects: input.sideEffects ?? [],
     startedAt: input.startedAt,
     endedAt: new Date().toISOString()
   };
