@@ -1,0 +1,28 @@
+name: Apply invocation audit batch
+on:
+  push:
+    branches: [build/invocation-audit]
+    paths:
+      - scripts/apply-invocation-audit.sh
+      - .github/workflows/apply-invocation-audit.yml
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/invocation-audit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply and verify
+        run: bash scripts/apply-invocation-audit.sh
+      - name: Commit batch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src tests
+          git commit -m 'build: apply invocation audit batch'
+          git push origin HEAD:build/invocation-audit
