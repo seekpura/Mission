@@ -49,27 +49,36 @@ async function prepare(root: string, host: FakeHostAdapter, missionId: string) {
   return { runtime, requirement, workspace, work, envelope };
 }
 
-test("artifact assurance refuses to promote visual requirements when perceptual verifier is unavailable", async () => {
+async function assertDeferred(runtime: MissionRuntime, missionId: string, requirementId: string, result: Awaited<ReturnType<ArtifactAssurancePipeline["process"]>>) {
+  assert.equal(result.ok, true, "production succeeded even though verification is deferred");
+  assert.equal(result.status, "verification_blocked");
+  assert.equal((await runtime.projections.listRequirements(missionId)).find(item => item.id === requirementId)?.status, "unverified");
+  assert.deepEqual((await runtime.controller.state(missionId)).finalArtifactRefs, []);
+  const needs = await runtime.projections.listCapabilityNeeds(missionId);
+  assert.ok(needs.some(need => need.purpose === "verification" && need.id === "verification-inspection-presentation-page-render"));
+  const work = await runtime.projections.listWorkItems(missionId);
+  assert.ok(work.some(item => item.id === "verify-deck-v1" && item.purpose === "verification"));
+}
+
+test("artifact assurance defers promotion and creates verification capability work when perceptual tooling is unavailable", async () => {
   const root = mkdtempSync(join(tmpdir(), "mission-no-review-")); const host = new FakeHostAdapter();
   const { runtime, requirement, workspace, work, envelope } = await prepare(root, host, "m-no-review");
   const verifier = new ProfiledVerifier(new VerificationPlanner(), new VerifierRegistry([new DeterministicFileCheckExecutor()]));
   const pipeline = new ArtifactAssurancePipeline({ controller: runtime.controller, projections: runtime.projections, artifacts: runtime.artifacts, verifier });
   const result = await pipeline.process(work, "attempt-v", workspace.root, envelope);
-  assert.equal(result.ok, false);
-  assert.equal((await runtime.projections.listRequirements("m-no-review")).find(item => item.id === requirement.id)?.status, "unverified");
-  assert.ok((await runtime.projections.listGaps("m-no-review")).some(gap => gap.category === "quality"));
+  await assertDeferred(runtime, "m-no-review", requirement.id, result);
+  assert.equal((await runtime.projections.listGaps("m-no-review")).filter(gap => gap.category === "quality").length, 0, "missing QA capability is not a product quality failure");
   runtime.close();
 });
 
-test("presentation reviewer cannot pass perceptual verification without derived renders", async () => {
+test("presentation reviewer is not invoked without derived renders; verification is deferred instead", async () => {
   const root = mkdtempSync(join(tmpdir(), "mission-review-no-render-"));
   const host = new FakeHostAdapter([], { agentResponder: () => ({ status: "pass", detail: "I would pass anything", confidence: 1 }) });
   const { runtime, requirement, workspace, work, envelope } = await prepare(root, host, "m-review-no-render");
   const verifier = new ProfiledVerifier(new VerificationPlanner(), new VerifierRegistry([new DeterministicFileCheckExecutor(), new HostReviewCheckExecutor(host)]));
   const pipeline = new ArtifactAssurancePipeline({ controller: runtime.controller, projections: runtime.projections, artifacts: runtime.artifacts, verifier });
   const result = await pipeline.process(work, "attempt-v", workspace.root, envelope);
-  assert.equal(result.ok, false);
-  assert.equal((await runtime.projections.listRequirements("m-review-no-render")).find(item => item.id === requirement.id)?.status, "unverified");
+  await assertDeferred(runtime, "m-review-no-render", requirement.id, result);
   assert.equal(host.agentRequests.length, 0, "reviewer must not be asked to infer presentation appearance from a PPTX path");
   runtime.close();
 });
@@ -97,6 +106,7 @@ test("independent host reviewer can satisfy visual requirement only after a deri
   const pipeline = new ArtifactAssurancePipeline({ controller: runtime.controller, projections: runtime.projections, artifacts: runtime.artifacts, verifier, inspectionService });
   const result = await pipeline.process(work, "attempt-v", workspace.root, envelope);
   assert.equal(result.ok, true);
+  assert.equal(result.status, "verified");
   const projected = (await runtime.projections.listRequirements("m-review-pass")).find(item => item.id === requirement.id);
   assert.equal(projected?.status, "satisfied");
   assert.ok((projected?.evidenceRefs.length ?? 0) > 0);
