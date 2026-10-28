@@ -1,3 +1,4 @@
+import type { Artifact, ArtifactStatus } from "../domain/artifact.ts";
 import type { MissionEvent } from "../domain/event.ts";
 import type { WorkItem, WorkStatus } from "../domain/work-item.ts";
 import type { Gap } from "../domain/verification.ts";
@@ -6,12 +7,14 @@ export interface MissionJournalView {
   missionId: string;
   userGoal: string;
   workItems: Map<string, WorkItem>;
+  artifacts: Map<string, Artifact>;
   gaps: Map<string, Gap>;
   decisionIds: Set<string>;
 }
 
 export function projectMissionJournal(missionId: string, events: MissionEvent[]): MissionJournalView {
   const workItems = new Map<string, WorkItem>();
+  const artifacts = new Map<string, Artifact>();
   const gaps = new Map<string, Gap>();
   const decisionIds = new Set<string>();
   let userGoal = "";
@@ -56,6 +59,27 @@ export function projectMissionJournal(missionId: string, events: MissionEvent[])
       case "work.invalidated":
         updateWorkStatus(workItems, event.payload, "invalidated", event.createdAt);
         break;
+      case "artifact.created": {
+        const payload = event.payload as { artifact?: Artifact } & Partial<Artifact>;
+        const artifact = payload.artifact ?? asArtifact(payload, missionId, event.createdAt);
+        if (artifact) artifacts.set(artifactRef(artifact), cloneArtifact(artifact));
+        break;
+      }
+      case "artifact.validated": {
+        const payload = event.payload as { artifactRef?: string; final?: boolean };
+        if (payload.artifactRef) updateArtifactStatus(artifacts, payload.artifactRef, payload.final ? "final" : "verified");
+        break;
+      }
+      case "artifact.invalidated": {
+        const payload = event.payload as { artifactRef?: string };
+        if (payload.artifactRef) updateArtifactStatus(artifacts, payload.artifactRef, "invalid");
+        break;
+      }
+      case "artifact.superseded": {
+        const payload = event.payload as { artifactRef?: string };
+        if (payload.artifactRef) updateArtifactStatus(artifacts, payload.artifactRef, "superseded");
+        break;
+      }
       case "gap.opened": {
         const payload = event.payload as Partial<Gap> & {
           id: string;
@@ -91,7 +115,7 @@ export function projectMissionJournal(missionId: string, events: MissionEvent[])
     }
   }
 
-  return { missionId, userGoal, workItems, gaps, decisionIds };
+  return { missionId, userGoal, workItems, artifacts, gaps, decisionIds };
 }
 
 export function openGaps(view: MissionJournalView): Gap[] {
@@ -141,6 +165,12 @@ function updateGapStatus(
   gaps.set(id, { ...current, status, resolvedAt: at });
 }
 
+function updateArtifactStatus(artifacts: Map<string, Artifact>, ref: string, status: ArtifactStatus): void {
+  const current = artifacts.get(ref);
+  if (!current) return;
+  artifacts.set(ref, { ...current, status });
+}
+
 function asWorkItem(payload: Partial<WorkItem>, missionId: string, at: string): WorkItem | undefined {
   if (!payload.id || !payload.objective || !payload.purpose) return undefined;
   return {
@@ -166,6 +196,29 @@ function asWorkItem(payload: Partial<WorkItem>, missionId: string, at: string): 
   };
 }
 
+function asArtifact(payload: Partial<Artifact>, missionId: string, at: string): Artifact | undefined {
+  if (!payload.id || !payload.logicalName || !payload.type || payload.version === undefined || !payload.uri || !payload.contentHash || !payload.producedByAttemptId) return undefined;
+  return {
+    id: payload.id,
+    missionId: payload.missionId ?? missionId,
+    logicalName: payload.logicalName,
+    type: payload.type,
+    version: payload.version,
+    status: payload.status ?? "candidate",
+    uri: payload.uri,
+    contentHash: payload.contentHash,
+    ...(payload.mimeType ? { mimeType: payload.mimeType } : {}),
+    ...(payload.sizeBytes === undefined ? {} : { sizeBytes: payload.sizeBytes }),
+    producedByAttemptId: payload.producedByAttemptId,
+    sourceArtifactRefs: [...(payload.sourceArtifactRefs ?? [])],
+    createdAt: payload.createdAt ?? at
+  };
+}
+
+function artifactRef(artifact: Artifact): string {
+  return `${artifact.id}@${artifact.version}`;
+}
+
 function cloneWork(work: WorkItem): WorkItem {
   return {
     ...work,
@@ -176,4 +229,8 @@ function cloneWork(work: WorkItem): WorkItem {
     localAcceptanceCriteria: work.localAcceptanceCriteria.map(criterion => ({ ...criterion })),
     capabilityNeedRefs: [...work.capabilityNeedRefs]
   };
+}
+
+function cloneArtifact(artifact: Artifact): Artifact {
+  return { ...artifact, sourceArtifactRefs: [...artifact.sourceArtifactRefs] };
 }

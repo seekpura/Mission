@@ -143,6 +143,12 @@ export function projectMissionState(missionId: string, events: MissionEvent[]): 
         if (p.final) addUnique(s.finalArtifactRefs, p.artifactRef);
         break;
       }
+      case "artifact.invalidated":
+      case "artifact.superseded": {
+        const ref = (event.payload as { artifactRef?: string }).artifactRef;
+        if (ref) s.finalArtifactRefs = remove(s.finalArtifactRefs, ref);
+        break;
+      }
       case "mission.completed":
         s.status = "completed";
         break;
