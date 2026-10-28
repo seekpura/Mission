@@ -27,6 +27,15 @@ export interface WorkItem {
   expectedOutputs: ArtifactExpectation[];
   localAcceptanceCriteria: LocalAcceptanceCriterion[];
   capabilityNeedRefs: string[];
+  /**
+   * Explicit planner-authored replacement relation. The controller validates
+   * every ref against durable Mission Work before admission and emits an
+   * auditable `work.updated` transition to `superseded` only after the
+   * replacement Work itself is admitted. This prevents completion from being
+   * permanently blocked by obsolete Work while avoiding heuristic retirement
+   * based on gap-id naming conventions.
+   */
+  supersedesWorkItemRefs?: string[];
   assignedExecutorId?: string;
   priority: number;
   graphRevision: number;
