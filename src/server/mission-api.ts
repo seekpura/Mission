@@ -122,6 +122,9 @@ export function createMissionApi(
             return json(res, 400, { error: "capability_cache_revocation_reason_required" });
           }
           const cacheKey = parts[4];
+          if (!/^[0-9a-f]{64}$/.test(cacheKey)) {
+            return json(res, 400, { error: "invalid_capability_cache_key" });
+          }
           await runtime.capabilityLifecycle.revokeTrustedCache({
             missionId,
             cacheKey,
