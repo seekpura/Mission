@@ -5,6 +5,11 @@ import type { GapAssessment, VerificationCheckResult, VerificationResult } from 
 import type { EventStore } from "../core/events/event-store.ts";
 import { projectMissionJournal } from "../core/mission/journal-view.ts";
 import type { MissionReadModelReader } from "../core/mission/mission-reader.ts";
+import {
+  createDefaultVerificationProfileRegistry,
+  type VerificationProfile,
+  type VerificationProfileRegistry
+} from "../core/verification/verification-profile.ts";
 import type { VerificationContext, Verifier } from "../core/verification/verifier.ts";
 import type { HostJsonTransport } from "./host-agent-json-transport.ts";
 
@@ -12,6 +17,7 @@ export interface HostArtifactVerifierOptions {
   transport: HostJsonTransport;
   events: EventStore;
   reader?: MissionReadModelReader;
+  profiles?: VerificationProfileRegistry;
   maxInlineBytes?: number;
 }
 
@@ -19,24 +25,35 @@ const OVERALL = new Set<VerificationResult["overall"]>(["pass", "pass_with_warni
 const CHECK_STATUS = new Set<VerificationCheckResult["status"]>(["pass", "fail", "warning", "inconclusive"]);
 const GAP_STATUS = new Set<GapAssessment["status"]>(["resolved", "still_open", "inconclusive"]);
 
+interface NormalizedReview {
+  overall: VerificationResult["overall"];
+  checkResults: VerificationCheckResult[];
+  evidenceRefs: string[];
+  gapAssessments: GapAssessment[];
+}
+
 export class HostArtifactVerifier implements Verifier {
   readonly id = "host-artifact-verifier";
   private readonly transport: HostJsonTransport;
   private readonly events: EventStore;
   private readonly reader?: MissionReadModelReader;
+  private readonly profiles: VerificationProfileRegistry;
   private readonly maxInlineBytes: number;
 
   constructor(options: HostArtifactVerifierOptions) {
     this.transport = options.transport;
     this.events = options.events;
     this.reader = options.reader;
+    this.profiles = options.profiles ?? createDefaultVerificationProfileRegistry();
     this.maxInlineBytes = Math.max(1_024, options.maxInlineBytes ?? 64 * 1_024);
   }
 
   async verify(artifact: Artifact, context?: VerificationContext): Promise<VerificationResult> {
+    const selection = this.profiles.select(artifact);
+    const profile = selection.profile;
     const structural = structuralChecks(artifact);
     if (!structural.passed) {
-      return resultBase(artifact, this.id, {
+      return resultBase(artifact, this.id, "deterministic-file-integrity-v1", {
         level: "structural",
         overall: "fail",
         checkResults: structural.checkResults,
@@ -45,7 +62,7 @@ export class HostArtifactVerifier implements Verifier {
       });
     }
     if (!context) {
-      return resultBase(artifact, this.id, {
+      return resultBase(artifact, this.id, profile.id, {
         level: "quality",
         overall: "inconclusive",
         checkResults: [
@@ -53,9 +70,15 @@ export class HostArtifactVerifier implements Verifier {
           {
             id: "mission-context",
             status: "inconclusive",
-            detail: "Mission-level verifier context was not supplied.",
+            detail: `Mission-level verifier context was not supplied for profile ${profile.id}.`,
             evidenceRefs: []
-          }
+          },
+          ...profile.checks.map(check => ({
+            id: check.id,
+            status: "inconclusive" as const,
+            detail: "Required profile check could not run without Mission-level context.",
+            evidenceRefs: []
+          }))
         ],
         evidenceRefs: structural.evidenceRefs,
         gapAssessments: []
@@ -65,18 +88,21 @@ export class HostArtifactVerifier implements Verifier {
     const journal = this.reader
       ? await this.reader.journal(artifact.missionId)
       : projectMissionJournal(artifact.missionId, await this.events.list(artifact.missionId));
-    const inline = inlineArtifact(artifact, this.maxInlineBytes);
+    const profileInlineLimit = Math.min(this.maxInlineBytes, profile.maxInlineBytes ?? this.maxInlineBytes);
+    const inline = inlineArtifact(artifact, profileInlineLimit);
     const raw = await this.transport.request({
       missionId: artifact.missionId,
-      operationId: `verify-${safeSegment(artifact.id)}-${artifact.version}-${context.state.revision}`,
-      instruction: [
-        "Independently verify the candidate artifact against the Mission goal, the WorkItem objective/local acceptance criteria, and the supplied open gaps.",
-        "Do not trust producer completion claims. Use the artifact content/evidence supplied here; if more evidence is needed, return inconclusive or fail rather than guessing.",
-        "Return JSON with overall:pass|pass_with_warnings|fail|inconclusive, checkResults:[{id,status:pass|fail|warning|inconclusive,detail?,evidenceRefs[]}], evidenceRefs:[], gapAssessments:[{gapId,status:resolved|still_open|inconclusive,evidenceRefs[],confidence,detail?}].",
-        "Assess only gaps explicitly supplied in input.gaps. A resolved assessment must cite concrete evidenceRefs.",
-        "A pass result must not contain failed or inconclusive checks."
-      ].join(" "),
+      operationId: `verify-${safeSegment(profile.kind)}-${safeSegment(artifact.id)}-${artifact.version}-${context.state.revision}`,
+      instruction: buildProfileInstruction(profile),
       input: {
+        verificationProfile: {
+          id: profile.id,
+          kind: profile.kind,
+          title: profile.title,
+          selectionReason: selection.reason,
+          checks: profile.checks,
+          evidenceRequirements: profile.evidenceRequirements
+        },
         userGoal: journal.userGoal,
         artifact: {
           id: artifact.id,
@@ -112,13 +138,14 @@ export class HostArtifactVerifier implements Verifier {
       }
     });
 
-    const reviewed = normalizeReview(raw, new Set(context.gaps.map(gap => gap.id)));
+    const normalized = normalizeReview(raw, new Set(context.gaps.map(gap => gap.id)));
+    const reviewed = enforceProfileCoverage(normalized, profile);
     if ((reviewed.overall === "pass" || reviewed.overall === "pass_with_warnings") &&
         reviewed.checkResults.some(check => check.status === "fail" || check.status === "inconclusive")) {
       throw new Error("Host verifier returned a passing overall status with failed/inconclusive checks");
     }
 
-    return resultBase(artifact, this.id, {
+    return resultBase(artifact, this.id, profile.id, {
       level: "mission",
       overall: reviewed.overall,
       checkResults: [...structural.checkResults, ...reviewed.checkResults],
@@ -126,6 +153,25 @@ export class HostArtifactVerifier implements Verifier {
       gapAssessments: reviewed.gapAssessments
     });
   }
+}
+
+function buildProfileInstruction(profile: VerificationProfile): string {
+  const checks = profile.checks
+    .map(check => `${check.id}: ${check.objective} Evidence expectation: ${check.evidenceExpectation}`)
+    .join(" ");
+  const evidence = profile.evidenceRequirements.join(" ");
+  return [
+    "Independently verify the candidate artifact against the Mission goal, the WorkItem objective/local acceptance criteria, and the supplied open gaps.",
+    `Use verification profile ${profile.id} (${profile.title}).`,
+    ...profile.instructions,
+    `Required profile checks: ${checks}`,
+    `Profile evidence requirements: ${evidence}`,
+    "Do not trust producer completion claims. Use only supplied artifact/evidence plus inspection that is explicitly available to the verifier; never invent runtime, render, playback, test, source, or citation evidence.",
+    "Every required profile check id must appear exactly once in checkResults. When required evidence is unavailable, mark that check inconclusive instead of omitting it or guessing.",
+    "Return JSON with overall:pass|pass_with_warnings|fail|inconclusive, checkResults:[{id,status:pass|fail|warning|inconclusive,detail?,evidenceRefs[]}], evidenceRefs:[], gapAssessments:[{gapId,status:resolved|still_open|inconclusive,evidenceRefs[],confidence,detail?}].",
+    "Assess only gaps explicitly supplied in input.gaps. A resolved assessment must cite concrete evidenceRefs.",
+    "A pass result must not contain failed or inconclusive checks."
+  ].join(" ");
 }
 
 function structuralChecks(artifact: Artifact): {
@@ -172,12 +218,7 @@ function inlineArtifact(artifact: Artifact, maxInlineBytes: number): string | un
   return text;
 }
 
-function normalizeReview(raw: unknown, allowedGapIds: Set<string>): {
-  overall: VerificationResult["overall"];
-  checkResults: VerificationCheckResult[];
-  evidenceRefs: string[];
-  gapAssessments: GapAssessment[];
-} {
+function normalizeReview(raw: unknown, allowedGapIds: Set<string>): NormalizedReview {
   const object = objectValue(raw, "verification review");
   const overall = nonEmptyString(object.overall, "verification review.overall") as VerificationResult["overall"];
   if (!OVERALL.has(overall)) throw new Error(`Unsupported verification overall status: ${overall}`);
@@ -218,9 +259,40 @@ function normalizeReview(raw: unknown, allowedGapIds: Set<string>): {
   };
 }
 
+function enforceProfileCoverage(review: NormalizedReview, profile: VerificationProfile): NormalizedReview {
+  const requiredIds = new Set(profile.checks.map(check => check.id));
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const check of review.checkResults) {
+    if (!requiredIds.has(check.id)) continue;
+    if (seen.has(check.id)) duplicates.add(check.id);
+    seen.add(check.id);
+  }
+  if (duplicates.size > 0) {
+    throw new Error(`Host verifier duplicated required profile checks: ${[...duplicates].sort().join(", ")}`);
+  }
+
+  const missing = profile.checks.filter(check => !seen.has(check.id));
+  if (missing.length === 0) return review;
+  return {
+    ...review,
+    overall: "inconclusive",
+    checkResults: [
+      ...review.checkResults,
+      ...missing.map(check => ({
+        id: check.id,
+        status: "inconclusive" as const,
+        detail: `Verifier omitted required profile check. Expected evidence: ${check.evidenceExpectation}`,
+        evidenceRefs: []
+      }))
+    ]
+  };
+}
+
 function resultBase(
   artifact: Artifact,
   verifierId: string,
+  verificationProfileId: string,
   input: {
     level: VerificationResult["level"];
     overall: VerificationResult["overall"];
@@ -233,7 +305,7 @@ function resultBase(
     id: randomUUID(),
     missionId: artifact.missionId,
     artifactRef: `${artifact.id}@${artifact.version}`,
-    verificationProfileId: input.level === "mission" ? "host-mission-review-v1" : "deterministic-file-integrity-v1",
+    verificationProfileId,
     verifierId,
     level: input.level,
     overall: input.overall,
