@@ -39,7 +39,10 @@ class MemoryEvents implements EventStore {
 }
 
 class CallbackTransport implements HostJsonTransport {
-  constructor(private readonly callback: (request: HostJsonRequest) => unknown) {}
+  private readonly callback: (request: HostJsonRequest) => unknown;
+  constructor(callback: (request: HostJsonRequest) => unknown) {
+    this.callback = callback;
+  }
   async request(input: HostJsonRequest): Promise<unknown> { return this.callback(input); }
 }
 
