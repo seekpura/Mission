@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { ContextPacket } from "../domain/context.ts";
-import type { MissionState } from "../domain/mission.ts";
+import type { MissionState, MissionSteeringMessage } from "../domain/mission.ts";
 import type { WorkItem } from "../domain/work-item.ts";
 
 export interface ContextCompilerInput {
   state: MissionState;
   workItem: WorkItem;
+  steeringMessages?: MissionSteeringMessage[];
   requirementRefs?: string[];
   constraintRefs?: string[];
   truthRefs?: string[];
@@ -24,6 +25,9 @@ export class ContextCompiler {
       missionId: w.missionId,
       workItemId: w.id,
       objective: w.objective,
+      ...(input.steeringMessages && input.steeringMessages.length > 0
+        ? { steeringMessages: input.steeringMessages.map(message => ({ ...message })) }
+        : {}),
       requirementRefs: unique([...(input.requirementRefs ?? []), ...w.requirementRefs]),
       constraintRefs: unique(input.constraintRefs ?? []),
       truthRefs: unique(input.truthRefs ?? []),
