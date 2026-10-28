@@ -8,7 +8,7 @@ import type {
   WorkExecutionOutcome,
   WorkRecoveryInput
 } from "../../core/execution/work-execution-driver.ts";
-import type { HostAdapter, HostAgentEvent, HostAgentHandle } from "../../hosts/deepseek/host-adapter.ts";
+import type { HostAdapter, HostAgentEvent, HostAgentHandle } from "../../hosts/host-adapter.ts";
 import { FileArtifactStore } from "../artifacts/artifact-store.ts";
 import { WorkspaceManager } from "../workspace/workspace-manager.ts";
 
