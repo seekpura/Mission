@@ -31,7 +31,12 @@ export interface CapabilityEnsureResult {
   reason: string;
 }
 
-export class CapabilityCoordinator {
+export interface CapabilityRuntime {
+  restoreMissionCapabilities(missionId: string, capabilities: Iterable<CapabilityDescriptor>): void;
+  ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult>;
+}
+
+export class CapabilityCoordinator implements CapabilityRuntime {
   private readonly hostCapabilities: HostCapabilitySource;
   private readonly overlay: MissionCapabilityOverlay;
   private readonly discovery: CapabilityCandidateDiscovery;
