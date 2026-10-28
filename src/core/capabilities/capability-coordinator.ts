@@ -55,6 +55,13 @@ export class CapabilityCoordinator {
     this.maxCandidates = Math.max(1, options.maxCandidates ?? 3);
   }
 
+  restoreMissionCapabilities(missionId: string, capabilities: Iterable<CapabilityDescriptor>): void {
+    for (const capability of capabilities) {
+      if (capability.hostNative || !capability.available) continue;
+      this.overlay.activate(missionId, capability);
+    }
+  }
+
   async ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult> {
     const existing = await this.resolveExisting(need);
     if (existing.status === "resolved") {
