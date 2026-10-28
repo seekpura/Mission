@@ -22,6 +22,10 @@ acp
   .onRequest(acp.methods.agent.session.prompt, async ({ params, client }) => {
     const session = sessions.get(params.sessionId);
     if (!session) throw new Error(`unknown session ${params.sessionId}`);
+    const promptText = params.prompt
+      .filter(block => block.type === "text")
+      .map(block => block.text)
+      .join("\n");
 
     await client.notify(acp.methods.client.session.update, {
       sessionId: params.sessionId,
@@ -30,6 +34,11 @@ acp
         content: { type: "text", text: "fake agent started" }
       }
     });
+
+    if (promptText.includes('"waitForCancel": true')) {
+      while (!session.cancelled) await new Promise(resolve => setTimeout(resolve, 10));
+      return { stopReason: "cancelled" };
+    }
 
     await client.notify(acp.methods.client.session.update, {
       sessionId: params.sessionId,
