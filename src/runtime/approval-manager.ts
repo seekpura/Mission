@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ApprovalRequest, ApprovalResult } from "../hosts/deepseek/host-adapter.ts";
+import type { ApprovalRequest, ApprovalResult } from "../hosts/host-adapter.ts";
 import type { AcquisitionApprovalBroker, AcquisitionApprovalRequest } from "../core/capabilities/acquisition-transaction.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 import type { SideEffectApprovalRequest } from "./side-effect-manager.ts";
