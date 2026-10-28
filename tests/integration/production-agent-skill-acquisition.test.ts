@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -28,15 +28,23 @@ import type {
   HostDescriptor
 } from "../../src/hosts/deepseek/host-adapter.ts";
 import { RuntimeApprovalManager } from "../../src/runtime/approval-manager.ts";
-import { MissionAgentSkillContextResolver } from "../../src/runtime/agent-skill-runtime.ts";
-import { CapabilityContextHostAdapter } from "../../src/runtime/capability-context-host-adapter.ts";
+import { MissionAgentSkillWorkspaceProjector } from "../../src/runtime/agent-skill-runtime.ts";
+import { CapabilityWorkspaceHostAdapter } from "../../src/runtime/capability-context-host-adapter.ts";
 import { GitHubCapabilityClient } from "../../src/runtime/github-capability-client.ts";
 import { createProductionAgentSkillCapabilityRuntime } from "../../src/runtime/production-capability-runtime.ts";
 
 const COMMIT_SHA = "a".repeat(40);
 const TREE_SHA = "b".repeat(40);
 const BLOB_SHA = "c".repeat(40);
-const SKILL = "# Verified Skill\nWhen asked for the deliverable, verify source truth first and cite the evidence used.\n";
+const SKILL = [
+  "---",
+  "name: verified-source-truth",
+  "description: Verify source truth and cite concrete evidence before finalizing deliverables.",
+  "---",
+  "# Verified Source Truth",
+  "When asked for the deliverable, verify source truth first and cite the evidence used.",
+  ""
+].join("\n");
 
 class RecordingContainerSmoke implements IsolatedSmokeExecutor {
   readonly id = "recording-container-smoke";
@@ -157,7 +165,7 @@ async function pendingSkillApproval(approvals: RuntimeApprovalManager, missionId
   return pending[0]!;
 }
 
-test("production Agent Skill acquisition requires approval, activates mission-locally and injects only the authorized skill into Host context", async () => {
+test("production Agent Skill acquisition requires approval and projects only the authorized skill into the DSH workspace catalog", async () => {
   const root = await mkdtemp(join(tmpdir(), "mission-production-skill-"));
   const database = new MissionDatabase(":memory:");
   database.migrate(join(process.cwd(), "src", "persistence", "sqlite", "schema.sql"));
@@ -196,6 +204,7 @@ test("production Agent Skill acquisition requires approval, activates mission-lo
     const capability = ensured.capability!;
     assert.equal(capability.kind, "skill");
     assert.equal(capability.scope, "mission");
+    assert.equal(capability.name, "verified-source-truth");
     assert.equal(capability.revision, COMMIT_SHA);
     assert.ok(capability.invocationRef);
     assert.equal(readFileSync(join(capability.invocationRef!, "SKILL.md"), "utf8"), SKILL);
@@ -206,39 +215,44 @@ test("production Agent Skill acquisition requires approval, activates mission-lo
     const decidedIndex = acquisitionEvents.findIndex(event => event.type === "approval.decided");
     assert.ok(requestedIndex >= 0 && decidedIndex > requestedIndex);
 
-    const host = new CapabilityContextHostAdapter(
+    const host = new CapabilityWorkspaceHostAdapter(
       baseHost,
-      new MissionAgentSkillContextResolver(overlay)
+      new MissionAgentSkillWorkspaceProjector(overlay)
     );
+    const allowedWorkspace = join(root, "attempt-allowed");
+    await mkdir(allowedWorkspace);
     await host.createAgent({
       missionId,
       workItemId: "work-use-skill",
       context: { objective: "produce with acquired skill" },
       allowedCapabilityRefs: [capability.id],
-      workspaceRoot: root
+      workspaceRoot: allowedWorkspace
     });
 
-    const delivered = (baseHost.lastCreate?.context as {
-      missionCapabilityContext?: Array<{
-        id: string;
-        revision: string;
-        contentHash: string;
-        instructions: string;
-      }>;
-    }).missionCapabilityContext;
-    assert.equal(delivered?.length, 1);
-    assert.equal(delivered?.[0]?.id, capability.id);
-    assert.equal(delivered?.[0]?.revision, COMMIT_SHA);
-    assert.match(delivered?.[0]?.contentHash ?? "", /^sha256:[0-9a-f]{64}$/);
-    assert.equal(delivered?.[0]?.instructions, SKILL);
+    const projectedSkill = join(allowedWorkspace, ".agents", "skills", "verified-source-truth", "SKILL.md");
+    assert.equal(existsSync(projectedSkill), true);
+    assert.equal(readFileSync(projectedSkill, "utf8"), SKILL);
+    const projection = JSON.parse(readFileSync(join(allowedWorkspace, ".mission-skill-projection.json"), "utf8")) as {
+      capabilities: Array<{ capabilityId: string; skillName: string; revision?: string; contentHash: string; workspacePath: string }>;
+    };
+    assert.deepEqual(projection.capabilities.map(item => item.capabilityId), [capability.id]);
+    assert.equal(projection.capabilities[0]?.skillName, "verified-source-truth");
+    assert.equal(projection.capabilities[0]?.revision, COMMIT_SHA);
+    assert.match(projection.capabilities[0]?.contentHash ?? "", /^sha256:[0-9a-f]{64}$/);
+    assert.equal(projection.capabilities[0]?.workspacePath, ".agents/skills/verified-source-truth/SKILL.md");
+    assert.deepEqual(baseHost.lastCreate?.allowedCapabilityRefs, [capability.id]);
+    assert.equal((baseHost.lastCreate?.context as { missionCapabilityContext?: unknown }).missionCapabilityContext, undefined);
 
+    const deniedWorkspace = join(root, "attempt-without-skill");
+    await mkdir(deniedWorkspace);
     await host.createAgent({
       missionId,
       workItemId: "work-without-skill",
       context: { objective: "do not receive unreferenced skill" },
       allowedCapabilityRefs: [],
-      workspaceRoot: root
+      workspaceRoot: deniedWorkspace
     });
+    assert.deepEqual(readdirSync(join(deniedWorkspace, ".agents", "skills")), []);
     assert.equal((baseHost.lastCreate?.context as { missionCapabilityContext?: unknown }).missionCapabilityContext, undefined);
   } finally {
     approvals.dispose();
