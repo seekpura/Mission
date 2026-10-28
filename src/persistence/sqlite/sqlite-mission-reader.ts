@@ -108,18 +108,27 @@ export class SqliteMissionReader implements MissionReadModelReader {
   }
 
   readCapabilityTrust(missionId: string): CapabilityTrustRecord[] {
-    return this.rows("rm_capability_trust", missionId)
+    return this.ledgerRows("rm_capability_trust", missionId)
       .map(row => JSON.parse(row.data_json) as CapabilityTrustRecord);
   }
 
   readCapabilityCosts(missionId: string): CapabilityCostRecord[] {
-    return this.rows("rm_capability_cost", missionId)
+    return this.ledgerRows("rm_capability_cost", missionId)
       .map(row => JSON.parse(row.data_json) as CapabilityCostRecord);
   }
 
   readCapabilityAudit(missionId: string): CapabilityAuditRecord[] {
-    return this.rows("rm_capability_audit", missionId)
+    return this.ledgerRows("rm_capability_audit", missionId)
       .map(row => JSON.parse(row.data_json) as CapabilityAuditRecord);
+  }
+
+  private ledgerRows(
+    table: "rm_capability_trust" | "rm_capability_cost" | "rm_capability_audit",
+    missionId: string
+  ): Array<{ data_json: string }> {
+    return this.database.db.prepare(
+      `SELECT data_json FROM ${table} WHERE mission_id = ? ORDER BY recorded_at, id`
+    ).all(missionId) as Array<{ data_json: string }>;
   }
 
   private rows(
@@ -132,10 +141,7 @@ export class SqliteMissionReader implements MissionReadModelReader {
       | "rm_decisions"
       | "rm_approvals"
       | "rm_capability_needs"
-      | "rm_capabilities"
-      | "rm_capability_trust"
-      | "rm_capability_cost"
-      | "rm_capability_audit",
+      | "rm_capabilities",
     missionId: string
   ): Array<{ data_json: string }> {
     return this.database.db.prepare(
