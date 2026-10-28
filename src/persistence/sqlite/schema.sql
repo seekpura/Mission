@@ -327,4 +327,3 @@ CREATE TABLE IF NOT EXISTS capability_trust (
   updated_at TEXT NOT NULL,
   PRIMARY KEY(mission_id, capability_id, purpose)
 );
-
