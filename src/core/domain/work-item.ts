@@ -29,10 +29,11 @@ export interface WorkItem {
   capabilityNeedRefs: string[];
   /**
    * Explicit planner-authored replacement relation. The controller validates
-   * every ref against durable Mission Work before admission and emits a
-   * `work.superseded` event only after the replacement Work itself is admitted.
-   * This prevents completion from being permanently blocked by obsolete Work
-   * while avoiding heuristic retirement based on gap-id naming conventions.
+   * every ref against durable Mission Work before admission and emits an
+   * auditable `work.updated` transition to `superseded` only after the
+   * replacement Work itself is admitted. This prevents completion from being
+   * permanently blocked by obsolete Work while avoiding heuristic retirement
+   * based on gap-id naming conventions.
    */
   supersedesWorkItemRefs?: string[];
   assignedExecutorId?: string;
