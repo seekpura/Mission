@@ -69,6 +69,16 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - high-risk acquisition approval boundary
 - durable immutable acquisition receipts for rejection / approval / smoke / activation outcomes
 - mission-local capability activation without mutating host-global capability directories
+- production GitHub REST Agent Skill discovery and immutable commit/blob materialization without `git clone`, archive extraction or repository code execution
+- GitHub capability transport rejects truncated trees, submodules, unsupported Git modes, unsafe paths, oversized snapshots/blob mismatches and non-canonical repository URLs
+- partial failed capability snapshots are removed from quarantine staging
+- production Agent Skill acquisition is opt-in and requires Docker strong isolation; weak isolation or unknown acquisition modes fail closed
+- Docker capability smoke runs with no network, read-only candidate/root filesystem, dropped capabilities, no-new-privileges, non-root UID/GID and bounded resources, with image pulling disabled
+- Agent Skill smoke validates only a unique non-empty `SKILL.md`; third-party install/build/test scripts are not executed
+- every external Agent Skill requires explicit durable user approval even after low-risk static scanning because the Skill is behavioral instruction supply-chain content
+- activated Agent Skills are delivered as bounded, hashed mission-local instruction context only to WorkItems whose `allowedCapabilityRefs` explicitly authorize them
+- unreferenced mission-local Skills are not delivered to Workers; planner/verifier/control sessions do not inherit acquired Skills implicitly
+- MCP / CLI / general code acquisition remains unsupported and fail-closed until explicit provider-native delivery and safe smoke profiles exist
 - HostAdapter contract
 - FakeHostAdapter
 - DeepSeekHarnessAdapter boundary via injected bindings
@@ -90,26 +100,25 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - current host permission bridge exposes only truthful one-shot approval scope
 - HTTP Mission API now wakes the supervisor automatically, exposes approval list/decision/manual-wake endpoints, and streams supervisor updates over SSE
 - production server startup resumes non-terminal persisted Missions instead of exposing a passive controller shell
-- external capability acquisition remains fail-closed in the production bootstrap until a strong-isolation acquisition transport is configured
 - HTTP Mission API and SSE event stream
 - browser-native Mission Control view
 - CI workflow
-- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, verifier recovery, acquisition transaction, capability runtime loop, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner continuity and approval concurrency
+- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, verifier recovery, acquisition transaction, capability runtime loop, production Agent Skill acquisition/delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner continuity and approval concurrency
 
 ## Next implementation frontier
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. concrete GitHub / Agent Skills production capability transport: authenticated discovery, immutable revision resolution, quarantine materialization, provenance, strong-isolation smoke execution and mission-local activation
-2. persistent WorkItem / Artifact / Finding / Gap read-model projections beyond event reconstruction
-3. full verifier profiles for presentations / web / video / code / research and profile selection
-4. host capability graph with native semantics, constraints and routing characteristics instead of flat availability flags
-5. side-effect manager wired consistently across external actions, idempotency and approval policy
-6. capability trust / cost / audit ledgers, trusted-cache reuse and activation lifecycle management
-7. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure and repair/replan
-8. second production host adapter proving HostAdapter portability
-9. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
-10. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+1. persistent WorkItem / Attempt / Execution / Artifact / Finding / Gap / Decision / Approval / Capability read-model projections with transactional catch-up beyond event reconstruction
+2. full verifier profiles for presentations / web / video / code / research and profile selection
+3. host capability graph with native semantics, constraints and routing characteristics instead of flat availability flags
+4. side-effect manager wired consistently across external actions, idempotency and approval policy
+5. capability trust / cost / audit ledgers, trusted-cache reuse and activation lifecycle management
+6. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure and repair/replan
+7. second production host adapter proving HostAdapter portability
+8. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
+9. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+10. provider-native MCP / CLI / code capability delivery with explicit security and rollback profiles
 
 ## GitHub source control
 
