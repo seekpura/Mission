@@ -1,5 +1,10 @@
 import type { Artifact } from "../../core/domain/artifact.ts";
 import type { CapabilityDescriptor, CapabilityNeed } from "../../core/domain/capability.ts";
+import type {
+  CapabilityAuditRecord,
+  CapabilityCostRecord,
+  CapabilityTrustRecord
+} from "../../core/domain/capability-ledger.ts";
 import type { MissionState } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
 import type { Gap } from "../../core/domain/verification.ts";
@@ -102,8 +107,35 @@ export class SqliteMissionReader implements MissionReadModelReader {
     return this.rows("rm_approvals", missionId).map(row => JSON.parse(row.data_json) as Record<string, unknown>);
   }
 
+  readCapabilityTrust(missionId: string): CapabilityTrustRecord[] {
+    return this.rows("rm_capability_trust", missionId)
+      .map(row => JSON.parse(row.data_json) as CapabilityTrustRecord);
+  }
+
+  readCapabilityCosts(missionId: string): CapabilityCostRecord[] {
+    return this.rows("rm_capability_cost", missionId)
+      .map(row => JSON.parse(row.data_json) as CapabilityCostRecord);
+  }
+
+  readCapabilityAudit(missionId: string): CapabilityAuditRecord[] {
+    return this.rows("rm_capability_audit", missionId)
+      .map(row => JSON.parse(row.data_json) as CapabilityAuditRecord);
+  }
+
   private rows(
-    table: "rm_work_items" | "rm_attempts" | "rm_executions" | "rm_findings" | "rm_gaps" | "rm_decisions" | "rm_approvals" | "rm_capability_needs" | "rm_capabilities",
+    table:
+      | "rm_work_items"
+      | "rm_attempts"
+      | "rm_executions"
+      | "rm_findings"
+      | "rm_gaps"
+      | "rm_decisions"
+      | "rm_approvals"
+      | "rm_capability_needs"
+      | "rm_capabilities"
+      | "rm_capability_trust"
+      | "rm_capability_cost"
+      | "rm_capability_audit",
     missionId: string
   ): Array<{ data_json: string }> {
     return this.database.db.prepare(
