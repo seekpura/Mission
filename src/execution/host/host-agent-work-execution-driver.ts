@@ -77,6 +77,10 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
     this.hardTimeoutMs = Math.max(1_000, options.hardTimeoutMs ?? 30 * 60_000);
   }
 
+  isActive(executionId: string): boolean {
+    return this.inFlight.has(executionId);
+  }
+
   async execute(input: WorkExecutionInput): Promise<WorkExecutionOutcome> {
     const existing = this.inFlight.get(input.executionId);
     if (existing) return existing;
