@@ -99,7 +99,7 @@ function capability(): CapabilityDescriptor {
   };
 }
 
-test("CapabilityLedgerRuntime durably records trust, declared cost and audit evidence before returning resolved", async () => {
+test("CapabilityLedgerRuntime durably records trust, declared cost and audit evidence atomically before returning resolved", async () => {
   const store = new MemoryEventStore();
   const base = new FakeCapabilityRuntime({
     status: "resolved",
@@ -125,21 +125,18 @@ test("CapabilityLedgerRuntime durably records trust, declared cost and audit evi
   const result = await runtime.ensure(need());
 
   assert.equal(result.status, "resolved");
-  assert.deepEqual(store.events.map(event => event.type), [
-    "capability.trust.recorded",
-    "capability.cost.recorded",
-    "capability.audit.recorded"
-  ]);
-  const trust = store.events[0]?.payload as Record<string, any>;
+  assert.deepEqual(store.events.map(event => event.type), ["capability.resolution.recorded"]);
+  const envelope = store.events[0]?.payload as Record<string, any>;
+  const trust = envelope.trust;
+  const cost = envelope.cost;
+  const audit = envelope.audit;
   assert.equal(trust.trustLevel, "trusted-cache");
   assert.equal(trust.identity.sourceUri, "https://github.com/example/presentation-renderer");
   assert.equal(trust.securityRisk, "low");
   assert.equal(trust.reusable, true);
-  const cost = store.events[1]?.payload as Record<string, any>;
   assert.equal(cost.monetaryClass, "low");
   assert.equal(cost.latencyClass, "interactive");
   assert.equal(cost.amount, undefined);
-  const audit = store.events[2]?.payload as Record<string, any>;
   assert.equal(audit.decision, "trusted-cache-reused");
   assert.equal(audit.trustRecordId, trust.id);
   assert.equal(audit.costRecordId, cost.id);
@@ -161,7 +158,7 @@ test("CapabilityLedgerRuntime records failed resolution decisions", async () => 
   assert.equal((store.events[0]?.payload as Record<string, any>).decision, "rejected");
 });
 
-test("CapabilityLedgerRuntime deactivates a resolved capability if durable ledger commit fails", async () => {
+test("CapabilityLedgerRuntime deactivates a resolved capability if atomic durable ledger commit fails", async () => {
   const store = new MemoryEventStore();
   store.failAppends = true;
   const base = new FakeCapabilityRuntime({
@@ -179,9 +176,10 @@ test("CapabilityLedgerRuntime deactivates a resolved capability if durable ledge
   assert.equal(result.status, "acquisition_failed");
   assert.match(result.reason, /ledger commit failed/);
   assert.deepEqual(base.deactivated, [{ missionId: "mission-ledger", capabilityId: "acquired:presentation-renderer" }]);
+  assert.equal(store.events.length, 0);
 });
 
-test("RuntimeCapabilityLifecycleManager durably deactivates and revokes mission capability trust", async () => {
+test("RuntimeCapabilityLifecycleManager commits durable lifecycle before mutating the in-memory overlay", async () => {
   const store = new MemoryEventStore();
   const base = new FakeCapabilityRuntime({
     status: "missing",
@@ -209,12 +207,30 @@ test("RuntimeCapabilityLifecycleManager durably deactivates and revokes mission 
   ]);
   assert.deepEqual(store.events.map(event => event.type), [
     "capability.deactivated",
-    "capability.audit.recorded",
-    "capability.revoked",
-    "capability.trust.recorded",
-    "capability.audit.recorded"
+    "capability.revoked"
   ]);
-  const revokedTrust = store.events.find(event => event.type === "capability.trust.recorded")?.payload as Record<string, any>;
-  assert.equal(revokedTrust.trustLevel, "revoked");
-  assert.equal(revokedTrust.reusable, false);
+  const revokedPayload = store.events[1]?.payload as Record<string, any>;
+  assert.equal(revokedPayload.audit.decision, "revoked");
+  assert.equal(revokedPayload.revokedTrust.trustLevel, "revoked");
+  assert.equal(revokedPayload.revokedTrust.reusable, false);
+});
+
+test("RuntimeCapabilityLifecycleManager leaves overlay unchanged when durable lifecycle commit fails", async () => {
+  const store = new MemoryEventStore();
+  store.failAppends = true;
+  const base = new FakeCapabilityRuntime({
+    status: "missing",
+    source: "none",
+    attempts: [],
+    reason: "unused"
+  });
+  const manager = new RuntimeCapabilityLifecycleManager(base, store);
+
+  await assert.rejects(() => manager.deactivate({
+    missionId: "mission-ledger",
+    capabilityId: "capability-1",
+    reason: "operator disabled capability"
+  }), /ledger storage unavailable/);
+
+  assert.deepEqual(base.deactivated, []);
 });
