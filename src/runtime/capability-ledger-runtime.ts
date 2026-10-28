@@ -19,11 +19,21 @@ import type {
 import type { MissionEvent, MissionEventType } from "../core/domain/event.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 
+export interface CapabilityResolutionLedgerEnvelope {
+  trust: CapabilityTrustRecord;
+  cost: CapabilityCostRecord;
+  audit: CapabilityAuditRecord;
+}
+
 /**
  * Runtime-owned durable audit boundary around capability resolution. The
  * underlying resolver/acquirer decides what can satisfy the need; this wrapper
- * makes the resulting trust, declared cost and decision evidence durable before
- * the controller is allowed to use the capability for a Work attempt.
+ * makes trust, declared cost and audit evidence durable before the controller
+ * is allowed to use the capability for a Work attempt.
+ *
+ * Successful resolution is written as one atomic Event envelope. SQLite then
+ * projects trust/cost/audit rows in the same transaction as that Event, so a
+ * crash cannot leave a half-written capability ledger.
  */
 export class CapabilityLedgerRuntime implements CapabilityRuntime {
   private readonly base: CapabilityRuntime;
@@ -90,24 +100,13 @@ export class CapabilityLedgerRuntime implements CapabilityRuntime {
     const trust = trustRecord(need, capability, result, token, at);
     const cost = costRecord(need, capability, result, token, at);
     const audit = auditRecord(need, capability, result, token, at, trust.id, cost.id);
+    const envelope: CapabilityResolutionLedgerEnvelope = { trust, cost, audit };
 
     await this.append(
       need.missionId,
-      "capability.trust.recorded",
-      trust,
-      `capability-trust:${token}`
-    );
-    await this.append(
-      need.missionId,
-      "capability.cost.recorded",
-      cost,
-      `capability-cost:${token}`
-    );
-    await this.append(
-      need.missionId,
-      "capability.audit.recorded",
-      audit,
-      `capability-audit:${token}`
+      "capability.resolution.recorded",
+      envelope,
+      `capability-resolution:${token}`
     );
   }
 
@@ -141,8 +140,7 @@ export class CapabilityLedgerRuntime implements CapabilityRuntime {
   private async append(
     missionId: string,
     type: Extract<MissionEventType,
-      | "capability.trust.recorded"
-      | "capability.cost.recorded"
+      | "capability.resolution.recorded"
       | "capability.audit.recorded">,
     payload: unknown,
     idempotencyKey: string
@@ -186,59 +184,50 @@ export class RuntimeCapabilityLifecycleManager {
     if (!input.missionId.trim() || !input.capabilityId.trim() || !input.reason.trim()) {
       throw new Error("Capability lifecycle change requires missionId, capabilityId and reason");
     }
-    this.capabilities.deactivateMissionCapability(input.missionId, input.capabilityId);
-    const type: MissionEventType = input.revoked ? "capability.revoked" : "capability.deactivated";
+    const type: Extract<MissionEventType, "capability.deactivated" | "capability.revoked"> = input.revoked
+      ? "capability.revoked"
+      : "capability.deactivated";
+    const reason = input.reason.trim();
     const token = createHash("sha256").update(stableJson({
       missionId: input.missionId,
       capabilityId: input.capabilityId,
       type,
-      reason: input.reason.trim()
+      reason
     })).digest("hex");
-    await appendLifecycle(this.events, input.missionId, type, {
-      capabilityId: input.capabilityId,
-      reason: input.reason.trim(),
-      changedAt: new Date().toISOString()
-    }, `${type}:${token}`);
-
     const at = new Date().toISOString();
-    if (input.revoked) {
-      const trust: CapabilityTrustRecord = {
-        id: `capability-trust-revoked:${token.slice(0, 24)}`,
-        missionId: input.missionId,
-        capabilityNeedId: "lifecycle",
-        capabilityId: input.capabilityId,
-        trustLevel: "revoked",
-        provenanceSource: "unknown",
-        reusable: false,
-        reason: input.reason.trim(),
-        recordedAt: at
-      };
-      await appendLifecycle(
-        this.events,
-        input.missionId,
-        "capability.trust.recorded",
-        trust,
-        `capability-trust-revoked:${token}`
-      );
-    }
-
     const audit: CapabilityAuditRecord = {
       id: `capability-audit-lifecycle:${token.slice(0, 24)}`,
       missionId: input.missionId,
       capabilityId: input.capabilityId,
       decision: input.revoked ? "revoked" : "deactivated",
       resolutionSource: "none",
-      reason: input.reason.trim(),
+      reason,
       attempts: [],
       recordedAt: at
     };
-    await appendLifecycle(
-      this.events,
-      input.missionId,
-      "capability.audit.recorded",
+    const revokedTrust: CapabilityTrustRecord | undefined = input.revoked ? {
+      id: `capability-trust-revoked:${token.slice(0, 24)}`,
+      missionId: input.missionId,
+      capabilityNeedId: "lifecycle",
+      capabilityId: input.capabilityId,
+      trustLevel: "revoked",
+      provenanceSource: "unknown",
+      reusable: false,
+      reason,
+      recordedAt: at
+    } : undefined;
+
+    await appendLifecycle(this.events, input.missionId, type, {
+      capabilityId: input.capabilityId,
+      reason,
+      changedAt: at,
       audit,
-      `capability-audit-lifecycle:${token}`
-    );
+      ...(revokedTrust ? { revokedTrust } : {})
+    }, `${type}:${token}`);
+
+    // Durable state is authoritative. Only mutate the in-memory overlay after
+    // the lifecycle Event and its read-model projections commit successfully.
+    this.capabilities.deactivateMissionCapability(input.missionId, input.capabilityId);
   }
 }
 
@@ -369,7 +358,7 @@ function ledgerToken(
 async function appendLifecycle(
   events: EventStore,
   missionId: string,
-  type: MissionEventType,
+  type: Extract<MissionEventType, "capability.deactivated" | "capability.revoked">,
   payload: unknown,
   idempotencyKey: string
 ): Promise<MissionEvent> {
