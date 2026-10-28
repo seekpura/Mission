@@ -19,16 +19,18 @@ jobs:
           set +e
           bash scripts/apply-budget-enforcement.sh > .budget-test.log 2>&1
           patch_code=$?
+          bash scripts/fix-budget-config-wake.sh >> .budget-test.log 2>&1
+          fix_code=$?
           npm test >> .budget-test.log 2>&1
           test_code=$?
           npm run smoke >> .budget-test.log 2>&1
           smoke_code=$?
           git diff --check >> .budget-test.log 2>&1
           diff_code=$?
-          echo "PATCH_EXIT=$patch_code TEST_EXIT=$test_code SMOKE_EXIT=$smoke_code DIFF_EXIT=$diff_code" >> .budget-test.log
+          echo "PATCH_EXIT=$patch_code FIX_EXIT=$fix_code TEST_EXIT=$test_code SMOKE_EXIT=$smoke_code DIFF_EXIT=$diff_code" >> .budget-test.log
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add .budget-test.log src/core/domain/mission.ts src/core/domain/event.ts src/core/events/state-projector.ts src/runtime/mission-runtime.ts src/runtime/orchestration/mission-orchestrator.ts
           git commit -m "diagnostic: capture budget enforcement failure" || true
           git push || true
-          exit $(( patch_code || test_code || smoke_code || diff_code ))
+          exit $(( patch_code || fix_code || test_code || smoke_code || diff_code ))
