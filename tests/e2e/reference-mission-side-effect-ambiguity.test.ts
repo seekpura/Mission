@@ -165,13 +165,22 @@ class AmbiguousRecoveryDriver implements WorkExecutionDriver {
   readonly recoveries: string[] = [];
   readonly executedWorkIds: string[] = [];
   readonly replayStatuses: string[] = [];
+  private readonly sideEffects: RuntimeSideEffectManager;
+  private readonly artifactStore: FileArtifactStore;
+  private readonly root: string;
+  private readonly externalTarget: string;
 
   constructor(
-    private readonly sideEffects: RuntimeSideEffectManager,
-    private readonly artifactStore: FileArtifactStore,
-    private readonly root: string,
-    private readonly externalTarget: string
-  ) {}
+    sideEffects: RuntimeSideEffectManager,
+    artifactStore: FileArtifactStore,
+    root: string,
+    externalTarget: string
+  ) {
+    this.sideEffects = sideEffects;
+    this.artifactStore = artifactStore;
+    this.root = root;
+    this.externalTarget = externalTarget;
+  }
 
   async recover(input: WorkRecoveryInput): Promise<WorkExecutionOutcome> {
     this.recoveries.push(input.executionId);
