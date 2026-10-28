@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { Artifact } from "../domain/artifact.ts";
+import type { CapabilityNeed } from "../domain/capability.ts";
 import type { MissionDecision } from "../domain/decision.ts";
 import type { MissionEventType } from "../domain/event.ts";
 import type { MissionState } from "../domain/mission.ts";
 import type { Finding, Gap, VerificationResult } from "../domain/verification.ts";
 import type { WorkItem } from "../domain/work-item.ts";
+import type { CapabilityRuntime } from "../capabilities/capability-coordinator.ts";
 import { ContextCompiler } from "../context/context-compiler.ts";
 import type { WorkExecutionDriver, WorkExecutionOutcome } from "../execution/work-execution-driver.ts";
 import type { EventStore } from "../events/event-store.ts";
@@ -43,23 +45,31 @@ interface CycleView {
   journal: MissionJournalView;
 }
 
+interface WorkCapabilityResolution {
+  ok: boolean;
+  capabilityRefs: string[];
+}
+
 export class MissionController {
   private readonly store: EventStore;
   private readonly deliberation?: DeliberationProvider;
   private readonly executionDriver?: WorkExecutionDriver;
   private readonly verifier?: Verifier;
+  private readonly capabilities?: CapabilityRuntime;
   private readonly contextCompiler = new ContextCompiler();
 
   constructor(
     store: EventStore,
     deliberation?: DeliberationProvider,
     executionDriver?: WorkExecutionDriver,
-    verifier?: Verifier
+    verifier?: Verifier,
+    capabilities?: CapabilityRuntime
   ) {
     this.store = store;
     this.deliberation = deliberation;
     this.executionDriver = executionDriver;
     this.verifier = verifier;
+    this.capabilities = capabilities;
   }
 
   async emit(
@@ -159,6 +169,8 @@ export class MissionController {
       return result(view.state, decisionsCreated, workItemsCreated, executionsDispatched, verificationsScheduled);
     }
 
+    this.capabilities?.restoreMissionCapabilities(input.missionId, view.journal.capabilities.values());
+
     if (this.deliberation) {
       if (view.state.strategyRevision === null) {
         const proposal = await this.deliberation.composeStrategy({
@@ -205,13 +217,29 @@ export class MissionController {
           state: view.state,
           openGaps: openGaps(view.journal)
         });
+        const admittedNeeds = admitCapabilityNeeds(input.missionId, view, proposal.capabilityNeeds ?? []);
+        for (const need of admittedNeeds) {
+          await this.emit(
+            input.missionId,
+            "capability.need.created",
+            { id: need.id, need },
+            { type: "planner" },
+            `capability-need:${need.id}`
+          );
+        }
+        if (admittedNeeds.length > 0) view = await this.cycleView(input.missionId);
+
         const admitted = admitFrontier(input.missionId, view, proposal.workItems);
         if (admitted.length > 0) {
           const graphRevision = Math.max(view.state.graphRevision + 1, proposal.graphRevision);
           await this.emit(
             input.missionId,
             "graph.revised",
-            { revision: graphRevision, workItemIds: admitted.map(work => work.id) },
+            {
+              revision: graphRevision,
+              workItemIds: admitted.map(work => work.id),
+              capabilityNeedIds: admittedNeeds.map(need => need.id)
+            },
             { type: "planner" },
             `graph-revised:${graphRevision}`
           );
@@ -333,12 +361,22 @@ export class MissionController {
       .sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id));
 
     for (const work of ready) {
-      const state = await this.state(missionId);
+      let state = await this.state(missionId);
+      if (!state.readyWorkItemIds.includes(work.id)) continue;
+
+      const capabilityResolution = await this.resolveWorkCapabilities(missionId, work);
+      if (!capabilityResolution.ok) continue;
+
+      state = await this.state(missionId);
       if (!state.readyWorkItemIds.includes(work.id)) continue;
 
       const attemptId = `attempt:${work.id}:${state.revision}`;
       const executionId = `execution:${work.id}:${state.revision}`;
-      const contextPacket = this.contextCompiler.compile({ state, workItem: work, capabilityRefs: [] });
+      const contextPacket = this.contextCompiler.compile({
+        state,
+        workItem: work,
+        capabilityRefs: capabilityResolution.capabilityRefs
+      });
 
       await this.emit(
         missionId,
@@ -478,6 +516,99 @@ export class MissionController {
     }
 
     return { executions, verifications };
+  }
+
+  private async resolveWorkCapabilities(
+    missionId: string,
+    work: WorkItem
+  ): Promise<WorkCapabilityResolution> {
+    if (work.capabilityNeedRefs.length === 0) return { ok: true, capabilityRefs: [] };
+
+    let view = await this.cycleView(missionId);
+    this.capabilities?.restoreMissionCapabilities(missionId, view.journal.capabilities.values());
+    const capabilityRefs: string[] = [];
+
+    for (const needRef of work.capabilityNeedRefs) {
+      const need = view.journal.capabilityNeeds.get(needRef);
+      if (!need) {
+        await this.blockWorkForCapability(
+          missionId,
+          work,
+          needRef,
+          undefined,
+          `Work ${work.id} references unknown capability need ${needRef}.`
+        );
+        return { ok: false, capabilityRefs: [] };
+      }
+
+      if (!this.capabilities) {
+        await this.blockWorkForCapability(
+          missionId,
+          work,
+          needRef,
+          need,
+          `Work ${work.id} requires capability need ${needRef}, but no capability runtime is configured.`
+        );
+        return { ok: false, capabilityRefs: [] };
+      }
+
+      const ensured = await this.capabilities.ensure(need);
+      if (ensured.status !== "resolved" || !ensured.capability) {
+        await this.blockWorkForCapability(
+          missionId,
+          work,
+          needRef,
+          need,
+          `Capability need ${needRef} could not be resolved: ${ensured.reason}`
+        );
+        return { ok: false, capabilityRefs: [] };
+      }
+
+      const capability = ensured.capability;
+      await this.emit(
+        missionId,
+        "capability.activated",
+        {
+          capabilityNeedId: need.id,
+          capability,
+          source: ensured.source,
+          reason: ensured.reason,
+          attempts: ensured.attempts
+        },
+        { type: "controller" },
+        `capability-activated:${need.id}:${capability.id}:${capability.revision ?? capability.invocationRef ?? "current"}`
+      );
+      capabilityRefs.push(capability.id);
+      view = await this.cycleView(missionId);
+      this.capabilities.restoreMissionCapabilities(missionId, view.journal.capabilities.values());
+    }
+
+    return { ok: true, capabilityRefs: unique(capabilityRefs) };
+  }
+
+  private async blockWorkForCapability(
+    missionId: string,
+    work: WorkItem,
+    needRef: string,
+    need: CapabilityNeed | undefined,
+    reason: string
+  ): Promise<void> {
+    await this.emit(
+      missionId,
+      "work.blocked",
+      { id: work.id, reason, capabilityNeedRef: needRef },
+      { type: "controller" },
+      `work-blocked:capability:${work.id}:${needRef}`
+    );
+    await this.openGap(missionId, {
+      id: `capability-gap:${work.id}:${needRef}`,
+      severity: "major",
+      description: reason,
+      blocking: true,
+      category: "capability",
+      requirementRefs: unique([...work.requirementRefs, ...(need?.requirementRefs ?? [])]),
+      artifactRefs: work.inputArtifactRefs
+    });
   }
 
   private async verifyArtifact(
@@ -680,6 +811,40 @@ function shouldPlanFrontier(state: MissionState): boolean {
   return !completionGateEligible(state);
 }
 
+function admitCapabilityNeeds(
+  missionId: string,
+  view: CycleView,
+  proposed: CapabilityNeed[]
+): CapabilityNeed[] {
+  const admitted: CapabilityNeed[] = [];
+  const seen = new Map<string, CapabilityNeed>();
+
+  for (const need of proposed) {
+    if (need.missionId !== missionId) {
+      throw new Error(`Planner proposed capability need for wrong mission: ${need.id}`);
+    }
+    const priorProposal = seen.get(need.id);
+    if (priorProposal) {
+      if (!sameCapabilityNeed(priorProposal, need)) {
+        throw new Error(`Planner proposed conflicting capability need definitions: ${need.id}`);
+      }
+      continue;
+    }
+    seen.set(need.id, need);
+
+    const existing = view.journal.capabilityNeeds.get(need.id);
+    if (existing) {
+      if (!sameCapabilityNeed(existing, need)) {
+        throw new Error(`Planner attempted to redefine capability need ${need.id}`);
+      }
+      continue;
+    }
+    admitted.push(need);
+  }
+
+  return admitted;
+}
+
 function admitFrontier(missionId: string, view: CycleView, proposed: WorkItem[]): WorkItem[] {
   const admitted: WorkItem[] = [];
   const seen = new Set<string>();
@@ -691,10 +856,36 @@ function admitFrontier(missionId: string, view: CycleView, proposed: WorkItem[])
     }
     const hasReason = work.purpose === "exploration" || work.requirementRefs.length > 0 || work.gapRefs.length > 0 || work.inputArtifactRefs.length > 0 || work.capabilityNeedRefs.length > 0;
     if (!hasReason) throw new Error(`Planner proposed orphan work item: ${work.id}`);
+    for (const needRef of work.capabilityNeedRefs) {
+      if (!view.journal.capabilityNeeds.has(needRef)) {
+        throw new Error(`Planner work ${work.id} references unknown capability need ${needRef}`);
+      }
+    }
     seen.add(work.id);
     admitted.push(work);
   }
   return admitted;
+}
+
+function sameCapabilityNeed(left: CapabilityNeed, right: CapabilityNeed): boolean {
+  return JSON.stringify(normalizeCapabilityNeed(left)) === JSON.stringify(normalizeCapabilityNeed(right));
+}
+
+function normalizeCapabilityNeed(need: CapabilityNeed) {
+  return {
+    id: need.id,
+    missionId: need.missionId,
+    objective: need.objective,
+    requiredFunctions: [...need.requiredFunctions],
+    desiredInputs: [...need.desiredInputs],
+    desiredOutputs: [...need.desiredOutputs],
+    purpose: need.purpose,
+    urgency: need.urgency,
+    acquisitionAllowed: need.acquisitionAllowed,
+    maxRisk: need.maxRisk,
+    requirementRefs: [...need.requirementRefs],
+    gapRefs: [...need.gapRefs]
+  };
 }
 
 function assertExecutionOutcome(
