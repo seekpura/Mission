@@ -193,6 +193,11 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - Reference Mission fault-injection E2E now exercises process death/restart, lost native session recovery, repeated verifier faults, capability acquisition failure with safe fallback, ambiguous side-effect completion, exact replay blocking across restart and repair/replan through verified completion
 - Reference Mission capability failure coverage proves failed acquisition does not loop indefinitely: Runtime opens a durable blocker, admits an explicit fallback, supersedes the obsolete blocked Work and completes only after independent verification
 - Reference Mission side-effect coverage proves both fail-closed normalization of falsely successful unsettled receipts and the harder crash window where the external irreversible action may already have happened before terminal receipt persistence; restart never duplicates that action
+- strict TypeScript production gate runs `tsc` with `strict: true` over source, runtime scripts and tests using pinned TypeScript 7.0.2 plus Node 22 type definitions; diagnostics are not truncated and type failures block CI
+- the strict type gate repaired previously latent contract drift across Codex capability semantics, ACP optional capabilities, Buffer typing, GitHub tree normalization, planner union narrowing and stale test fixtures instead of weakening compiler strictness
+- SQLite schema compatibility gate compares the current schema against a Git baseline by constructing both fresh and upgraded databases; baseline tables, columns and explicit indexes cannot silently disappear or change contract
+- schema compatibility verification seeds durable Mission/Event/read-model sentinel rows, applies the current production startup schema, checks data preservation, structural equivalence with a fresh current database, repeated-migration idempotence, `PRAGMA integrity_check` and `PRAGMA foreign_key_check`
+- CI exposes independent blocking `typecheck`, `schema-compat` and Node 22 runtime-test jobs, and `npm run verify` provides the same aggregate production verification path locally
 - CI workflow
 - unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, side-effect admission/replay/execution-scope/cancel behavior, verifier recovery, verifier-profile routing/fail-closed/evidence-grounding coverage, durable Evidence projection/rebuild/API/idempotency, built-in Evidence collectors, host-native browser Evidence integration, semantic capability graph/planner routing, trusted MCP graph consistency and ACP create/resume delivery, acquisition transaction, trusted-cache exact reuse/revocation/integrity, capability trust-cost-audit atomic projection/lifecycle/API, capability runtime loop, production Agent Skill acquisition/native DSH delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, Work supersession admission/restart reconciliation, Reference Mission process/session/verifier/capability/side-effect fault injection, restart replay protection, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrency, Codex app-server protocol/create/resume/steer/interrupt/approval/sandbox coverage, generic Codex Artifact-driver portability, Codex durable side-effect admission/settlement and provider-boundary regression coverage
 
@@ -200,12 +205,11 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
-2. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
-3. concrete provider-specific read-only Evidence bindings/adapters for deployed presentation render, browser/accessibility, media probe/playback, executable test/build and research-recency capabilities as hosts expose them; the Runtime Evidence framework and fail-closed gates are implemented, but unavailable host capabilities remain inconclusive
-4. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as HostAdapters expose them
-5. external MCP discovery/acquisition plus provider-native MCP/Agent-Skill/CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles, including Codex-native delivery instead of reusing DeepSeek/ACP semantics
-6. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction
+1. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+2. concrete provider-specific read-only Evidence bindings/adapters for deployed presentation render, browser/accessibility, media probe/playback, executable test/build and research-recency capabilities as hosts expose them; the Runtime Evidence framework and fail-closed gates are implemented, but unavailable host capabilities remain inconclusive
+3. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as HostAdapters expose them
+4. external MCP discovery/acquisition plus provider-native MCP/Agent-Skill/CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles, including Codex-native delivery instead of reusing DeepSeek/ACP semantics
+5. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction
 
 ## GitHub source control
 

@@ -12,6 +12,7 @@ const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let turnCounter = 0;
 let currentTurn = null;
 let pendingApprovalTurn = null;
+let resumedThread = false;
 function send(value) { process.stdout.write(JSON.stringify(value) + "\n"); }
 function reply(id, result) { send({ jsonrpc: "2.0", id, result }); }
 function terminal(status) {
@@ -34,6 +35,7 @@ lines.on("line", line => {
     if (message.params.threadId === "missing-thread") {
       send({ jsonrpc: "2.0", id: message.id, error: { code: -32600, message: "no rollout found for thread id missing-thread" } });
     } else {
+      resumedThread = true;
       reply(message.id, { thread: { id: message.params.threadId }, model: "fake", modelProvider: "fake" });
     }
     return;
@@ -41,7 +43,7 @@ lines.on("line", line => {
   if (message.method === "turn/start" && message.id !== undefined) {
     currentTurn = "turn-" + (++turnCounter);
     const prompt = message.params.input?.[0]?.text || "";
-    reply(message.id, { turn: { id: currentTurn, status: "inProgress" } });
+    if (!resumedThread) reply(message.id, { turn: { id: currentTurn, status: "inProgress" } });
     send({ jsonrpc: "2.0", method: "turn/started", params: { threadId: message.params.threadId, turn: { id: currentTurn, status: "inProgress" } } });
     if (prompt.includes("approval-case")) {
       send({ jsonrpc: "2.0", method: "item/started", params: { threadId: message.params.threadId, turnId: currentTurn, item: { id: "cmd-1", type: "commandExecution", command: "echo hello", cwd: process.cwd(), status: "inProgress" } } });
@@ -52,6 +54,10 @@ lines.on("line", line => {
     if (prompt.includes("hold-case")) return;
     send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: message.params.threadId, turnId: currentTurn, delta: "hello from codex" } });
     terminal("completed");
+    if (resumedThread) {
+      resumedThread = false;
+      reply(message.id, { turn: { id: currentTurn, status: "inProgress" } });
+    }
     return;
   }
   if (message.method === "turn/steer" && message.id !== undefined) {

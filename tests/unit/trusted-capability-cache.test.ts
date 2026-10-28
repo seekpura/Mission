@@ -36,7 +36,7 @@ function security(): SecurityAssessment {
     overall: "low",
     findings: [],
     requestedPermissions: [],
-    requiredSecrets: []
+    recommendedAction: "sandbox"
   };
 }
 

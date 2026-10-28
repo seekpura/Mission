@@ -5,6 +5,7 @@ import { isAbsolute } from "node:path";
 import { createInterface } from "node:readline";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { buildHostCapabilityGraph } from "../../core/capabilities/capability-graph.ts";
+import type { CapabilityDescriptor } from "../../core/domain/capability.ts";
 import type {
   AgentCreateRequest,
   AgentResumeRequest,
@@ -37,6 +38,13 @@ interface CachedToolCall {
   rawInput?: unknown;
 }
 
+interface BufferedNotification {
+  method: string;
+  params: unknown;
+}
+
+const MAX_STARTUP_NOTIFICATIONS = 512;
+
 interface RunningAgent {
   request: AgentCreateRequest;
   handle: HostAgentHandle;
@@ -48,6 +56,8 @@ interface RunningAgent {
   stderr: string;
   finished: boolean;
   toolCalls: Map<string, CachedToolCall>;
+  startupNotifications?: BufferedNotification[];
+  startupNotificationOverflow?: boolean;
 }
 
 interface SpawnedConnection {
@@ -105,7 +115,7 @@ export class CodexAppServerHostAdapter implements HostAdapter {
 
   async snapshotEnvironment(): Promise<EnvironmentSnapshot> {
     const host = await this.describeHost();
-    const capabilities = [
+    const capabilities: CapabilityDescriptor[] = [
       {
         id: "openai-codex.app-server-agent",
         kind: "agent" as const,
@@ -160,7 +170,7 @@ export class CodexAppServerHostAdapter implements HostAdapter {
             "command-approval",
             "file-change-approval"
           ],
-          persistence: ["thread", "resume", "recovery"]
+          persistence: ["session", "resume", "recovery"]
         },
         provenance: {
           source: "host" as const,
@@ -403,11 +413,28 @@ export class CodexAppServerHostAdapter implements HostAdapter {
   }
 
   private async startTurn(running: RunningAgent, prompt: string, resumed: boolean): Promise<void> {
-    const response = asRecord(await running.rpc.request("turn/start", {
-      threadId: running.threadId,
-      input: [{ type: "text", text: prompt }],
-      cwd: running.request.workspaceRoot ?? process.cwd()
-    }));
+    running.startupNotifications = [];
+    running.startupNotificationOverflow = false;
+    let response: Record<string, unknown>;
+    try {
+      response = asRecord(await running.rpc.request("turn/start", {
+        threadId: running.threadId,
+        input: [{ type: "text", text: prompt }],
+        cwd: running.request.workspaceRoot ?? process.cwd()
+      }));
+    } catch (error) {
+      running.startupNotifications = undefined;
+      running.startupNotificationOverflow = undefined;
+      throw error;
+    }
+    if (running.startupNotificationOverflow) {
+      running.startupNotifications = undefined;
+      running.startupNotificationOverflow = undefined;
+      throw new Error(`Codex emitted more than ${MAX_STARTUP_NOTIFICATIONS} notifications before turn/start completed`);
+    }
+    const buffered = running.startupNotifications ?? [];
+    running.startupNotifications = undefined;
+    running.startupNotificationOverflow = undefined;
     const turn = asRecord(response.turn);
     running.turnId = requiredString(turn.id, "Codex turn/start response.turn.id");
     running.events.push(event("started", {
@@ -417,10 +444,21 @@ export class CodexAppServerHostAdapter implements HostAdapter {
       transport: "codex-app-server-jsonrpc-v2",
       resumed
     }));
+    for (const notification of buffered) {
+      this.handleNotification(running, notification.method, notification.params);
+    }
   }
 
   private handleNotification(running: RunningAgent, method: string, params: unknown): void {
     if (running.finished) return;
+    if (running.startupNotifications !== undefined) {
+      if (running.startupNotifications.length >= MAX_STARTUP_NOTIFICATIONS) {
+        running.startupNotificationOverflow = true;
+        return;
+      }
+      running.startupNotifications.push({ method, params });
+      return;
+    }
     const record = asRecord(params);
     if (method === "turn/started") {
       const turn = asRecord(record.turn);
