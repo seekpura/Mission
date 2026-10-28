@@ -222,7 +222,9 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const controller = new MissionController(events, deliberation, execution, verifier, capabilities, reader);
   const supervisor = new MissionSupervisor(controller, events, { maxCyclesPerWake: options.maxSupervisorCycles });
   let closed = false;
+  let shutdownStarted = false;
   let shutdownPromise: Promise<RuntimeShutdownResult> | undefined;
+  let recoveryPromise: Promise<string[]> | undefined;
   const lifecycle = { supervisor, host, approvals, database };
 
   return {
@@ -236,23 +238,36 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     capabilityLifecycle,
     controller,
     supervisor,
-    async recoverExistingMissions(): Promise<string[]> {
-      const resumed: string[] = [];
-      for (const missionId of await catalog.listMissionIds()) {
-        await approvals.rejectStalePending(missionId);
-        const state = await controller.state(missionId);
-        if (state.status === "completed" || state.status === "cancelled" || state.status === "failed") continue;
-        void supervisor.wake(missionId, "manual");
-        resumed.push(missionId);
-      }
-      return resumed;
+    recoverExistingMissions(): Promise<string[]> {
+      if (shutdownStarted || closed) return Promise.resolve([]);
+      if (recoveryPromise) return recoveryPromise;
+      recoveryPromise = (async () => {
+        const resumed: string[] = [];
+        for (const missionId of await catalog.listMissionIds()) {
+          if (shutdownStarted) break;
+          await approvals.rejectStalePending(missionId);
+          const state = await controller.state(missionId);
+          if (state.status === "completed" || state.status === "cancelled" || state.status === "failed") continue;
+          if (shutdownStarted) break;
+          void supervisor.wake(missionId, "manual");
+          resumed.push(missionId);
+        }
+        return resumed;
+      })().finally(() => {
+        recoveryPromise = undefined;
+      });
+      return recoveryPromise;
     },
     shutdown(shutdownOptions: RuntimeShutdownOptions = {}): Promise<RuntimeShutdownResult> {
       if (closed) {
         return Promise.resolve({ forced: false, cancelledHandleIds: [], cancellationFailures: [] });
       }
       if (shutdownPromise) return shutdownPromise;
-      shutdownPromise = shutdownMissionRuntime(lifecycle, shutdownOptions)
+      shutdownStarted = true;
+      shutdownPromise = (async () => {
+        if (recoveryPromise) await recoveryPromise;
+        return shutdownMissionRuntime(lifecycle, shutdownOptions);
+      })()
         .then(result => {
           closed = true;
           return result;
@@ -265,6 +280,8 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     },
     close(): void {
       if (closed) return;
+      shutdownStarted = true;
+      if (recoveryPromise) throw new Error("Cannot synchronously close Mission Runtime while startup recovery is active");
       closeMissionRuntimeIfIdle(lifecycle);
       closed = true;
     }
