@@ -8,7 +8,13 @@ import type { MissionReadModel } from "../mission/mission-read-model.ts";
 const SCOPE_ORDER: RepairScope[] = ["attempt", "work_item", "executor", "capability", "graph", "strategy"];
 
 export class MissionProgressTracker {
-  constructor(private readonly store: EventStore, private readonly readModel: MissionReadModel) {}
+  private readonly store: EventStore;
+  private readonly readModel: MissionReadModel;
+
+  constructor(store: EventStore, readModel: MissionReadModel) {
+    this.store = store;
+    this.readModel = readModel;
+  }
 
   async snapshot(missionId: string, state: MissionState): Promise<MissionProgressSnapshot> {
     const [requirements, gaps, artifacts, workItems, receipts] = await Promise.all([
