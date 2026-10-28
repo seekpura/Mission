@@ -11,5 +11,8 @@
     "test:e2e": "node --experimental-strip-types --test tests/e2e/*.test.ts",
     "smoke": "node --experimental-strip-types tests/e2e/smoke.ts",
     "server": "node --experimental-strip-types src/server/main.ts"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0"
   }
 }
