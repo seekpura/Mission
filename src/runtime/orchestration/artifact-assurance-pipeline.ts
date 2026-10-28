@@ -55,7 +55,9 @@ export class ArtifactAssurancePipeline {
         sourceArtifactRefs: work.inputArtifactRefs
       });
       await this.controller.recordArtifact(work.missionId, artifact);
-      const verification = await this.verifier.verify(artifact);
+      const contract = await this.projections.getAcceptanceContract(work.missionId);
+      const requirements = await this.projections.listRequirements(work.missionId);
+      const verification = await this.verifier.verify(artifact, { acceptanceContract: contract, requirements, explicitRequirementRefs: output.requirementRefs ?? [] });
       await this.controller.recordVerification(work.missionId, verification);
       if (verification.overall === "fail" || verification.overall === "inconclusive") {
         const finding = this.verificationFinding(artifact, verification);
@@ -71,12 +73,11 @@ export class ArtifactAssurancePipeline {
         });
         return { ok: false, reason: `artifact verification failed: ${artifact.logicalName}`, artifactRefs };
       }
-      const evidence = this.verificationEvidence(artifact, verification);
-      await this.controller.recordEvidence(work.missionId, evidence);
+      const evidenceIds = await this.recordVerificationEvidence(artifact, verification);
       const final = await this.isRequiredArtifact(work.missionId, artifact);
       await this.controller.validateArtifact(work.missionId, `${artifact.id}@${artifact.version}`, final);
       artifactRefs.push(`${artifact.id}@${artifact.version}`);
-      await this.satisfyArtifactRequirements(work.missionId, artifact, output.requirementRefs ?? [], evidence.id);
+      await this.satisfyArtifactRequirements(work.missionId, artifact, output.requirementRefs ?? [], verification, evidenceIds);
     }
     if (outputs.length === 0 && work.expectedOutputs.length === 0) return { ok: true, reason: "non-artifact work completed", artifactRefs };
     return { ok: true, reason: "outputs verified", artifactRefs };
@@ -93,16 +94,39 @@ export class ArtifactAssurancePipeline {
     });
   }
 
-  private async satisfyArtifactRequirements(missionId: string, artifact: Artifact, explicitRequirementRefs: string[], evidenceId: string): Promise<void> {
+  private async satisfyArtifactRequirements(missionId: string, artifact: Artifact, explicitRequirementRefs: string[], verification: VerificationResult, evidenceByRequirement: Map<string, string[]>): Promise<void> {
     const contract = await this.projections.getAcceptanceContract(missionId);
     const requirements = await this.projections.listRequirements(missionId);
     const requiredArtifact = contract?.requiredArtifacts.find(item => item.logicalName === artifact.logicalName && (!item.type || item.type === artifact.type));
     const candidates = new Set([...(requiredArtifact?.requirementRefs ?? []), ...explicitRequirementRefs]);
     for (const requirement of requirements) {
       if (!candidates.has(requirement.id)) continue;
-      if (requirement.verification !== "artifact") continue;
-      await this.controller.setRequirementStatus(missionId, requirement.id, "satisfied", [evidenceId]);
+      if (requirement.verification === "artifact") {
+        const structuralPass = verification.checkResults.filter(check => check.method === "deterministic").every(check => check.status === "pass");
+        if (structuralPass) await this.controller.setRequirementStatus(missionId, requirement.id, "satisfied", evidenceByRequirement.get(requirement.id) ?? []);
+        continue;
+      }
+      const relevant = verification.checkResults.filter(check => check.requirementRefs?.includes(requirement.id));
+      if (relevant.length > 0 && relevant.every(check => check.status === "pass")) {
+        await this.controller.setRequirementStatus(missionId, requirement.id, "satisfied", evidenceByRequirement.get(requirement.id) ?? []);
+      }
     }
+  }
+
+  private async recordVerificationEvidence(artifact: Artifact, verification: VerificationResult): Promise<Map<string, string[]>> {
+    const byRequirement = new Map<string, string[]>();
+    for (const check of verification.checkResults.filter(check => check.status === "pass")) {
+      const evidence: Evidence = {
+        id: `evidence-${verification.id}-${check.id}`, missionId: artifact.missionId, subjectRef: `${artifact.id}@${artifact.version}`,
+        type: check.method === "runtime" ? "test-result" : check.method === "perceptual" ? "render-inspection" : check.method === "deterministic" ? "file-validation" : "automated-review",
+        claim: `${artifact.logicalName} passed ${check.id}`, result: "supports", sourceRef: verification.id, producedBy: verification.verifierId, createdAt: new Date().toISOString()
+      };
+      await this.controller.recordEvidence(artifact.missionId, evidence);
+      for (const requirementRef of check.requirementRefs ?? []) {
+        const refs = byRequirement.get(requirementRef) ?? []; refs.push(evidence.id); byRequirement.set(requirementRef, refs);
+      }
+    }
+    return byRequirement;
   }
 
   private async isRequiredArtifact(missionId: string, artifact: Artifact): Promise<boolean> {
@@ -110,30 +134,17 @@ export class ArtifactAssurancePipeline {
     return !!contract?.requiredArtifacts.some(item => item.logicalName === artifact.logicalName && (!item.type || item.type === artifact.type));
   }
 
-  private verificationEvidence(artifact: Artifact, verification: VerificationResult): Evidence {
-    return {
-      id: `evidence-${verification.id}`,
-      missionId: artifact.missionId,
-      subjectRef: `${artifact.id}@${artifact.version}`,
-      type: "file-validation",
-      claim: `${artifact.logicalName} passed ${verification.verificationProfileId} verification`,
-      result: "supports",
-      sourceRef: verification.id,
-      producedBy: verification.verifierId,
-      createdAt: new Date().toISOString()
-    };
-  }
-
   private verificationFinding(artifact: Artifact, verification: VerificationResult): Finding {
+    const failedCheck = verification.checkResults.find(check => check.status === "fail" || check.status === "inconclusive");
     return {
       id: `finding-${verification.id}`,
       missionId: artifact.missionId,
       artifactRef: `${artifact.id}@${artifact.version}`,
-      category: "structural",
-      severity: "major",
-      observation: `${artifact.logicalName} failed structural verification`,
-      expected: "Artifact exists, is non-empty, and passes its required verifier profile",
-      requirementRefs: [],
+      category: failedCheck?.category ?? "structural",
+      severity: failedCheck?.priority === "critical" ? "critical" : "major",
+      observation: failedCheck?.detail ?? `${artifact.logicalName} did not pass required verification`,
+      expected: failedCheck ? `Pass required check: ${failedCheck.id}` : "Artifact passes its required verifier profile",
+      requirementRefs: failedCheck?.requirementRefs ?? [],
       evidenceRefs: verification.evidenceRefs,
       confidence: 1,
       createdAt: new Date().toISOString()
