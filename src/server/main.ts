@@ -13,7 +13,9 @@ runtime.supervisor.onError((missionId, error) => {
 
 const server = createMissionApi(runtime.controller, runtime.events, {
   supervisor: runtime.supervisor,
-  approvals: runtime.approvals
+  approvals: runtime.approvals,
+  capabilityLifecycle: runtime.capabilityLifecycle,
+  capabilityLedgerReader: runtime.reader
 });
 
 server.listen(port, "127.0.0.1", () => {
