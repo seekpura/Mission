@@ -15,6 +15,10 @@ import { HostAgentWorkExecutionDriver } from "../execution/host/host-agent-work-
 import { WorkspaceManager } from "../execution/workspace/workspace-manager.ts";
 import { RuntimeApprovalManager } from "./approval-manager.ts";
 import { MissionAgentSkillWorkspaceProjector } from "./agent-skill-runtime.ts";
+import {
+  CapabilityLedgerRuntime,
+  RuntimeCapabilityLifecycleManager
+} from "./capability-ledger-runtime.ts";
 import { CapabilityWorkspaceHostAdapter } from "./capability-context-host-adapter.ts";
 import { HostAgentJsonTransport } from "./host-agent-json-transport.ts";
 import { HostArtifactVerifier } from "./host-artifact-verifier.ts";
@@ -68,6 +72,7 @@ export interface MissionRuntime {
   host: HostAdapter;
   approvals: RuntimeApprovalManager;
   sideEffects: RuntimeSideEffectManager;
+  capabilityLifecycle: RuntimeCapabilityLifecycleManager;
   controller: MissionController;
   supervisor: MissionSupervisor;
   recoverExistingMissions(): Promise<string[]>;
@@ -124,13 +129,15 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     [{ executorId, driver: workDriver }],
     { defaultExecutorId: executorId }
   );
-  const capabilities = createCapabilityRuntime({
+  const baseCapabilities = createCapabilityRuntime({
     root,
     host,
     overlay,
     approvals,
     acquisition: options.capabilityAcquisition
   });
+  const capabilities = new CapabilityLedgerRuntime(baseCapabilities, events);
+  const capabilityLifecycle = new RuntimeCapabilityLifecycleManager(capabilities, events);
   const controller = new MissionController(events, deliberation, execution, verifier, capabilities, reader);
   const supervisor = new MissionSupervisor(controller, events, { maxCyclesPerWake: options.maxSupervisorCycles });
 
@@ -142,6 +149,7 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     host,
     approvals,
     sideEffects,
+    capabilityLifecycle,
     controller,
     supervisor,
     async recoverExistingMissions(): Promise<string[]> {
