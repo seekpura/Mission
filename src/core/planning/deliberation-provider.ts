@@ -1,3 +1,4 @@
+import type { CapabilityNeed } from "../domain/capability.ts";
 import type { MissionState } from "../domain/mission.ts";
 import type { WorkItem } from "../domain/work-item.ts";
 import type { Gap } from "../domain/verification.ts";
@@ -11,6 +12,7 @@ export interface StrategyProposal {
 
 export interface FrontierProposal {
   workItems: WorkItem[];
+  capabilityNeeds?: CapabilityNeed[];
   graphRevision: number;
 }
 
