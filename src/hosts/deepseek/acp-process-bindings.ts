@@ -7,12 +7,14 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import * as acp from "@agentclientprotocol/sdk";
 import type {
   AgentCreateRequest,
+  AgentResumeRequest,
   ApprovalRequest,
   ApprovalResult,
   ContextDelta,
   EnvironmentSnapshot,
   HostAgentEvent,
   HostAgentHandle,
+  HostAgentResumeResult,
   HostCapabilityInvocation,
   HostCapabilityResult,
   HostDescriptor
@@ -32,7 +34,9 @@ interface RunningAgent {
   handle: HostAgentHandle;
   child: ChildProcessWithoutNullStreams;
   connection: acp.ClientConnection;
-  session: acp.ActiveSession;
+  sessionId: string;
+  session?: acp.ActiveSession;
+  supportsClose: boolean;
   events: AsyncEventQueue<HostAgentEvent>;
   stderr: string;
   finished: boolean;
@@ -74,11 +78,11 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
           id: "deepseek-harness.acp-agent",
           kind: "agent",
           name: "DeepSeek Harness ACP Agent",
-          description: "Create and drive DeepSeek Harness sessions through the standard ACP v1 profile.",
+          description: "Create, resume and drive DeepSeek Harness sessions through the standard ACP v1 profile.",
           hostNative: true,
           available: true,
           invocationRef: "dsh --profile acp",
-          permissions: ["host-agent-session"],
+          permissions: ["host-agent-session", "host-agent-session-resume"],
           scope: "host"
         }
       ],
@@ -93,68 +97,129 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
     const workspaceRoot = request.workspaceRoot ?? process.cwd();
     await assertWorkspace(workspaceRoot);
 
-    const child = spawn(this.binary, [...this.argsPrefix, "--profile", "acp"], {
-      cwd: workspaceRoot,
-      env: this.env,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    await waitForSpawn(child);
-
-    const events = new AsyncEventQueue<HostAgentEvent>();
-    let stderr = "";
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", chunk => {
-      stderr = `${stderr}${String(chunk)}`.slice(-16_384);
-    });
-
+    const processState = await this.spawnConnection(request);
+    const { child, connection, events, stderrRef } = processState;
     let runningRef: RunningAgent | undefined;
-    const client = acp
-      .client({ name: "mission-runtime" })
-      .onRequest(acp.methods.client.session.requestPermission, async ({ params }) => {
-        return this.answerPermission(request, params);
-      });
-
-    const stream = acp.ndJsonStream(
-      Writable.toWeb(child.stdin),
-      Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>
-    );
-    const connection = client.connect(stream);
 
     try {
-      await connection.agent.request(acp.methods.agent.initialize, {
-        protocolVersion: acp.PROTOCOL_VERSION,
-        clientCapabilities: {}
-      });
-
+      const initialized = await initialize(connection);
       const session = await connection.agent.buildSession(workspaceRoot).start();
-      const handle: HostAgentHandle = { id: randomUUID(), nativeRef: String(session.sessionId) };
+      const sessionId = String(session.sessionId);
+      const handle: HostAgentHandle = { id: randomUUID(), nativeRef: sessionId };
       const running: RunningAgent = {
         request,
         handle,
         child,
         connection,
+        sessionId,
         session,
+        supportsClose: supportsSessionCapability(initialized, "close"),
         events,
-        stderr,
+        stderr: stderrRef.value,
         finished: false
       };
       runningRef = running;
       this.running.set(handle.id, running);
-      child.stderr.on("data", () => { running.stderr = stderr; });
+      processState.bindStderr(running);
 
       events.push(event("started", {
-        nativeSessionId: session.sessionId,
+        nativeSessionId: sessionId,
         workspaceRoot,
-        transport: "acp-v1"
+        transport: "acp-v1",
+        resumed: false
       }));
 
-      void this.runPrompt(running, compilePrompt(request));
+      void this.runNewSessionPrompt(running, compilePrompt(request));
       return handle;
     } catch (error) {
       connection.close(error);
-      child.kill();
+      if (child.exitCode === null) child.kill();
       const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to create DeepSeek Harness ACP agent: ${detail}${stderr ? `\n${stderr}` : ""}`);
+      throw new Error(`Failed to create DeepSeek Harness ACP agent: ${detail}${stderrRef.value ? `\n${stderrRef.value}` : ""}`);
+    } finally {
+      if (!runningRef && child.exitCode === null) child.kill();
+    }
+  }
+
+  async resumeAgent(request: AgentResumeRequest): Promise<HostAgentResumeResult> {
+    const workspaceRoot = request.workspaceRoot ?? process.cwd();
+    await assertWorkspace(workspaceRoot);
+    if (!request.nativeRef.trim()) return { status: "failed", reason: "DeepSeek ACP resume requires nativeRef" };
+    if (!request.handleId.trim()) return { status: "failed", reason: "DeepSeek ACP resume requires handleId" };
+    if (this.running.has(request.handleId)) {
+      return {
+        status: "resumed",
+        handle: this.running.get(request.handleId)!.handle
+      };
+    }
+
+    const processState = await this.spawnConnection(request, request.nativeRef);
+    const { child, connection, events, stderrRef } = processState;
+    let runningRef: RunningAgent | undefined;
+
+    try {
+      const initialized = await initialize(connection);
+      if (!supportsSessionCapability(initialized, "resume")) {
+        connection.close();
+        if (child.exitCode === null) child.kill();
+        return {
+          status: "unsupported",
+          reason: "DeepSeek ACP agent did not advertise agentCapabilities.sessionCapabilities.resume"
+        };
+      }
+
+      try {
+        await connection.agent.request(acp.methods.agent.session.resume, {
+          sessionId: request.nativeRef,
+          cwd: workspaceRoot,
+          mcpServers: []
+        });
+      } catch (error) {
+        connection.close(error);
+        if (child.exitCode === null) child.kill();
+        const detail = error instanceof Error ? error.message : String(error);
+        if (error instanceof acp.RequestError && error.code === -32002) {
+          return { status: "not_found", reason: `DeepSeek ACP session not found: ${request.nativeRef}` };
+        }
+        return {
+          status: "failed",
+          reason: `DeepSeek ACP session/resume failed for ${request.nativeRef}: ${detail}${stderrRef.value ? `\n${stderrRef.value}` : ""}`
+        };
+      }
+
+      const handle: HostAgentHandle = { id: request.handleId, nativeRef: request.nativeRef };
+      const running: RunningAgent = {
+        request,
+        handle,
+        child,
+        connection,
+        sessionId: request.nativeRef,
+        supportsClose: supportsSessionCapability(initialized, "close"),
+        events,
+        stderr: stderrRef.value,
+        finished: false
+      };
+      runningRef = running;
+      this.running.set(handle.id, running);
+      processState.bindStderr(running);
+
+      events.push(event("started", {
+        nativeSessionId: request.nativeRef,
+        workspaceRoot,
+        transport: "acp-v1",
+        resumed: true
+      }));
+
+      void this.runResumedSessionPrompt(running, compileRecoveryPrompt(request));
+      return { status: "resumed", handle };
+    } catch (error) {
+      connection.close(error);
+      if (child.exitCode === null) child.kill();
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        status: "failed",
+        reason: `Failed to reconnect DeepSeek Harness ACP session ${request.nativeRef}: ${detail}${stderrRef.value ? `\n${stderrRef.value}` : ""}`
+      };
     } finally {
       if (!runningRef && child.exitCode === null) child.kill();
     }
@@ -174,7 +239,7 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
     if (running.finished) return;
 
     await running.connection.agent.notify(acp.methods.agent.session.cancel, {
-      sessionId: running.session.sessionId
+      sessionId: running.sessionId
     });
 
     if (running.finished) return;
@@ -209,15 +274,76 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
     return this.approvalHandler(request);
   }
 
-  private async runPrompt(running: RunningAgent, prompt: string): Promise<void> {
+  private async spawnConnection(
+    request: AgentCreateRequest,
+    observedSessionId?: string
+  ): Promise<{
+    child: ChildProcessWithoutNullStreams;
+    connection: acp.ClientConnection;
+    events: AsyncEventQueue<HostAgentEvent>;
+    stderrRef: { value: string };
+    bindStderr(running: RunningAgent): void;
+  }> {
+    const workspaceRoot = request.workspaceRoot ?? process.cwd();
+    const child = spawn(this.binary, [...this.argsPrefix, "--profile", "acp"], {
+      cwd: workspaceRoot,
+      env: this.env,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    await waitForSpawn(child);
+
+    const events = new AsyncEventQueue<HostAgentEvent>();
+    const stderrRef = { value: "" };
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", chunk => {
+      stderrRef.value = `${stderrRef.value}${String(chunk)}`.slice(-16_384);
+    });
+
+    let runningRef: RunningAgent | undefined;
+    let client = acp
+      .client({ name: "mission-runtime" })
+      .onRequest(acp.methods.client.session.requestPermission, async ({ params }) => {
+        return this.answerPermission(request, params);
+      });
+
+    if (observedSessionId) {
+      client = client.onNotification(acp.methods.client.session.update, ({ params }) => {
+        if (!runningRef || params.sessionId !== observedSessionId) return;
+        const mapped = mapSessionUpdate(params);
+        if (mapped) runningRef.events.push(mapped);
+      });
+    }
+
+    const stream = acp.ndJsonStream(
+      Writable.toWeb(child.stdin),
+      Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>
+    );
+    const connection = client.connect(stream);
+
+    return {
+      child,
+      connection,
+      events,
+      stderrRef,
+      bindStderr(running: RunningAgent) {
+        runningRef = running;
+        child.stderr.on("data", () => { running.stderr = stderrRef.value; });
+      }
+    };
+  }
+
+  private async runNewSessionPrompt(running: RunningAgent, prompt: string): Promise<void> {
     try {
-      void running.session.prompt(prompt);
+      const session = running.session;
+      if (!session) throw new Error(`Missing active ACP session helper for ${running.sessionId}`);
+      void session.prompt(prompt);
       for (;;) {
-        const message = await running.session.nextUpdate();
+        const message = await session.nextUpdate();
         if (message.kind === "stop") {
           running.events.push(event("completed", {
             stopReason: message.stopReason,
-            nativeSessionId: running.session.sessionId
+            nativeSessionId: running.sessionId,
+            resumed: false
           }));
           break;
         }
@@ -225,25 +351,53 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
         if (mapped) running.events.push(mapped);
       }
     } catch (error) {
-      running.events.push(event("failed", {
-        error: error instanceof Error ? error.message : String(error),
-        stderr: running.stderr || undefined,
-        nativeSessionId: running.session.sessionId
-      }));
+      this.emitRunFailure(running, error);
     } finally {
-      running.finished = true;
+      await this.finishRunning(running);
+    }
+  }
+
+  private async runResumedSessionPrompt(running: RunningAgent, prompt: string): Promise<void> {
+    try {
+      const response = await running.connection.agent.request(acp.methods.agent.session.prompt, {
+        sessionId: running.sessionId,
+        prompt: [{ type: "text", text: prompt }]
+      });
+      running.events.push(event("completed", {
+        stopReason: response.stopReason,
+        nativeSessionId: running.sessionId,
+        resumed: true
+      }));
+    } catch (error) {
+      this.emitRunFailure(running, error);
+    } finally {
+      await this.finishRunning(running);
+    }
+  }
+
+  private emitRunFailure(running: RunningAgent, error: unknown): void {
+    running.events.push(event("failed", {
+      error: error instanceof Error ? error.message : String(error),
+      stderr: running.stderr || undefined,
+      nativeSessionId: running.sessionId
+    }));
+  }
+
+  private async finishRunning(running: RunningAgent): Promise<void> {
+    running.finished = true;
+    if (running.supportsClose) {
       try {
         await running.connection.agent.request(acp.methods.agent.session.close, {
-          sessionId: running.session.sessionId
+          sessionId: running.sessionId
         });
       } catch {
-        // Closing the protocol session is best-effort after the turn has terminated.
+        // Closing a supported protocol session is best-effort after the turn terminates.
       }
-      running.session.dispose();
-      running.connection.close();
-      if (running.child.exitCode === null) running.child.kill();
-      running.events.close();
     }
+    running.session?.dispose();
+    running.connection.close();
+    if (running.child.exitCode === null) running.child.kill();
+    running.events.close();
   }
 
   private async answerPermission(
@@ -276,6 +430,21 @@ export class DeepSeekAcpProcessBindings implements DeepSeekBindings {
   }
 }
 
+async function initialize(connection: acp.ClientConnection): Promise<acp.InitializeResponse> {
+  return connection.agent.request(acp.methods.agent.initialize, {
+    protocolVersion: acp.PROTOCOL_VERSION,
+    clientCapabilities: {}
+  });
+}
+
+function supportsSessionCapability(
+  initialized: acp.InitializeResponse,
+  capability: "resume" | "close"
+): boolean {
+  const sessionCapabilities = initialized.agentCapabilities.sessionCapabilities;
+  return Boolean(sessionCapabilities && capability in sessionCapabilities);
+}
+
 function compilePrompt(request: AgentCreateRequest): string {
   const context = typeof request.context === "string"
     ? request.context
@@ -287,6 +456,28 @@ function compilePrompt(request: AgentCreateRequest): string {
     request.allowedCapabilityRefs.length > 0
       ? `Allowed capability references: ${request.allowedCapabilityRefs.join(", ")}`
       : "Allowed capability references: none declared.",
+    "The host runtime remains authoritative for tool, sandbox, and permission enforcement.",
+    "",
+    context
+  ].join("\n");
+}
+
+function compileRecoveryPrompt(request: AgentResumeRequest): string {
+  const context = typeof request.context === "string"
+    ? request.context
+    : JSON.stringify(request.context, null, 2);
+  return [
+    "Mission Runtime recovery continuation.",
+    `Mission: ${request.missionId}`,
+    `Work item: ${request.workItemId}`,
+    `Recovered native session: ${request.nativeRef}`,
+    request.allowedCapabilityRefs.length > 0
+      ? `Allowed capability references: ${request.allowedCapabilityRefs.join(", ")}`
+      : "Allowed capability references: none declared.",
+    "The previous client connection was interrupted.",
+    "Inspect the existing workspace before acting and continue the same work item.",
+    "Preserve valid partial outputs and the existing Mission output manifest when present.",
+    "Do not repeat an external or irreversible side effect merely because the client reconnected; verify its current state first.",
     "The host runtime remains authoritative for tool, sandbox, and permission enforcement.",
     "",
     context
