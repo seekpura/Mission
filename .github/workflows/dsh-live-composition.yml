@@ -46,9 +46,11 @@ jobs:
         working-directory: .dsh
         run: pnpm install --frozen-lockfile
 
-      - name: Build Harness native host addon
+      - name: Build Harness host libraries and native addon
         working-directory: .dsh
-        run: pnpm run build:native-system
+        run: |
+          pnpm run build:native-system
+          pnpm run build:lib:host
 
       - name: Link Mission packages into the real Harness resolution
         shell: bash
