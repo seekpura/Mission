@@ -43,6 +43,40 @@ interface HostEvidenceOutput {
 }
 
 const RESULT_VALUES = new Set<Evidence["result"]>(["supports", "contradicts", "inconclusive"]);
+const EVIDENCE_KINDS = new Set<VerificationEvidenceKind>([
+  "file-integrity",
+  "text-content",
+  "presentation-package",
+  "presentation-render",
+  "website-source",
+  "browser-runtime",
+  "accessibility-check",
+  "media-probe",
+  "media-playback",
+  "code-source",
+  "executable-test",
+  "build-check",
+  "integration-test",
+  "static-analysis",
+  "source-traceability",
+  "source-recency"
+]);
+const EVIDENCE_TYPES = new Set<Evidence["type"]>([
+  "test-result",
+  "render-inspection",
+  "source",
+  "runtime-check",
+  "human-approval",
+  "automated-review",
+  "file-validation"
+]);
+const PROFILE_KINDS = new Set<VerificationProfileKind>([
+  "generic", "presentation", "website", "video", "code", "research"
+]);
+const ARTIFACT_TYPES = new Set<ArtifactType>([
+  "document", "presentation", "website", "image", "video", "audio", "code", "dataset", "research", "file", "other"
+]);
+const MAX_MONETARY = new Set<Exclude<CapabilityCostClass, "unknown">>(["negligible", "low", "medium", "high"]);
 const COST_RANK: Record<CapabilityCostClass, number> = {
   negligible: 0,
   low: 1,
@@ -69,7 +103,7 @@ export class TrustedHostCapabilityEvidenceCollector implements VerificationEvide
     this.binding = validateBinding(binding);
     this.id = `host-evidence:${this.binding.id}`;
     this.kinds = [this.binding.evidenceKind];
-    this.maxOutputBytes = Math.max(1_024, Math.min(2 * 1024 * 1024, this.binding.maxOutputBytes ?? 256 * 1024));
+    this.maxOutputBytes = this.binding.maxOutputBytes ?? 256 * 1024;
   }
 
   supports(input: VerificationEvidenceCollectorInput): boolean {
@@ -151,9 +185,53 @@ export function createTrustedHostCapabilityEvidenceCollectors(
 ): VerificationEvidenceCollector[] {
   const ids = new Set<string>();
   return bindings.map(binding => {
-    if (ids.has(binding.id)) throw new Error(`Duplicate host evidence binding id: ${binding.id}`);
-    ids.add(binding.id);
-    return new TrustedHostCapabilityEvidenceCollector(host, binding);
+    const normalized = validateBinding(binding);
+    if (ids.has(normalized.id)) throw new Error(`Duplicate host evidence binding id: ${normalized.id}`);
+    ids.add(normalized.id);
+    return new TrustedHostCapabilityEvidenceCollector(host, normalized);
+  });
+}
+
+export function parseTrustedHostCapabilityEvidenceBindingsJson(
+  value: string | undefined
+): TrustedHostCapabilityEvidenceBinding[] {
+  if (!value?.trim()) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(
+      `MISSION_HOST_EVIDENCE_BINDINGS_JSON must be valid JSON: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!Array.isArray(parsed)) throw new Error("MISSION_HOST_EVIDENCE_BINDINGS_JSON must be a JSON array");
+  return parsed.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`Host evidence binding[${index}] must be an object`);
+    }
+    const object = item as Record<string, unknown>;
+    const raw: TrustedHostCapabilityEvidenceBinding = {
+      id: stringField(object, "id", index),
+      capabilityId: stringField(object, "capabilityId", index),
+      evidenceKind: stringField(object, "evidenceKind", index) as VerificationEvidenceKind,
+      evidenceType: stringField(object, "evidenceType", index) as Evidence["type"],
+      profileKinds: stringArrayField(object, "profileKinds", index) as VerificationProfileKind[],
+      ...(object.artifactTypes === undefined
+        ? {}
+        : { artifactTypes: stringArrayField(object, "artifactTypes", index) as ArtifactType[] }),
+      expectedFunction: stringField(object, "expectedFunction", index),
+      readOnly: object.readOnly as true,
+      ...(object.allowedPermissions === undefined
+        ? {}
+        : { allowedPermissions: stringArrayField(object, "allowedPermissions", index) }),
+      ...(object.allowMetered === undefined ? {} : { allowMetered: booleanField(object, "allowMetered", index) }),
+      ...(object.maxMonetaryClass === undefined
+        ? {}
+        : { maxMonetaryClass: stringField(object, "maxMonetaryClass", index) as Exclude<CapabilityCostClass, "unknown"> }),
+      claim: stringField(object, "claim", index),
+      ...(object.maxOutputBytes === undefined ? {} : { maxOutputBytes: positiveIntegerField(object, "maxOutputBytes", index) })
+    };
+    return validateBinding(raw);
   });
 }
 
@@ -162,10 +240,34 @@ function validateBinding(binding: TrustedHostCapabilityEvidenceBinding): Trusted
   const capabilityId = bounded(binding.capabilityId, "host evidence capabilityId", 256);
   const expectedFunction = bounded(binding.expectedFunction, "host evidence expectedFunction", 256);
   const claim = bounded(binding.claim, "host evidence claim", 4_096);
+  if (!EVIDENCE_KINDS.has(binding.evidenceKind)) {
+    throw new Error(`Host evidence binding ${id} has unsupported evidenceKind ${String(binding.evidenceKind)}`);
+  }
+  if (!EVIDENCE_TYPES.has(binding.evidenceType)) {
+    throw new Error(`Host evidence binding ${id} has unsupported evidenceType ${String(binding.evidenceType)}`);
+  }
   if (binding.readOnly !== true) {
     throw new Error(`Host evidence binding ${id} must explicitly declare readOnly=true`);
   }
-  if (binding.profileKinds.length === 0) throw new Error(`Host evidence binding ${id} requires at least one profile kind`);
+  if (!Array.isArray(binding.profileKinds) || binding.profileKinds.length === 0) {
+    throw new Error(`Host evidence binding ${id} requires at least one profile kind`);
+  }
+  for (const profile of binding.profileKinds) {
+    if (!PROFILE_KINDS.has(profile)) throw new Error(`Host evidence binding ${id} has unsupported profile kind ${String(profile)}`);
+  }
+  for (const artifactType of binding.artifactTypes ?? []) {
+    if (!ARTIFACT_TYPES.has(artifactType)) {
+      throw new Error(`Host evidence binding ${id} has unsupported artifact type ${String(artifactType)}`);
+    }
+  }
+  const allowedPermissions = [...new Set((binding.allowedPermissions ?? []).map(permission => bounded(permission, "allowed permission", 256)))];
+  if (binding.maxMonetaryClass !== undefined && !MAX_MONETARY.has(binding.maxMonetaryClass)) {
+    throw new Error(`Host evidence binding ${id} has unsupported maxMonetaryClass ${String(binding.maxMonetaryClass)}`);
+  }
+  if (binding.maxOutputBytes !== undefined &&
+      (!Number.isInteger(binding.maxOutputBytes) || binding.maxOutputBytes < 1_024 || binding.maxOutputBytes > 2 * 1024 * 1024)) {
+    throw new Error(`Host evidence binding ${id} maxOutputBytes must be an integer between 1024 and 2097152`);
+  }
   return {
     ...binding,
     id,
@@ -174,7 +276,7 @@ function validateBinding(binding: TrustedHostCapabilityEvidenceBinding): Trusted
     claim,
     profileKinds: [...new Set(binding.profileKinds)],
     ...(binding.artifactTypes ? { artifactTypes: [...new Set(binding.artifactTypes)] } : {}),
-    allowedPermissions: [...new Set(binding.allowedPermissions ?? [])]
+    allowedPermissions
   };
 }
 
@@ -251,4 +353,32 @@ function bounded(value: string, label: string, maxChars: number): string {
 function safeSourceSegment(value: string): string {
   const safe = value.replace(/[^A-Za-z0-9._:-]+/g, "-").replace(/^-+|-+$/g, "");
   return safe || "unknown";
+}
+
+function stringField(object: Record<string, unknown>, field: string, index: number): string {
+  const value = object[field];
+  if (typeof value !== "string" || !value.trim()) throw new Error(`Host evidence binding[${index}].${field} must be a non-empty string`);
+  return value.trim();
+}
+
+function stringArrayField(object: Record<string, unknown>, field: string, index: number): string[] {
+  const value = object[field];
+  if (!Array.isArray(value) || value.some(item => typeof item !== "string" || !item.trim())) {
+    throw new Error(`Host evidence binding[${index}].${field} must be a string array`);
+  }
+  return value.map(item => (item as string).trim());
+}
+
+function booleanField(object: Record<string, unknown>, field: string, index: number): boolean {
+  const value = object[field];
+  if (typeof value !== "boolean") throw new Error(`Host evidence binding[${index}].${field} must be boolean`);
+  return value;
+}
+
+function positiveIntegerField(object: Record<string, unknown>, field: string, index: number): number {
+  const value = object[field];
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`Host evidence binding[${index}].${field} must be a positive integer`);
+  }
+  return value;
 }
