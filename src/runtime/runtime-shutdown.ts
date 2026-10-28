@@ -85,12 +85,16 @@ export function closeMissionRuntimeIfIdle(input: {
   approvals: RuntimeApprovalManager;
   database: MissionDatabase;
 }): void {
-  input.supervisor.beginDrain();
-  input.host.closeIfIdle();
   const activeMissions = input.supervisor.activeMissionIds();
   if (activeMissions.length > 0) {
     throw new Error(`Cannot synchronously close Mission Runtime with active supervisor cycles: ${activeMissions.join(", ")}`);
   }
+  const activeHandles = input.host.snapshot().activeHandleIds;
+  if (activeHandles.length > 0) {
+    throw new Error(`Cannot synchronously close Mission Runtime with active host sessions: ${activeHandles.join(", ")}`);
+  }
+  input.supervisor.beginDrain();
+  input.host.closeIfIdle();
   disposeRuntime(input.approvals, input.database);
 }
 
