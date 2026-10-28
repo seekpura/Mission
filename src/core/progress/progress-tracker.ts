@@ -19,20 +19,19 @@ export class MissionProgressTracker {
   async snapshot(missionId: string, state: MissionState): Promise<MissionProgressSnapshot> {
     const [requirements, gaps, artifacts, workItems, receipts] = await Promise.all([
       this.readModel.requirements(missionId),
-      this.readModel.gaps(missionId),
+      this.readModel.openGaps(missionId),
       this.readModel.artifacts(missionId),
       this.readModel.workItems(missionId),
       this.readModel.invocationReceipts(missionId)
     ]);
     const required = requirements.filter(requirement => requirement.priority === "critical" || requirement.priority === "required");
-    const blocking = gaps.filter(gap => ["open", "working", "blocked"].includes(gap.status) && (gap.severity === "critical" || gap.severity === "major"));
-    const open = gaps.filter(gap => ["open", "working", "blocked"].includes(gap.status));
+    const blocking = gaps.filter(gap => (gap.severity === "critical" || gap.severity === "major"));
     const verified = artifacts.filter(artifact => ["verified", "integrated", "final"].includes(artifact.status));
     const finalRefs = [...state.finalArtifactRefs].sort();
     const meaningful = {
       requiredSatisfied: required.filter(requirement => requirement.status === "satisfied").map(requirement => requirement.id).sort(),
       blockingGaps: blocking.map(gap => `${gap.id}:${gap.severity}`).sort(),
-      openGaps: open.map(gap => gap.id).sort(),
+      openGaps: gaps.map(gap => gap.id).sort(),
       verifiedArtifacts: verified.map(artifact => `${artifact.id}@${artifact.version}:${artifact.contentHash}`).sort(),
       finalRefs
     };
@@ -42,7 +41,7 @@ export class MissionProgressTracker {
       requiredSatisfied: meaningful.requiredSatisfied.length,
       requiredTotal: required.length,
       blockingGapRefs: blocking.map(gap => gap.id).sort(),
-      openGapRefs: open.map(gap => gap.id).sort(),
+      openGapRefs: gaps.map(gap => gap.id).sort(),
       verifiedArtifactRefs: verified.map(artifact => `${artifact.id}@${artifact.version}`).sort(),
       finalArtifactRefs: finalRefs,
       failedInvocationCount: receipts.filter(receipt => receipt.result !== "succeeded").length,
