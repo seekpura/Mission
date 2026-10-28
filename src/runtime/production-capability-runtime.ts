@@ -110,7 +110,10 @@ class SkillOnlyRankedDiscovery implements CapabilityCandidateDiscovery {
       for (const candidate of result.value) {
         if (candidate.candidateKind !== "skill") continue;
         if (candidate.sourceType !== "agent-skill" && candidate.sourceType !== "github") continue;
-        deduped.set(`${candidate.sourceType}:${candidate.sourceUri}`, candidate);
+        const existing = deduped.get(candidate.sourceUri);
+        if (!existing || (existing.sourceType === "github" && candidate.sourceType === "agent-skill")) {
+          deduped.set(candidate.sourceUri, candidate);
+        }
       }
     }
     return this.ranker.rank(need, [...deduped.values()]);
