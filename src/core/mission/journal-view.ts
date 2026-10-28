@@ -1,4 +1,5 @@
 import type { Artifact, ArtifactStatus } from "../domain/artifact.ts";
+import type { CapabilityNeed } from "../domain/capability.ts";
 import type { MissionEvent } from "../domain/event.ts";
 import type { WorkItem, WorkStatus } from "../domain/work-item.ts";
 import type { Gap } from "../domain/verification.ts";
@@ -8,6 +9,7 @@ export interface MissionJournalView {
   userGoal: string;
   workItems: Map<string, WorkItem>;
   artifacts: Map<string, Artifact>;
+  capabilityNeeds: Map<string, CapabilityNeed>;
   gaps: Map<string, Gap>;
   decisionIds: Set<string>;
 }
@@ -15,6 +17,7 @@ export interface MissionJournalView {
 export function projectMissionJournal(missionId: string, events: MissionEvent[]): MissionJournalView {
   const workItems = new Map<string, WorkItem>();
   const artifacts = new Map<string, Artifact>();
+  const capabilityNeeds = new Map<string, CapabilityNeed>();
   const gaps = new Map<string, Gap>();
   const decisionIds = new Set<string>();
   let userGoal = "";
@@ -24,6 +27,12 @@ export function projectMissionJournal(missionId: string, events: MissionEvent[])
       case "mission.created": {
         const payload = event.payload as { userGoal?: string };
         if (typeof payload.userGoal === "string") userGoal = payload.userGoal;
+        break;
+      }
+      case "capability.need.created": {
+        const payload = event.payload as { need?: CapabilityNeed } & Partial<CapabilityNeed>;
+        const need = payload.need ?? asCapabilityNeed(payload, missionId);
+        if (need) capabilityNeeds.set(need.id, cloneCapabilityNeed(need));
         break;
       }
       case "work.created": {
@@ -115,7 +124,7 @@ export function projectMissionJournal(missionId: string, events: MissionEvent[])
     }
   }
 
-  return { missionId, userGoal, workItems, artifacts, gaps, decisionIds };
+  return { missionId, userGoal, workItems, artifacts, capabilityNeeds, gaps, decisionIds };
 }
 
 export function openGaps(view: MissionJournalView): Gap[] {
@@ -171,6 +180,24 @@ function updateArtifactStatus(artifacts: Map<string, Artifact>, ref: string, sta
   artifacts.set(ref, { ...current, status });
 }
 
+function asCapabilityNeed(payload: Partial<CapabilityNeed>, missionId: string): CapabilityNeed | undefined {
+  if (!payload.id || !payload.objective || !payload.purpose || !payload.urgency || !payload.maxRisk) return undefined;
+  return {
+    id: payload.id,
+    missionId: payload.missionId ?? missionId,
+    objective: payload.objective,
+    requiredFunctions: [...(payload.requiredFunctions ?? [])],
+    desiredInputs: [...(payload.desiredInputs ?? [])],
+    desiredOutputs: [...(payload.desiredOutputs ?? [])],
+    purpose: payload.purpose,
+    urgency: payload.urgency,
+    acquisitionAllowed: payload.acquisitionAllowed ?? false,
+    maxRisk: payload.maxRisk,
+    requirementRefs: [...(payload.requirementRefs ?? [])],
+    gapRefs: [...(payload.gapRefs ?? [])]
+  };
+}
+
 function asWorkItem(payload: Partial<WorkItem>, missionId: string, at: string): WorkItem | undefined {
   if (!payload.id || !payload.objective || !payload.purpose) return undefined;
   return {
@@ -217,6 +244,17 @@ function asArtifact(payload: Partial<Artifact>, missionId: string, at: string): 
 
 function artifactRef(artifact: Artifact): string {
   return `${artifact.id}@${artifact.version}`;
+}
+
+function cloneCapabilityNeed(need: CapabilityNeed): CapabilityNeed {
+  return {
+    ...need,
+    requiredFunctions: [...need.requiredFunctions],
+    desiredInputs: [...need.desiredInputs],
+    desiredOutputs: [...need.desiredOutputs],
+    requirementRefs: [...need.requirementRefs],
+    gapRefs: [...need.gapRefs]
+  };
 }
 
 function cloneWork(work: WorkItem): WorkItem {
