@@ -1,22 +1,25 @@
-import type { Server } from "node:http";
 import type { RuntimeShutdownOptions, RuntimeShutdownResult } from "../runtime/runtime-shutdown.ts";
+import type { MissionApiServer } from "./mission-api.ts";
 
 export interface ShutdownCapableRuntime {
   shutdown(options?: RuntimeShutdownOptions): Promise<RuntimeShutdownResult>;
 }
 
 /**
- * Stop accepting new HTTP connections first, allow already-admitted Mission
- * work to drain through Runtime shutdown, then close long-lived transports
- * such as SSE so the HTTP server can finish closing.
+ * Stop HTTP admission, end long-lived passive streams, wait for already
+ * admitted request handlers to leave their database transaction boundary,
+ * then drain Mission execution and close Runtime resources.
  */
 export async function shutdownHttpRuntime(
-  server: Server,
+  server: MissionApiServer,
   runtime: ShutdownCapableRuntime,
   options: RuntimeShutdownOptions = {}
 ): Promise<RuntimeShutdownResult> {
+  server.beginDrain();
   const serverClosed = closeServer(server);
   server.closeIdleConnections?.();
+
+  await server.waitForRequestDrain();
   try {
     return await runtime.shutdown(options);
   } finally {
@@ -25,7 +28,7 @@ export async function shutdownHttpRuntime(
   }
 }
 
-function closeServer(server: Server): Promise<void> {
+function closeServer(server: MissionApiServer): Promise<void> {
   if (!server.listening) return Promise.resolve();
   return new Promise<void>((resolve, reject) => {
     server.close(error => error ? reject(error) : resolve());
