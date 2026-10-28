@@ -1,0 +1,26 @@
+name: Apply root-cause minimal repair
+on:
+  push:
+    branches:
+      - build/root-cause-minimal-repair
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/root-cause-minimal-repair
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply, test and commit
+        run: bash scripts/apply-root-cause-minimal-repair.sh
+      - name: Push staged implementation
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/build/root-cause-minimal-repair)" ]; then
+            git push origin HEAD:build/root-cause-minimal-repair
+          fi
