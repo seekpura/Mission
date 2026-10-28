@@ -8,8 +8,14 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - durable SQLite append-only Mission Event Store
 - optimistic concurrency + idempotent event writes
 - MissionState projection and snapshots
+- transactional durable read-model projections for Mission / WorkItem / Attempt / Execution / Artifact / Finding / Gap / Decision / Approval / CapabilityNeed / Capability
+- read-model projection and event append share one SQLite transaction; projection failure rolls back the event write
+- read-model catch-up can reconstruct current views from the append-only event log after projection loss
+- Mission-scoped read-model identity prevents cross-Mission collisions for local entity ids
+- `SqliteMissionReader` provides current Mission state, journal entities and latest strategy without full history replay on normal runtime paths
+- production bootstrap shares the durable reader across controller, host planner and independent verifier
 - MissionSpec / Acceptance / Work / Attempt / Artifact / Finding / Gap / Decision / Capability / Execution domain contracts
-- event-sourced MissionJournalView for current WorkItem / Artifact / Gap / decision reconstruction
+- event-sourced MissionJournalView retained as the recovery/fallback reconstruction path
 - scoped Context Compiler manifest
 - progressive-planning provider boundary
 - runtime-driven controller strategy composition and revision
@@ -29,6 +35,11 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - independent Verifier scheduling and verification lifecycle events
 - runtime validation of verifier identity/result shape before trusting verifier output
 - malformed/mismatched verifier results normalized into inconclusive verification events plus blocking runtime gaps
+- artifact-specific verifier profile registry for presentation / website / video / code / research plus generic fallback
+- deterministic verifier-profile selection by explicit artifact type, then MIME type, then extension, then generic fallback
+- verifier profiles define required checks, evidence expectations, artifact-specific review instructions and bounded inline-content budgets
+- required verifier-profile checks fail closed: omitted checks become inconclusive and duplicate required checks are rejected
+- selected verification profile id is persisted on VerificationResult
 - verifier gap-assessment protocol (`resolved` / `still_open` / `inconclusive`)
 - gaps close only from explicit passing independent-verifier evidence; producer self-claims cannot close gaps
 - conflicting or absent gap evidence leaves the gap open
@@ -89,11 +100,11 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - recovery continuation prompt that inspects existing workspace and warns against blindly repeating irreversible side effects
 - exact executor-route recovery even when multiple routes share the same underlying driver id
 - protocol-level fake ACP integration tests including cross-process native-session resume without local DSH credentials
-- production runtime bootstrap composing SQLite/EventStore, DSH HostAdapter, host planner, ExecutorRouter, host worker driver, independent verifier, capability runtime, supervisor and approvals
+- production runtime bootstrap composing SQLite/EventStore/read models, DSH HostAdapter, host planner, ExecutorRouter, host worker driver, independent verifier, capability runtime, supervisor and approvals
 - strict framed-JSON HostAgent control transport for planner/verifier calls; malformed or unframed model output is rejected
-- HostDeliberationProvider uses fresh host sessions while reconstructing user goal, latest strategy, all capability needs, WorkItems, Artifacts and open Gaps from durable events every round
+- HostDeliberationProvider uses fresh host sessions while reconstructing current user goal, latest strategy, capability needs, WorkItems, Artifacts and open Gaps from the durable reader when available
 - planner output cannot set Mission identity, Work status, graph ownership, timestamps, creator or unknown executor routes
-- HostArtifactVerifier performs deterministic file/hash checks before a separate mission-level host review
+- HostArtifactVerifier performs deterministic file/hash checks before a separate profile-selected mission-level host review
 - per-Mission single-flight MissionSupervisor automatically drives controller cycles after create / steering / approval / restart events
 - SQLite Mission catalog discovers persisted missions for startup recovery
 - RuntimeApprovalManager persists approval request/decision events before host release, rejects stale restart approvals, and makes the first durable decision authoritative under concurrent operators
@@ -103,22 +114,22 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - HTTP Mission API and SSE event stream
 - browser-native Mission Control view
 - CI workflow
-- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, verifier recovery, acquisition transaction, capability runtime loop, production Agent Skill acquisition/delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner continuity and approval concurrency
+- unit, integration, and E2E tests including real FileArtifactStore execution/verification, host-agent artifact-contract, trusted local routing, verifier recovery, verifier-profile routing/fail-closed coverage, acquisition transaction, capability runtime loop, production Agent Skill acquisition/delivery, GitHub snapshot security, Docker isolation flags, evidence-backed gap closure, controller replacement recovery, cross-process ACP resume, production bootstrap, restart continuation, durable planner/verifier continuity and approval concurrency
 
 ## Next implementation frontier
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. persistent WorkItem / Attempt / Execution / Artifact / Finding / Gap / Decision / Approval / Capability read-model projections with transactional catch-up beyond event reconstruction
-2. full verifier profiles for presentations / web / video / code / research and profile selection
-3. host capability graph with native semantics, constraints and routing characteristics instead of flat availability flags
-4. side-effect manager wired consistently across external actions, idempotency and approval policy
-5. capability trust / cost / audit ledgers, trusted-cache reuse and activation lifecycle management
-6. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure and repair/replan
-7. second production host adapter proving HostAdapter portability
-8. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
-9. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
-10. provider-native MCP / CLI / code capability delivery with explicit security and rollback profiles
+1. host capability graph with native semantics, constraints, permissions, costs and routing characteristics instead of flat availability flags
+2. side-effect manager wired consistently across external actions, idempotency, irreversible-operation policy and approval boundaries
+3. capability trust / cost / audit ledgers, trusted-cache reuse and activation lifecycle management
+4. profile-specific verifier evidence collectors/adapters for rendered presentations, browser/runtime web checks, media probe/playback evidence, executable code/test evidence and research-source traceability; profiles now define the obligations but do not fabricate missing inspection evidence
+5. Reference Mission fault-injection E2E covering process death, lost session, verifier faults, capability acquisition failure and repair/replan
+6. second production host adapter proving HostAdapter portability
+7. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
+8. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+9. provider-native MCP / CLI / code capability delivery with explicit security, isolation and rollback profiles
+10. operational read-model/query APIs and observability for long-lived high-volume Missions beyond the current runtime-facing reader
 
 ## GitHub source control
 
