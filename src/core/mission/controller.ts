@@ -300,7 +300,8 @@ export class MissionController {
         const diagnosis = normalizeGapDiagnosis(rawDiagnosis, {
           findingRefs: findings.map(finding => finding.id),
           evidenceRefs: evidence.map(item => item.id),
-          priorRepairCount
+          priorRepairCount,
+          minimumRepairScope: plateauAssessment?.context.minimumRepairScope
         });
         const decision = this.decisionForDiagnosis(input.missionId, blockingGap, diagnosis);
         await this.emit(input.missionId, "decision.created", { decision, diagnosis }, { type: "controller" }, `decision:${blockingGap.id}:${diagnosis.intervention}:${priorRepairCount + 1}`);
