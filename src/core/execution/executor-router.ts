@@ -62,6 +62,10 @@ export class ExecutorRouter implements WorkExecutionDriver {
     return driver.recover(input);
   }
 
+  isActive(executionId: string): boolean {
+    return [...this.routes.values()].some(driver => driver.isActive?.(executionId) === true);
+  }
+
   private resolveExecutorId(input: WorkExecutionInput): string {
     if (input.workItem.assignedExecutorId) return input.workItem.assignedExecutorId;
     if (this.defaultExecutorId) return this.defaultExecutorId;
