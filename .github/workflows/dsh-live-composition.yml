@@ -72,7 +72,7 @@ jobs:
           set -euo pipefail
           pnpm exec tsx packages/test-support/loader-smoke/tests/fixtures/headless-driver.ts \
             "$GITHUB_WORKSPACE/tests/dsh-live/mission-live.patch.yml" \
-            "MISSION_RUNTIME_LIVE_SMOKE" | tee "$RUNNER_TEMP/mission-dsh-live.log"
+            "MISSION_RUNTIME_LIVE_SMOKE" 2>&1 | tee "$RUNNER_TEMP/mission-dsh-live.log"
 
           grep -q 'DSH_MISSION_OK' "$RUNNER_TEMP/mission-dsh-live.log"
           test -f .mission/mission.db
