@@ -1,4 +1,8 @@
-import type { CapabilityDescriptor, CapabilityNeed } from "../domain/capability.ts";
+import type {
+  CapabilityCostClass,
+  CapabilityDescriptor,
+  CapabilityNeed
+} from "../domain/capability.ts";
 import {
   buildHostCapabilityGraph,
   capabilityDescriptors,
@@ -27,6 +31,14 @@ export interface CapabilityResolution {
   rankedMatches?: CapabilityMatch[];
 }
 
+const COST_ORDER: Record<CapabilityCostClass, number> = {
+  negligible: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+  unknown: 4
+};
+
 export class CapabilityResolver {
   resolve(need: CapabilityNeed, source: CapabilityDescriptor[] | HostCapabilityGraph): CapabilityResolution {
     const graph = Array.isArray(source)
@@ -53,7 +65,8 @@ export class CapabilityResolver {
         bestSemanticScore(requiredFunction, functions, capability.functions?.length ? "explicit" : "fallback")
       );
       if (required.some(score => score <= 0)) {
-        rejected.push(`${capability.id}: missing required function semantics`);
+        const missed = need.requiredFunctions.filter((_, index) => required[index] <= 0);
+        rejected.push(`${capability.id}: missing required function semantics (${missed.join(" | ")})`);
         continue;
       }
 
@@ -76,7 +89,8 @@ export class CapabilityResolver {
           : []),
         ...(requiredCapabilityRefs(graph, capability.id).length
           ? [`dependency constraints satisfied: ${requiredCapabilityRefs(graph, capability.id).join(", ")}`]
-          : [])
+          : []),
+        ...(need.policy ? ["CapabilityNeed policy constraints satisfied"] : [])
       ];
       matches.push({
         capability,
@@ -103,7 +117,7 @@ export class CapabilityResolver {
       const detail = rejected.length ? `; rejected: ${rejected.slice(0, 5).join(" | ")}` : "";
       return {
         status: "missing",
-        reason: `No available capability satisfies required functions and graph constraints${detail}`,
+        reason: `No available capability satisfies required functions, graph constraints and CapabilityNeed policy${detail}`,
         graphRevision: graph.revision,
         rankedMatches
       };
@@ -142,14 +156,64 @@ function eligible(
     const dependency = capabilityNode(graph, dependencyId)?.capability;
     if (!dependency?.available) return { ok: false, reason: `required capability ${dependencyId} is unavailable` };
   }
+
+  const policy = need.policy;
+  if (!policy) return { ok: true };
+
+  if (policy.acceptableKinds?.length && !policy.acceptableKinds.includes(capability.kind)) {
+    return { ok: false, reason: `kind ${capability.kind} is outside acceptableKinds` };
+  }
+
+  if (policy.requiredExecutionModes?.length) {
+    const mode = capability.routing?.executionMode;
+    if (!mode || !policy.requiredExecutionModes.includes(mode)) {
+      return { ok: false, reason: `execution mode ${mode ?? "unknown"} does not satisfy requiredExecutionModes` };
+    }
+  }
+
+  const forbidden = (policy.forbiddenPermissions ?? []).filter(permission => capability.permissions.includes(permission));
+  if (forbidden.length > 0) {
+    return { ok: false, reason: `forbidden permissions: ${forbidden.join(", ")}` };
+  }
+
+  if (policy.acceptableProviders?.length) {
+    const provider = capability.native?.provider;
+    if (!provider || !policy.acceptableProviders.includes(provider)) {
+      return { ok: false, reason: `provider ${provider ?? "unknown"} is outside acceptableProviders` };
+    }
+  }
+
+  if (policy.requiredNativeFeatures?.length) {
+    const availableFeatures = new Set(capability.native?.features ?? []);
+    const missing = policy.requiredNativeFeatures.filter(feature => !availableFeatures.has(feature));
+    if (missing.length > 0) return { ok: false, reason: `missing native features: ${missing.join(", ")}` };
+  }
+
+  if (policy.acceptableProvenanceSources?.length) {
+    const source = capability.provenance?.source;
+    if (!source || !policy.acceptableProvenanceSources.includes(source)) {
+      return { ok: false, reason: `provenance ${source ?? "unknown"} is outside acceptableProvenanceSources` };
+    }
+  }
+
+  if (policy.maxMonetaryClass) {
+    const actual = capability.cost?.monetaryClass ?? "unknown";
+    if (actual === "unknown" || COST_ORDER[actual] > COST_ORDER[policy.maxMonetaryClass]) {
+      return {
+        ok: false,
+        reason: `monetary cost ${actual} exceeds or cannot prove maxMonetaryClass ${policy.maxMonetaryClass}`
+      };
+    }
+  }
+
   return { ok: true };
 }
 
 function bestSemanticScore(required: string, candidates: string[], mode: "explicit" | "fallback"): number {
   let best = 0;
   for (const candidate of candidates) {
-    const left = normalize(required);
-    const right = normalize(candidate);
+    const left = canonicalText(required);
+    const right = canonicalText(candidate);
     if (!left || !right) continue;
     if (left === right) best = Math.max(best, mode === "explicit" ? 5 : 3);
     else if (right.includes(left) || left.includes(right)) best = Math.max(best, mode === "explicit" ? 4 : 2.5);
@@ -181,12 +245,35 @@ function costScore(capability: CapabilityDescriptor): number {
   }
 }
 
-function normalize(input: string): string {
-  return tokenize(input).join(" ");
+function canonicalText(input: string): string {
+  return input.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, " ").trim();
 }
 
 function tokenize(input: string): string[] {
-  return input.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const normalized = canonicalText(input);
+  if (!normalized) return [];
+  const output = new Set<string>();
+
+  try {
+    const segmenter = new Intl.Segmenter("und", { granularity: "word" });
+    for (const segment of segmenter.segment(normalized)) {
+      if (segment.isWordLike && segment.segment.trim()) output.add(segment.segment.trim());
+    }
+  } catch {
+    // Node runtimes without Intl.Segmenter still use the Unicode fallback below.
+  }
+
+  for (const chunk of normalized.match(/[\p{L}\p{N}]+/gu) ?? []) {
+    output.add(chunk);
+    if (/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+$/u.test(chunk)) {
+      const characters = [...chunk];
+      for (const character of characters) output.add(character);
+      for (let index = 0; index + 1 < characters.length; index += 1) {
+        output.add(`${characters[index]}${characters[index + 1]}`);
+      }
+    }
+  }
+  return [...output];
 }
 
 function formatCoverage(value: number): string {
