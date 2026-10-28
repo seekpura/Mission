@@ -149,3 +149,43 @@ test("host read permission delegates to normal host approval while irreversible 
   assert.equal(recorded.metadata?.toolCallId, "send-1");
   assert.equal(JSON.stringify(recorded).includes("secret body"), false);
 });
+
+test("host side-effect replay keys are stable within one execution but isolated across new executions", async () => {
+  const store = new MemoryEventStore();
+  const broker = new ApprovalBroker();
+  const manager = new RuntimeSideEffectManager(store, broker);
+  const request = (executionId: string, attemptId: string): ApprovalRequest => ({
+    missionId: "mission-side-effect",
+    title: "Host tool permission",
+    reason: "send message",
+    details: {
+      workItemId: "work-1",
+      attemptId,
+      executionId,
+      sideEffectPolicy: approvalPolicy,
+      toolCall: {
+        toolCallId: "call-1",
+        title: "Send message",
+        kind: "send",
+        rawInput: { recipient: "same@example.test", body: "same payload" }
+      }
+    }
+  });
+
+  const first = await manager.authorizeHostPermission(request("execution-1", "attempt-1"));
+  const replay = await manager.authorizeHostPermission(request("execution-1", "attempt-1"));
+  const nextExecution = await manager.authorizeHostPermission(request("execution-2", "attempt-2"));
+
+  assert.equal(first.approved, true);
+  assert.equal(replay.approved, false);
+  assert.equal(nextExecution.approved, true);
+  assert.equal(broker.sideEffectRequests.length, 2);
+
+  const intents = store.events
+    .filter(event => event.type === "side_effect.intent.recorded")
+    .map(event => event.payload as SideEffectIntent);
+  assert.equal(intents.length, 2);
+  assert.notEqual(intents[0]?.operationKey, intents[1]?.operationKey);
+  assert.match(intents[0]?.operationKey ?? "", /execution-1/);
+  assert.match(intents[1]?.operationKey ?? "", /execution-2/);
+});
