@@ -283,3 +283,48 @@ CREATE TABLE IF NOT EXISTS invocation_receipts (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_invocation_receipts_mission ON invocation_receipts(mission_id, created_at);
+CREATE TABLE IF NOT EXISTS cost_events (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  work_item_id TEXT,
+  execution_id TEXT,
+  category TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  unit TEXT NOT NULL,
+  monetary_estimate REAL,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cost_events_mission ON cost_events(mission_id, category, created_at);
+
+CREATE TABLE IF NOT EXISTS audit_records (
+  id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  target TEXT,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_records_mission ON audit_records(mission_id, created_at);
+
+CREATE TABLE IF NOT EXISTS completion_records (
+  mission_id TEXT NOT NULL,
+  mission_revision INTEGER NOT NULL,
+  data_json TEXT NOT NULL,
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, mission_revision)
+);
+
+CREATE TABLE IF NOT EXISTS capability_trust (
+  mission_id TEXT NOT NULL,
+  capability_id TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  attempts INTEGER NOT NULL,
+  succeeded INTEGER NOT NULL,
+  failed INTEGER NOT NULL,
+  data_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, capability_id, purpose)
+);
+
