@@ -5,9 +5,10 @@ import type { MissionController } from "../../core/mission/controller.ts";
 import { CapabilityResolver } from "../../core/capabilities/resolver.ts";
 import type { SecureAcquisitionService } from "../../core/capabilities/secure-acquisition-service.ts";
 import type { HostAdapter } from "../../hosts/deepseek/host-adapter.ts";
+import type { VerificationContinuationService } from "./verification-continuation-service.ts";
 
 export interface WorkCapabilityPreparation {
-  status: "ready" | "acquisition_scheduled" | "blocked";
+  status: "ready" | "acquisition_scheduled" | "blocked" | "handled";
   capabilities: CapabilityDescriptor[];
   missingNeeds: CapabilityNeed[];
 }
@@ -18,6 +19,7 @@ export class CapabilityCoordinator {
   private readonly host: HostAdapter;
   private readonly resolver: CapabilityResolver;
   private readonly acquisition?: SecureAcquisitionService;
+  private readonly verificationContinuation?: VerificationContinuationService;
 
   constructor(input: {
     controller: MissionController;
@@ -25,12 +27,14 @@ export class CapabilityCoordinator {
     host: HostAdapter;
     acquisition?: SecureAcquisitionService;
     resolver?: CapabilityResolver;
+    verificationContinuation?: VerificationContinuationService;
   }) {
     this.controller = input.controller;
     this.projections = input.projections;
     this.host = input.host;
     this.acquisition = input.acquisition;
     this.resolver = input.resolver ?? new CapabilityResolver();
+    this.verificationContinuation = input.verificationContinuation;
   }
 
   async prepare(work: WorkItem): Promise<WorkCapabilityPreparation> {
@@ -55,7 +59,13 @@ export class CapabilityCoordinator {
         missingNeeds.push(need);
       }
     }
-    if (missingNeeds.length === 0) return { status: "ready", capabilities: uniqueCapabilities(capabilities), missingNeeds: [] };
+    if (missingNeeds.length === 0) {
+      if (work.purpose === "verification" && this.verificationContinuation) {
+        await this.verificationContinuation.resume(work);
+        return { status: "handled", capabilities: uniqueCapabilities(capabilities), missingNeeds: [] };
+      }
+      return { status: "ready", capabilities: uniqueCapabilities(capabilities), missingNeeds: [] };
+    }
 
     let scheduled = false;
     for (const need of missingNeeds) {
@@ -67,7 +77,7 @@ export class CapabilityCoordinator {
           description: `Capability unavailable: ${need.objective}`,
           category: "capability",
           requirementRefs: need.requirementRefs,
-          artifactRefs: []
+          artifactRefs: work.inputArtifactRefs
         });
         continue;
       }

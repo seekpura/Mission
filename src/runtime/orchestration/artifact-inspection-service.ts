@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { Artifact } from "../../core/domain/artifact.ts";
+import type { CapabilityNeed } from "../../core/domain/capability.ts";
 import type { InspectionOutcome } from "../../core/domain/inspection.ts";
 import type { VerificationProfile } from "../../core/domain/verification.ts";
 import type { MissionController } from "../../core/mission/controller.ts";
 import { InspectionPlanner } from "../../core/inspection/inspection-planner.ts";
 import { InspectionProviderRegistry } from "../../core/inspection/inspection-registry.ts";
+import { inspectionCapabilityNeed } from "../../core/inspection/inspection-capability-need.ts";
+import { InspectionCapabilityUnavailableError } from "../../core/inspection/capability-backed-inspection-provider.ts";
 import type { FileArtifactStore } from "../../execution/artifacts/artifact-store.ts";
 import type { WorkspaceManager } from "../../execution/workspace/workspace-manager.ts";
 
@@ -33,14 +36,16 @@ export class ArtifactInspectionService {
 
   async prepare(artifact: Artifact, profile: VerificationProfile, missionArtifacts: Artifact[]): Promise<InspectionOutcome> {
     const requests = this.planner.plan(artifact, profile);
-    if (requests.length === 0) return { required: false, requests: [], artifacts: [], missingKinds: [] };
+    if (requests.length === 0) return { required: false, requests: [], artifacts: [], missingKinds: [], missingCapabilityNeeds: [] };
 
     const derived: Artifact[] = [];
     const missingKinds = new Set<InspectionOutcome["missingKinds"][number]>();
+    const missingCapabilityNeeds = new Map<string, CapabilityNeed>();
     for (const request of requests) {
       const provider = this.registry.resolve(artifact, request);
       if (!provider) {
         missingKinds.add(request.kind);
+        mergeNeed(missingCapabilityNeeds, inspectionCapabilityNeed(artifact, request));
         continue;
       }
       const handle = this.workspaces.allocate(
@@ -50,8 +55,9 @@ export class ArtifactInspectionService {
       let bundle;
       try {
         bundle = await provider.inspect(artifact, request, { outputDir: handle.root, missionArtifacts });
-      } catch {
+      } catch (error) {
         missingKinds.add(request.kind);
+        if (error instanceof InspectionCapabilityUnavailableError) mergeNeed(missingCapabilityNeeds, error.need);
         continue;
       }
       const sourceRef = `${artifact.id}@${artifact.version}`;
@@ -99,9 +105,22 @@ export class ArtifactInspectionService {
       required: true,
       requests,
       artifacts: derived,
-      missingKinds: [...missingKinds]
+      missingKinds: [...missingKinds],
+      missingCapabilityNeeds: [...missingCapabilityNeeds.values()]
     };
   }
+}
+
+function mergeNeed(target: Map<string, CapabilityNeed>, incoming: CapabilityNeed): void {
+  const existing = target.get(incoming.id);
+  if (!existing) { target.set(incoming.id, incoming); return; }
+  target.set(incoming.id, {
+    ...existing,
+    requirementRefs: [...new Set([...existing.requirementRefs, ...incoming.requirementRefs])],
+    requiredFunctions: [...new Set([...existing.requiredFunctions, ...incoming.requiredFunctions])],
+    desiredInputs: [...new Set([...existing.desiredInputs, ...incoming.desiredInputs])],
+    desiredOutputs: [...new Set([...existing.desiredOutputs, ...incoming.desiredOutputs])]
+  });
 }
 
 function safeInspectionPath(root: string, candidate: string): string {

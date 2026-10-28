@@ -23,10 +23,12 @@ import { IntegrationCheckExecutor } from "../core/verification/integration-check
 import { ProfiledVerifier } from "../core/verification/profiled-verifier.ts";
 import { InspectionProviderRegistry } from "../core/inspection/inspection-registry.ts";
 import type { InspectionProvider } from "../core/inspection/inspection-provider.ts";
+import { CapabilityBackedInspectionProvider } from "../core/inspection/capability-backed-inspection-provider.ts";
 import { MissionOrchestrator } from "./orchestration/mission-orchestrator.ts";
 import { ArtifactAssurancePipeline } from "./orchestration/artifact-assurance-pipeline.ts";
 import { ArtifactInspectionService } from "./orchestration/artifact-inspection-service.ts";
 import { CapabilityCoordinator } from "./orchestration/capability-coordinator.ts";
+import { VerificationContinuationService } from "./orchestration/verification-continuation-service.ts";
 import type { SecureAcquisitionService } from "../core/capabilities/secure-acquisition-service.ts";
 
 export interface MissionRuntimeOptions {
@@ -82,13 +84,18 @@ export class MissionRuntime {
       });
       const registry = new VerifierRegistry([new DeterministicFileCheckExecutor(), new RuntimeCommandCheckExecutor(), new IntegrationCheckExecutor(), new HostReviewCheckExecutor(options.host)]);
       const verifier = new ProfiledVerifier(new VerificationPlanner(), registry);
+      const inspectionProviders = [
+        ...(options.inspectionProviders ?? []),
+        new CapabilityBackedInspectionProvider({ host: options.host, projections: this.projections })
+      ];
       const inspection = new ArtifactInspectionService({
         controller: this.controller,
         artifacts: this.artifacts,
         workspaces: this.workspaces,
-        registry: new InspectionProviderRegistry(options.inspectionProviders ?? [])
+        registry: new InspectionProviderRegistry(inspectionProviders)
       });
       const assurance = new ArtifactAssurancePipeline({ controller: this.controller, projections: this.projections, artifacts: this.artifacts, verifier, inspectionService: inspection });
+      const verificationContinuation = new VerificationContinuationService({ controller: this.controller, assurance });
       this.executionRouter = executionRouter;
       this.inspection = inspection;
       this.recovery = new ExecutionRecoveryManager({ controller: this.controller, events: this.events, projections: this.projections, router: executionRouter, workspaces: this.workspaces, assurance });
@@ -100,7 +107,13 @@ export class MissionRuntime {
         artifacts: this.artifacts,
         verifier,
         assurance,
-        capabilityCoordinator: new CapabilityCoordinator({ controller: this.controller, projections: this.projections, host: options.host, acquisition: options.acquisition }),
+        capabilityCoordinator: new CapabilityCoordinator({
+          controller: this.controller,
+          projections: this.projections,
+          host: options.host,
+          acquisition: options.acquisition,
+          verificationContinuation
+        }),
         executionRouter,
         options: { maxConcurrency: options.maxConcurrency }
       });

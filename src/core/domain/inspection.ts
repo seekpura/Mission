@@ -1,4 +1,5 @@
 import type { Artifact, ArtifactType } from "./artifact.ts";
+import type { CapabilityNeed } from "./capability.ts";
 
 export type InspectionKind = "page-render" | "viewport-screenshot" | "keyframe" | "metadata";
 
@@ -34,4 +35,5 @@ export interface InspectionOutcome {
   requests: InspectionRequest[];
   artifacts: Artifact[];
   missingKinds: InspectionKind[];
+  missingCapabilityNeeds: CapabilityNeed[];
 }
