@@ -40,30 +40,18 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
   }
 
   async requestHostApproval(request: ApprovalRequest): Promise<ApprovalResult> {
-    const record = await this.createPending({
+    return this.createAndWait({
       missionId: request.missionId,
       kind: "host",
       title: request.title,
       reason: request.reason,
-      details: { ...(request.details ?? {}) }
-    });
-
-    return new Promise<ApprovalResult>(resolve => {
-      const pending: PendingApproval = { record, resolve };
-      pending.timer = setTimeout(() => {
-        void this.decide(record.missionId, record.id, {
-          approved: false,
-          scope: "once",
-          actor: "system:approval-timeout",
-          reason: "Approval request timed out"
-        });
-      }, this.timeoutMs);
-      this.pending.set(record.id, pending);
+      details: { ...(request.details ?? {}) },
+      timeoutReason: "Approval request timed out"
     });
   }
 
   async requestApproval(request: AcquisitionApprovalRequest): Promise<{ approved: boolean; actor?: string }> {
-    const record = await this.createPending({
+    const result = await this.createAndWait({
       missionId: request.missionId,
       kind: "acquisition",
       title: request.title,
@@ -72,20 +60,8 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
         candidateId: request.candidateId,
         capabilityNeedId: request.capabilityNeedId,
         ...request.details
-      }
-    });
-
-    const result = await new Promise<ApprovalResult>(resolve => {
-      const pending: PendingApproval = { record, resolve };
-      pending.timer = setTimeout(() => {
-        void this.decide(record.missionId, record.id, {
-          approved: false,
-          scope: "once",
-          actor: "system:approval-timeout",
-          reason: "Capability approval request timed out"
-        });
-      }, this.timeoutMs);
-      this.pending.set(record.id, pending);
+      },
+      timeoutReason: "Capability approval request timed out"
     });
     return {
       approved: result.approved,
@@ -194,13 +170,14 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
     return stale.length;
   }
 
-  private async createPending(input: {
+  private async createAndWait(input: {
     missionId: string;
     kind: RuntimeApprovalKind;
     title: string;
     reason: string;
     details: Record<string, unknown>;
-  }): Promise<RuntimeApprovalRecord> {
+    timeoutReason: string;
+  }): Promise<ApprovalResult> {
     const id = `approval:${randomUUID()}`;
     const requestedAt = new Date().toISOString();
     const record: RuntimeApprovalRecord = {
@@ -214,8 +191,30 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
       scope: "once",
       requestedAt
     };
-    await this.append(input.missionId, "approval.requested", record, `approval-requested:${id}`);
-    return record;
+
+    let resolveDecision!: (result: ApprovalResult) => void;
+    const decision = new Promise<ApprovalResult>(resolve => { resolveDecision = resolve; });
+    const pending: PendingApproval = { record, resolve: resolveDecision };
+    this.pending.set(id, pending);
+
+    try {
+      await this.append(input.missionId, "approval.requested", record, `approval-requested:${id}`);
+    } catch (error) {
+      this.pending.delete(id);
+      throw error;
+    }
+
+    if (this.pending.has(id)) {
+      pending.timer = setTimeout(() => {
+        void this.decide(record.missionId, record.id, {
+          approved: false,
+          scope: "once",
+          actor: "system:approval-timeout",
+          reason: input.timeoutReason
+        });
+      }, this.timeoutMs);
+    }
+    return decision;
   }
 
   private async append(
