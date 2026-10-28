@@ -16,7 +16,10 @@ import { MissionCapabilityOverlay } from "../core/capabilities/mission-capabilit
 import { AgentSkillsDiscoveryProvider } from "../core/capabilities/providers/agent-skills-provider.ts";
 import { GitHubCapabilityDiscoveryProvider } from "../core/capabilities/providers/github-provider.ts";
 import { SandboxManager } from "../core/capabilities/sandbox/sandbox-manager.ts";
-import { IsolatedCapabilitySmokeRunner } from "../core/capabilities/sandbox/isolated-smoke-runner.ts";
+import {
+  IsolatedCapabilitySmokeRunner,
+  type IsolatedSmokeExecutor
+} from "../core/capabilities/sandbox/isolated-smoke-runner.ts";
 import type { HostAdapter } from "../hosts/deepseek/host-adapter.ts";
 import type { RuntimeApprovalManager } from "./approval-manager.ts";
 import { AgentSkillSmokePlanResolver, DockerSmokeExecutor } from "./agent-skill-runtime.ts";
@@ -32,13 +35,15 @@ export interface ProductionCapabilityRuntimeOptions {
   dockerBinary?: string;
   githubRequestTimeoutMs?: number;
   maxCandidates?: number;
+  githubClient?: GitHubCapabilityClient;
+  smokeExecutor?: IsolatedSmokeExecutor;
 }
 
 export function createProductionAgentSkillCapabilityRuntime(
   options: ProductionCapabilityRuntimeOptions
 ): CapabilityRuntime {
   const root = resolve(options.rootDir);
-  const github = new GitHubCapabilityClient({
+  const github = options.githubClient ?? new GitHubCapabilityClient({
     token: options.githubToken,
     requestTimeoutMs: options.githubRequestTimeoutMs
   });
@@ -51,14 +56,15 @@ export function createProductionAgentSkillCapabilityRuntime(
     stagingRoot: join(root, "staging"),
     client: github
   });
+  const smokeExecutor = options.smokeExecutor ?? new DockerSmokeExecutor({
+    image: options.dockerImage,
+    binary: options.dockerBinary
+  });
   const transaction = new CapabilityAcquisitionTransaction({
     materializer,
     sandboxManager: new SandboxManager(join(root, "sandboxes")),
     smokeRunner: new IsolatedCapabilitySmokeRunner(
-      new DockerSmokeExecutor({
-        image: options.dockerImage,
-        binary: options.dockerBinary
-      }),
+      smokeExecutor,
       new AgentSkillSmokePlanResolver()
     ),
     activator: new MissionLocalDirectoryActivator(join(root, "activated")),
