@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { CapabilityCandidate } from "../domain/capability.ts";
 
@@ -45,6 +45,7 @@ export class RepositoryCapabilityMaterializer implements CapabilityMaterializer 
   constructor(options: RepositoryMaterializerOptions) {
     this.stagingRoot = options.stagingRoot;
     this.client = options.client;
+    mkdirSync(this.stagingRoot, { recursive: true });
   }
 
   async materialize(candidate: CapabilityCandidate): Promise<MaterializedCapability> {
@@ -53,6 +54,7 @@ export class RepositoryCapabilityMaterializer implements CapabilityMaterializer 
     }
 
     const targetDirectory = join(this.stagingRoot, `${safeSegment(candidate.id)}-${randomUUID()}`);
+    mkdirSync(targetDirectory, { recursive: true });
     const snapshot = await this.client.snapshot({
       sourceUri: candidate.sourceUri,
       targetDirectory,
@@ -73,6 +75,13 @@ export class RepositoryCapabilityMaterializer implements CapabilityMaterializer 
       contentHash: hashDirectory(root),
       materializedAt: new Date().toISOString()
     };
+  }
+
+  cleanup(materialized: MaterializedCapability): void {
+    const stagingReal = realpathSync(this.stagingRoot);
+    const materializedReal = realpathSync(materialized.root);
+    assertWithin(stagingReal, materializedReal, materialized.root);
+    rmSync(materializedReal, { recursive: true, force: true });
   }
 }
 
