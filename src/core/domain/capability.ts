@@ -33,6 +33,7 @@ export interface CapabilityNeed {
   gapRefs: string[];
   status?: CapabilityNeedStatus;
   resolvedCapabilityRef?: string;
+  replacesCapabilityRef?: string;
 }
 
 export interface CapabilityCandidate {
