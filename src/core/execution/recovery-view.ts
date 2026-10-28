@@ -7,10 +7,16 @@ export interface RecoveryExecutionView {
   attemptId: string;
   executorId?: string;
   contextPacketId?: string;
+  capabilityRefs: string[];
   started: boolean;
   terminal: boolean;
   binding?: ExecutionRuntimeBinding;
   recoveryCount: number;
+}
+
+interface AttemptRecoveryContext {
+  capabilityRefs: string[];
+  contextPacketId?: string;
 }
 
 const TERMINAL_EXECUTION_EVENTS = new Set<MissionEvent["type"]>([
@@ -22,9 +28,25 @@ const TERMINAL_EXECUTION_EVENTS = new Set<MissionEvent["type"]>([
 
 export function projectExecutionRecovery(events: MissionEvent[]): Map<string, RecoveryExecutionView> {
   const executions = new Map<string, RecoveryExecutionView>();
+  const attempts = new Map<string, AttemptRecoveryContext>();
 
   for (const event of events) {
     switch (event.type) {
+      case "attempt.created": {
+        const payload = event.payload as {
+          id?: string;
+          capabilityRefs?: unknown;
+          contextPacketId?: string;
+        };
+        if (!payload.id) break;
+        attempts.set(payload.id, {
+          capabilityRefs: Array.isArray(payload.capabilityRefs)
+            ? payload.capabilityRefs.filter((ref): ref is string => typeof ref === "string")
+            : [],
+          ...(payload.contextPacketId ? { contextPacketId: payload.contextPacketId } : {})
+        });
+        break;
+      }
       case "execution.created": {
         const payload = event.payload as {
           id?: string;
@@ -34,12 +56,16 @@ export function projectExecutionRecovery(events: MissionEvent[]): Map<string, Re
           contextPacketId?: string;
         };
         if (!payload.id || !payload.workItemId || !payload.attemptId) break;
+        const attempt = attempts.get(payload.attemptId);
         executions.set(payload.id, {
           executionId: payload.id,
           workItemId: payload.workItemId,
           attemptId: payload.attemptId,
           ...(payload.executorId ? { executorId: payload.executorId } : {}),
-          ...(payload.contextPacketId ? { contextPacketId: payload.contextPacketId } : {}),
+          ...(payload.contextPacketId || attempt?.contextPacketId
+            ? { contextPacketId: payload.contextPacketId ?? attempt!.contextPacketId }
+            : {}),
+          capabilityRefs: [...(attempt?.capabilityRefs ?? [])],
           started: false,
           terminal: false,
           recoveryCount: 0
