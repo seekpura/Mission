@@ -3,6 +3,16 @@
   "version": "0.1.0-dev",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "src",
+    "cordis.patch.yml",
+    "package.json"
+  ],
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-agent": "*",
@@ -10,5 +20,10 @@
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-session": "*",
     "@deepseek-ai/dsh-tools": "*"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }
