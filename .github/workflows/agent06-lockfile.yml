@@ -20,25 +20,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Synchronize lockfile and CI install mode
-        run: |
-          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('.github/workflows/ci.yml')
-          text = path.read_text(encoding='utf-8')
-          old = 'npm install --ignore-scripts --no-audit --no-fund'
-          count = text.count(old)
-          if count != 3:
-              raise SystemExit(f'expected 3 CI install commands, got {count}')
-          path.write_text(text.replace(old, 'npm ci --ignore-scripts --no-audit --no-fund'), encoding='utf-8')
-          PY
-      - name: Commit reproducible dependency gate and remove temporary workflow
+      - name: Synchronize lockfile
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit lockfile only
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/agent06-lockfile.yml
-          git add package-lock.json .github/workflows/ci.yml
+          git add package-lock.json
           git diff --cached --check
-          git commit -m "ci: enforce reproducible locked dependencies"
+          git commit -m "build: lock production typecheck dependencies"
           git push origin HEAD:feat/production-typecheck-schema-gates
