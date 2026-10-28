@@ -1,0 +1,61 @@
+name: agent06-status-checkpoint
+
+on:
+  push:
+    branches:
+      - feat/production-typecheck-schema-gates
+    paths:
+      - .github/workflows/agent06-status-checkpoint.yml
+
+permissions:
+  contents: write
+
+jobs:
+  checkpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/production-typecheck-schema-gates
+          fetch-depth: 0
+      - name: Update current status and frontier
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('CURRENT_STATUS.md')
+          text = path.read_text(encoding='utf-8')
+          anchor = '- CI workflow\n'
+          addition = (
+              '- strict TypeScript production gate runs `tsc` with `strict: true` over source, runtime scripts and tests using pinned TypeScript 7.0.2 plus Node 22 type definitions; diagnostics are not truncated and type failures block CI\n'
+              '- the strict type gate repaired previously latent contract drift across Codex capability semantics, ACP optional capabilities, Buffer typing, GitHub tree normalization, planner union narrowing and stale test fixtures instead of weakening compiler strictness\n'
+              '- SQLite schema compatibility gate compares the current schema against a Git baseline by constructing both fresh and upgraded databases; baseline tables, columns and explicit indexes cannot silently disappear or change contract\n'
+              '- schema compatibility verification seeds durable Mission/Event/read-model sentinel rows, applies the current production startup schema, checks data preservation, structural equivalence with a fresh current database, repeated-migration idempotence, `PRAGMA integrity_check` and `PRAGMA foreign_key_check`\n'
+              '- CI exposes independent blocking `typecheck`, `schema-compat` and Node 22 runtime-test jobs, and `npm run verify` provides the same aggregate production verification path locally\n'
+          )
+          if text.count(anchor) != 1:
+              raise SystemExit(f'expected one CI workflow anchor, got {text.count(anchor)}')
+          text = text.replace(anchor, addition + anchor)
+          old = '''1. production typecheck / schema compatibility gate in CI in addition to Node strip-types runtime tests
+2. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+3. concrete provider-specific read-only Evidence bindings/adapters for deployed presentation render, browser/accessibility, media probe/playback, executable test/build and research-recency capabilities as hosts expose them; the Runtime Evidence framework and fail-closed gates are implemented, but unavailable host capabilities remain inconclusive
+4. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as HostAdapters expose them
+5. external MCP discovery/acquisition plus provider-native MCP/Agent-Skill/CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles, including Codex-native delivery instead of reusing DeepSeek/ACP semantics
+6. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction'''
+          new = '''1. graceful process shutdown / drain semantics for in-flight supervisor cycles and host sessions
+2. concrete provider-specific read-only Evidence bindings/adapters for deployed presentation render, browser/accessibility, media probe/playback, executable test/build and research-recency capabilities as hosts expose them; the Runtime Evidence framework and fail-closed gates are implemented, but unavailable host capabilities remain inconclusive
+3. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as HostAdapters expose them
+4. external MCP discovery/acquisition plus provider-native MCP/Agent-Skill/CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles, including Codex-native delivery instead of reusing DeepSeek/ACP semantics
+5. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one frontier block, got {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+      - name: Commit checkpoint and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/agent06-status-checkpoint.yml
+          git add CURRENT_STATUS.md
+          git diff --cached --check
+          git commit -m "docs: checkpoint production type and schema gates"
+          git push origin HEAD:feat/production-typecheck-schema-gates
