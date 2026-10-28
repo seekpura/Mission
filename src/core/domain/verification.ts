@@ -101,6 +101,7 @@ export interface Gap {
   findingRefs: string[];
   requirementRefs: string[];
   artifactRefs: string[];
+  sourceRefs?: string[];
   status: "open" | "working" | "resolved" | "accepted" | "blocked";
   fingerprint?: string;
   rootCauseKey?: string;

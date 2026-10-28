@@ -99,6 +99,7 @@ export class KnowledgeStalenessManager {
       description: `Source ${sourceId} became ${status}; dependent truth/evidence must be refreshed before acceptance`,
       requirementRefs: affectedRequirements,
       artifactRefs: affectedArtifacts,
+      sourceRefs: [sourceId],
       findingRefs: []
     });
 

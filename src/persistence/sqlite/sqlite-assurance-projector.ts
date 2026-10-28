@@ -33,6 +33,7 @@ export class SqliteAssuranceProjector {
           findingRefs: unique([...(current?.findingRefs ?? []), ...(incoming.findingRefs ?? [])]),
           requirementRefs: unique([...(current?.requirementRefs ?? []), ...(incoming.requirementRefs ?? [])]),
           artifactRefs: unique([...(current?.artifactRefs ?? []), ...(incoming.artifactRefs ?? [])]),
+          sourceRefs: unique([...(current?.sourceRefs ?? []), ...(incoming.sourceRefs ?? [])]),
           status: event.type === "gap.reopened" ? "open" : incoming.status ?? current?.status ?? "open",
           openedAt: current?.openedAt ?? row?.opened_at ?? incoming.openedAt ?? event.createdAt,
           resolvedAt: event.type === "gap.reopened" ? undefined : incoming.resolvedAt ?? current?.resolvedAt,

@@ -209,7 +209,7 @@ export class MissionController {
     return { impact, missionSpec: revisedSpec, acceptanceContract: revisedContract };
   }
 
-  async openGap(missionId: string, payload: { id: string; severity: "critical" | "major" | "minor"; description: string; blocking?: boolean; category?: Gap["category"]; requirementRefs?: string[]; artifactRefs?: string[]; findingRefs?: string[] }) {
+  async openGap(missionId: string, payload: { id: string; severity: "critical" | "major" | "minor"; description: string; blocking?: boolean; category?: Gap["category"]; requirementRefs?: string[]; artifactRefs?: string[]; findingRefs?: string[]; sourceRefs?: string[] }) {
     await this.emit(missionId, "gap.opened", payload, { type: "verifier" }, `gap:${payload.id}`);
   }
 
@@ -470,7 +470,7 @@ export class MissionController {
       id,
       missionId: state.missionId,
       purpose: "repair",
-      objective: `Resolve gap: ${gap.description}. Diagnosed cause: ${diagnosis.rootCause}. Repair scope: ${diagnosis.repairScope ?? "work_item"}`,
+      objective: `Resolve gap: ${gap.description}. Diagnosed cause: ${diagnosis.rootCause}. Repair scope: ${diagnosis.repairScope ?? "work_item"}${gap.sourceRefs?.length ? `. Sources requiring refresh: ${gap.sourceRefs.join(", ")}` : ""}`,
       status: "ready",
       requirementRefs: [...gap.requirementRefs],
       gapRefs: [gap.id],

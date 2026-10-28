@@ -152,6 +152,7 @@ export class SqliteEntityProjector {
           findingRefs: payload.findingRefs ?? [],
           requirementRefs: payload.requirementRefs ?? [],
           artifactRefs: payload.artifactRefs ?? [],
+          sourceRefs: payload.sourceRefs ?? [],
           status: "open",
           openedAt: payload.openedAt ?? event.createdAt
         };
