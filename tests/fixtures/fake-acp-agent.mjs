@@ -1,8 +1,10 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 
-const sessions = new Map();
-let nextSession = 1;
+const statePath = join(process.cwd(), ".fake-acp-sessions.json");
+const sessions = loadSessions();
 
 const input = Writable.toWeb(process.stdout);
 const output = Readable.toWeb(process.stdin);
@@ -12,12 +14,27 @@ acp
   .agent({ name: "mission-fake-acp-agent" })
   .onRequest(acp.methods.agent.initialize, () => ({
     protocolVersion: acp.PROTOCOL_VERSION,
-    agentCapabilities: { loadSession: false }
+    agentCapabilities: {
+      loadSession: false,
+      sessionCapabilities: {
+        resume: {},
+        close: {}
+      }
+    }
   }))
   .onRequest(acp.methods.agent.session.new, ({ params }) => {
-    const sessionId = `fake-session-${nextSession++}`;
+    const sessionId = `fake-session-${process.pid}-${Date.now()}`;
     sessions.set(sessionId, { cwd: params.cwd, cancelled: false });
+    persistSessions();
     return { sessionId };
+  })
+  .onRequest(acp.methods.agent.session.resume, ({ params }) => {
+    const session = sessions.get(params.sessionId);
+    if (!session) throw new Error(`unknown session ${params.sessionId}`);
+    if (session.cwd !== params.cwd) throw new Error(`cwd mismatch for ${params.sessionId}`);
+    session.cancelled = false;
+    persistSessions();
+    return {};
   })
   .onRequest(acp.methods.agent.session.prompt, async ({ params, client }) => {
     const session = sessions.get(params.sessionId);
@@ -26,14 +43,20 @@ acp
       .filter(block => block.type === "text")
       .map(block => block.text)
       .join("\n");
+    const recoveryTurn = promptText.includes("Mission Runtime recovery continuation.");
 
     await client.notify(acp.methods.client.session.update, {
       sessionId: params.sessionId,
       update: {
         sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "fake agent started" }
+        content: { type: "text", text: recoveryTurn ? "fake agent resumed" : "fake agent started" }
       }
     });
+
+    if (promptText.includes('"disconnectForRecovery": true') && !recoveryTurn) {
+      persistSessions();
+      process.exit(70);
+    }
 
     if (promptText.includes('"waitForCancel": true')) {
       while (!session.cancelled) await new Promise(resolve => setTimeout(resolve, 10));
@@ -83,7 +106,7 @@ acp
       sessionId: params.sessionId,
       update: {
         sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "fake agent finished" }
+        content: { type: "text", text: recoveryTurn ? "fake agent recovery finished" : "fake agent finished" }
       }
     });
 
@@ -91,10 +114,28 @@ acp
   })
   .onRequest(acp.methods.agent.session.close, ({ params }) => {
     sessions.delete(params.sessionId);
+    persistSessions();
     return {};
   })
   .onNotification(acp.methods.agent.session.cancel, ({ params }) => {
     const session = sessions.get(params.sessionId);
-    if (session) session.cancelled = true;
+    if (session) {
+      session.cancelled = true;
+      persistSessions();
+    }
   })
   .connect(stream);
+
+function loadSessions() {
+  if (!existsSync(statePath)) return new Map();
+  try {
+    const parsed = JSON.parse(readFileSync(statePath, "utf8"));
+    return new Map(Object.entries(parsed));
+  } catch {
+    return new Map();
+  }
+}
+
+function persistSessions() {
+  writeFileSync(statePath, `${JSON.stringify(Object.fromEntries(sessions), null, 2)}\n`, "utf8");
+}

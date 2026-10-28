@@ -65,6 +65,24 @@ export interface ExecutionRequest {
   resourceRequest?: ResourceRequest;
 }
 
+/**
+ * Durable bridge between a Mission execution id and a host-native runtime.
+ * It contains only identity/location data needed to reconnect after the
+ * Mission process is replaced; task context remains reconstructable from the
+ * Mission event stream.
+ */
+export interface ExecutionRuntimeBinding {
+  executionId: string;
+  attemptId: string;
+  workItemId: string;
+  driverId: string;
+  routeId?: string;
+  hostHandleId: string;
+  nativeRef?: string;
+  workspaceRoot: string;
+  boundAt: string;
+}
+
 export interface ProducedFile {
   path: string;
   logicalName?: string;

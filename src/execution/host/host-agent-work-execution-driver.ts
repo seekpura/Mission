@@ -1,13 +1,14 @@
 import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { Artifact, ArtifactType } from "../../core/domain/artifact.ts";
-import type { ExecutionResult } from "../../core/domain/execution.ts";
+import type { ExecutionResult, ExecutionRuntimeBinding } from "../../core/domain/execution.ts";
 import type {
   WorkExecutionDriver,
   WorkExecutionInput,
-  WorkExecutionOutcome
+  WorkExecutionOutcome,
+  WorkRecoveryInput
 } from "../../core/execution/work-execution-driver.ts";
-import type { HostAdapter, HostAgentEvent } from "../../hosts/deepseek/host-adapter.ts";
+import type { HostAdapter, HostAgentEvent, HostAgentHandle } from "../../hosts/deepseek/host-adapter.ts";
 import { FileArtifactStore } from "../artifacts/artifact-store.ts";
 import { WorkspaceManager } from "../workspace/workspace-manager.ts";
 
@@ -28,6 +29,13 @@ interface OutputManifestEntry {
 
 interface OutputManifest {
   outputs: OutputManifestEntry[];
+}
+
+interface ExecutionIdentityInput {
+  workItem: WorkExecutionInput["workItem"];
+  contextPacket: WorkExecutionInput["contextPacket"];
+  attemptId: string;
+  executionId: string;
 }
 
 const ARTIFACT_TYPES = new Set<ArtifactType>([
@@ -53,6 +61,7 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
   private readonly manifestFileName: string;
   private readonly maxManifestBytes: number;
   private readonly hardTimeoutMs: number;
+  private readonly inFlight = new Map<string, Promise<WorkExecutionOutcome>>();
 
   constructor(
     host: HostAdapter,
@@ -68,20 +77,120 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
     this.hardTimeoutMs = Math.max(1_000, options.hardTimeoutMs ?? 30 * 60_000);
   }
 
+  isActive(executionId: string): boolean {
+    return this.inFlight.has(executionId);
+  }
+
   async execute(input: WorkExecutionInput): Promise<WorkExecutionOutcome> {
+    const existing = this.inFlight.get(input.executionId);
+    if (existing) return existing;
+    const operation = this.executeNew(input);
+    this.inFlight.set(input.executionId, operation);
+    try {
+      return await operation;
+    } finally {
+      this.inFlight.delete(input.executionId);
+    }
+  }
+
+  async recover(input: WorkRecoveryInput): Promise<WorkExecutionOutcome> {
+    const existing = this.inFlight.get(input.executionId);
+    if (existing) return existing;
+    const operation = this.recoverBound(input);
+    this.inFlight.set(input.executionId, operation);
+    try {
+      return await operation;
+    } finally {
+      this.inFlight.delete(input.executionId);
+    }
+  }
+
+  private async executeNew(input: WorkExecutionInput): Promise<WorkExecutionOutcome> {
     const startedAt = new Date().toISOString();
     const workspace = this.workspaces.allocate(input.workItem.missionId, input.attemptId);
     const manifestPath = resolve(workspace.root, this.manifestFileName);
+    const handle = await this.host.createAgent(this.agentRequest(input, workspace.root, manifestPath));
 
-    const handle = await this.host.createAgent({
+    const binding: ExecutionRuntimeBinding = {
+      executionId: input.executionId,
+      attemptId: input.attemptId,
+      workItemId: input.workItem.id,
+      driverId: this.id,
+      hostHandleId: handle.id,
+      ...(handle.nativeRef ? { nativeRef: handle.nativeRef } : {}),
+      workspaceRoot: workspace.root,
+      boundAt: new Date().toISOString()
+    };
+    await input.lifecycle?.bindRuntime(binding);
+
+    return this.observeAndCollect(input, workspace.root, manifestPath, handle, startedAt, "host-agent-events.jsonl");
+  }
+
+  private async recoverBound(input: WorkRecoveryInput): Promise<WorkExecutionOutcome> {
+    validateRecoveryBinding(this.id, input);
+    const startedAt = new Date().toISOString();
+    const workspace = this.workspaces.openExisting(input.workItem.missionId, input.attemptId);
+    if (resolve(workspace.root) !== resolve(input.binding.workspaceRoot)) {
+      throw new Error(
+        `Recovered workspace does not match binding for ${input.executionId}: ` +
+        `${input.binding.workspaceRoot} != ${workspace.root}`
+      );
+    }
+    if (!input.binding.nativeRef) {
+      return {
+        result: executionResult({
+          input,
+          state: "lost",
+          startedAt,
+          logRef: resolve(workspace.root, "host-agent-recovery-events.jsonl"),
+          runtimeObservationRef: "Execution binding has no host-native session reference"
+        }),
+        artifacts: []
+      };
+    }
+
+    const manifestPath = resolve(workspace.root, this.manifestFileName);
+    const resumed = await this.host.resumeAgent({
+      ...this.agentRequest(input, workspace.root, manifestPath),
+      handleId: input.binding.hostHandleId,
+      nativeRef: input.binding.nativeRef
+    });
+    if (resumed.status !== "resumed") {
+      return {
+        result: executionResult({
+          input,
+          state: resumed.status === "failed" ? "failed" : "lost",
+          startedAt,
+          logRef: resolve(workspace.root, "host-agent-recovery-events.jsonl"),
+          runtimeObservationRef: `Host session recovery ${resumed.status}: ${resumed.reason}`
+        }),
+        artifacts: []
+      };
+    }
+    if (resumed.handle.id !== input.binding.hostHandleId || resumed.handle.nativeRef !== input.binding.nativeRef) {
+      throw new Error(`Host resumed a different runtime identity for ${input.executionId}`);
+    }
+
+    return this.observeAndCollect(
+      input,
+      workspace.root,
+      manifestPath,
+      resumed.handle,
+      startedAt,
+      "host-agent-recovery-events.jsonl"
+    );
+  }
+
+  private agentRequest(input: ExecutionIdentityInput, workspaceRoot: string, manifestPath: string) {
+    return {
       missionId: input.workItem.missionId,
       workItemId: input.workItem.id,
-      workspaceRoot: workspace.root,
+      workspaceRoot,
       allowedCapabilityRefs: [...input.contextPacket.allowedCapabilityRefs],
       context: {
         contextPacket: input.contextPacket,
         executionContract: {
-          workspaceRoot: workspace.root,
+          workspaceRoot,
           outputManifest: {
             path: manifestPath,
             format: {
@@ -104,8 +213,17 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
           ]
         }
       }
-    });
+    };
+  }
 
+  private async observeAndCollect(
+    input: ExecutionIdentityInput,
+    workspaceRoot: string,
+    manifestPath: string,
+    handle: HostAgentHandle,
+    startedAt: string,
+    logFileName: string
+  ): Promise<WorkExecutionOutcome> {
     let observed: HostObservation;
     try {
       observed = await observeHost(this.host, handle, this.hardTimeoutMs);
@@ -114,7 +232,7 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
       throw error;
     }
 
-    const logRef = resolve(workspace.root, "host-agent-events.jsonl");
+    const logRef = resolve(workspaceRoot, logFileName);
     writeFileSync(
       logRef,
       observed.events.map(event => JSON.stringify(event)).join("\n") + (observed.events.length ? "\n" : ""),
@@ -122,12 +240,8 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
     );
 
     if (observed.timedOut) {
-      return {
-        result: executionResult({ input, state: "timed_out", startedAt, logRef }),
-        artifacts: []
-      };
+      return { result: executionResult({ input, state: "timed_out", startedAt, logRef }), artifacts: [] };
     }
-
     if (observed.terminal === "failed") {
       return {
         result: executionResult({
@@ -142,15 +256,11 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
         artifacts: []
       };
     }
-
     if (observed.terminal !== "completed") {
-      return {
-        result: executionResult({ input, state: "lost", startedAt, logRef }),
-        artifacts: []
-      };
+      return { result: executionResult({ input, state: "lost", startedAt, logRef }), artifacts: [] };
     }
 
-    const committed = this.commitDeclaredOutputs(input, workspace.root, manifestPath);
+    const committed = this.commitDeclaredOutputs(input, workspaceRoot, manifestPath);
     return {
       result: executionResult({
         input,
@@ -169,7 +279,7 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
   }
 
   private commitDeclaredOutputs(
-    input: WorkExecutionInput,
+    input: ExecutionIdentityInput,
     workspaceRoot: string,
     manifestPath: string
   ): Artifact[] {
@@ -178,9 +288,7 @@ export class HostAgentWorkExecutionDriver implements WorkExecutionDriver {
     const manifestRealPath = resolveWorkspaceFile(workspaceRoot, this.manifestFileName);
     const info = statSync(manifestRealPath);
     if (!info.isFile()) throw new Error(`Host output manifest is not a file: ${manifestPath}`);
-    if (info.size > this.maxManifestBytes) {
-      throw new Error(`Host output manifest exceeds ${this.maxManifestBytes} bytes`);
-    }
+    if (info.size > this.maxManifestBytes) throw new Error(`Host output manifest exceeds ${this.maxManifestBytes} bytes`);
 
     const manifest = parseManifest(readFileSync(manifestRealPath, "utf8"));
     const expectedByName = new Map(input.workItem.expectedOutputs.map(output => [output.logicalName, output]));
@@ -230,7 +338,7 @@ const TIMEOUT = Symbol("host-observation-timeout");
 
 async function observeHost(
   host: HostAdapter,
-  handle: { id: string; nativeRef?: string },
+  handle: HostAgentHandle,
   hardTimeoutMs: number
 ): Promise<HostObservation> {
   const iterator = host.observeAgent(handle)[Symbol.asyncIterator]();
@@ -291,6 +399,14 @@ async function nextWithTimeout<T>(
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+function validateRecoveryBinding(driverId: string, input: WorkRecoveryInput): void {
+  const binding = input.binding;
+  if (binding.driverId !== driverId) throw new Error(`Recovery binding driver mismatch: ${binding.driverId}`);
+  if (binding.executionId !== input.executionId) throw new Error(`Recovery binding execution mismatch: ${binding.executionId}`);
+  if (binding.attemptId !== input.attemptId) throw new Error(`Recovery binding attempt mismatch: ${binding.attemptId}`);
+  if (binding.workItemId !== input.workItem.id) throw new Error(`Recovery binding work item mismatch: ${binding.workItemId}`);
 }
 
 function parseManifest(raw: string): OutputManifest {
@@ -360,7 +476,7 @@ function validateManifestFileName(value: string): string {
 }
 
 function executionResult(input: {
-  input: WorkExecutionInput;
+  input: ExecutionIdentityInput;
   state: ExecutionResult["state"];
   startedAt: string;
   logRef: string;
@@ -381,7 +497,7 @@ function executionResult(input: {
   };
 }
 
-async function safeCancel(host: HostAdapter, handle: { id: string; nativeRef?: string }): Promise<void> {
+async function safeCancel(host: HostAdapter, handle: HostAgentHandle): Promise<void> {
   try {
     await host.cancelAgent(handle);
   } catch {

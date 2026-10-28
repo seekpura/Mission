@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { CapabilityDescriptor } from "../../core/domain/capability.ts";
 import type {
   AgentCreateRequest,
+  AgentResumeRequest,
   ApprovalRequest,
   ApprovalResult,
   ContextDelta,
@@ -9,6 +10,7 @@ import type {
   HostAdapter,
   HostAgentEvent,
   HostAgentHandle,
+  HostAgentResumeResult,
   HostCapabilityInvocation,
   HostCapabilityResult,
   HostDescriptor
@@ -30,6 +32,9 @@ export class FakeHostAdapter implements HostAdapter {
     };
   }
   async createAgent(_request: AgentCreateRequest): Promise<HostAgentHandle> { return { id: randomUUID() }; }
+  async resumeAgent(_request: AgentResumeRequest): Promise<HostAgentResumeResult> {
+    return { status: "unsupported", reason: "FakeHostAdapter does not model durable native sessions" };
+  }
   async steerAgent(_handle: HostAgentHandle, _delta: ContextDelta): Promise<void> {}
   async cancelAgent(_handle: HostAgentHandle): Promise<void> {}
   async *observeAgent(_handle: HostAgentHandle): AsyncIterable<HostAgentEvent> {

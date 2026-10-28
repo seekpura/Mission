@@ -1,5 +1,6 @@
 import type {
   AgentCreateRequest,
+  AgentResumeRequest,
   ApprovalRequest,
   ApprovalResult,
   ContextDelta,
@@ -7,6 +8,7 @@ import type {
   HostAdapter,
   HostAgentEvent,
   HostAgentHandle,
+  HostAgentResumeResult,
   HostCapabilityInvocation,
   HostCapabilityResult,
   HostDescriptor
@@ -16,6 +18,7 @@ export interface DeepSeekBindings {
   describe(): Promise<HostDescriptor>;
   environment(): Promise<EnvironmentSnapshot>;
   createAgent(request: AgentCreateRequest): Promise<HostAgentHandle>;
+  resumeAgent(request: AgentResumeRequest): Promise<HostAgentResumeResult>;
   steerAgent(handle: HostAgentHandle, delta: ContextDelta): Promise<void>;
   cancelAgent(handle: HostAgentHandle): Promise<void>;
   observeAgent(handle: HostAgentHandle): AsyncIterable<HostAgentEvent>;
@@ -29,6 +32,7 @@ export class DeepSeekHarnessAdapter implements HostAdapter {
   describeHost() { return this.bindings.describe(); }
   snapshotEnvironment() { return this.bindings.environment(); }
   createAgent(request: AgentCreateRequest) { return this.bindings.createAgent(request); }
+  resumeAgent(request: AgentResumeRequest) { return this.bindings.resumeAgent(request); }
   steerAgent(handle: HostAgentHandle, delta: ContextDelta) { return this.bindings.steerAgent(handle, delta); }
   cancelAgent(handle: HostAgentHandle) { return this.bindings.cancelAgent(handle); }
   observeAgent(handle: HostAgentHandle) { return this.bindings.observeAgent(handle); }

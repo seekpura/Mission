@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Artifact } from "../domain/artifact.ts";
 import type { CapabilityNeed } from "../domain/capability.ts";
+import type { ExecutionRuntimeBinding } from "../domain/execution.ts";
 import type { MissionDecision } from "../domain/decision.ts";
 import type { MissionEventType } from "../domain/event.ts";
 import type { MissionState } from "../domain/mission.ts";
@@ -8,6 +9,7 @@ import type { Finding, Gap, GapAssessment, VerificationResult } from "../domain/
 import type { WorkItem } from "../domain/work-item.ts";
 import type { CapabilityRuntime } from "../capabilities/capability-coordinator.ts";
 import { ContextCompiler } from "../context/context-compiler.ts";
+import { activeExecutions } from "../execution/recovery-view.ts";
 import type { WorkExecutionDriver, WorkExecutionOutcome } from "../execution/work-execution-driver.ts";
 import type { EventStore } from "../events/event-store.ts";
 import { projectMissionState } from "../events/state-projector.ts";
@@ -209,6 +211,13 @@ export class MissionController {
 
     this.capabilities?.restoreMissionCapabilities(input.missionId, view.journal.capabilities.values());
 
+    if (view.state.activeExecutionIds.length > 0) {
+      const recovery = await this.recoverActiveExecutions(input.missionId, view);
+      executionsDispatched.push(...recovery.executions);
+      verificationsScheduled.push(...recovery.verifications);
+      if (recovery.executions.length > 0) view = await this.cycleView(input.missionId);
+    }
+
     if (this.deliberation) {
       if (view.state.strategyRevision === null) {
         const proposal = await this.deliberation.composeStrategy({
@@ -387,6 +396,110 @@ export class MissionController {
     return projectMissionState(missionId, await this.store.list(missionId));
   }
 
+  private async recoverActiveExecutions(
+    missionId: string,
+    initialView: CycleView
+  ): Promise<{ executions: string[]; verifications: string[] }> {
+    const executions: string[] = [];
+    const verifications: string[] = [];
+    const active = activeExecutions(await this.store.list(missionId));
+
+    for (const execution of active) {
+      if (this.executionDriver?.isActive?.(execution.executionId)) continue;
+      const currentView = await this.cycleView(missionId);
+      const work = currentView.journal.workItems.get(execution.workItemId) ?? initialView.journal.workItems.get(execution.workItemId);
+      if (!work) {
+        await this.emit(
+          missionId,
+          "execution.lost",
+          { id: execution.executionId, attemptId: execution.attemptId, reason: "Recovery could not reconstruct the WorkItem." },
+          { type: "controller" },
+          `execution-lost:${execution.executionId}`
+        );
+        executions.push(execution.executionId);
+        continue;
+      }
+
+      if (!execution.binding) {
+        await this.recordRuntimeFailure(
+          missionId,
+          work,
+          execution.attemptId,
+          execution.executionId,
+          "execution.lost",
+          `Active execution ${execution.executionId} has no durable runtime binding.`
+        );
+        executions.push(execution.executionId);
+        continue;
+      }
+      if (!this.executionDriver?.recover) {
+        await this.recordRuntimeFailure(
+          missionId,
+          work,
+          execution.attemptId,
+          execution.executionId,
+          "execution.lost",
+          `Execution driver cannot recover active execution ${execution.executionId}.`
+        );
+        executions.push(execution.executionId);
+        continue;
+      }
+
+      const state = await this.state(missionId);
+      const contextPacket = this.contextCompiler.compile({
+        state,
+        workItem: work,
+        capabilityRefs: execution.capabilityRefs
+      });
+      const recoveryOrdinal = execution.recoveryCount + 1;
+      await this.emit(
+        missionId,
+        "execution.recovery.started",
+        {
+          id: execution.executionId,
+          workItemId: work.id,
+          attemptId: execution.attemptId,
+          recoveryOrdinal,
+          originalContextPacketId: execution.contextPacketId,
+          recoveryContextPacketId: contextPacket.id,
+          binding: execution.binding
+        },
+        { type: "controller" },
+        `execution-recovery-started:${execution.executionId}:${recoveryOrdinal}`
+      );
+      executions.push(execution.executionId);
+
+      let outcome: WorkExecutionOutcome;
+      try {
+        outcome = await this.executionDriver.recover({
+          state,
+          workItem: work,
+          contextPacket,
+          attemptId: execution.attemptId,
+          executionId: execution.executionId,
+          binding: execution.binding
+        });
+        assertExecutionOutcome(missionId, work, execution.attemptId, execution.executionId, outcome);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.recordRuntimeFailure(
+          missionId,
+          work,
+          execution.attemptId,
+          execution.executionId,
+          "execution.failed",
+          `Execution recovery failed for ${work.id}: ${message}`
+        );
+        continue;
+      }
+
+      const settled = await this.settleExecutionOutcome(missionId, work, execution.attemptId, outcome);
+      verifications.push(...settled.verifications);
+    }
+
+    return { executions, verifications };
+  }
+
   private async dispatchReadyWork(
     missionId: string,
     initialView: CycleView
@@ -448,115 +561,176 @@ export class MissionController {
           workItem: work,
           contextPacket,
           attemptId,
-          executionId
+          executionId,
+          lifecycle: {
+            bindRuntime: async binding => {
+              assertRuntimeBinding(work, attemptId, executionId, binding);
+              await this.emit(
+                missionId,
+                "execution.bound",
+                { id: executionId, binding },
+                { type: "host", id: binding.driverId },
+                `execution-bound:${executionId}`
+              );
+            }
+          }
         });
         assertExecutionOutcome(missionId, work, attemptId, executionId, outcome);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        await this.emit(missionId, "execution.failed", { id: executionId, workItemId: work.id, attemptId, error: message }, { type: "host" }, `execution-failed:${executionId}`);
-        await this.emit(missionId, "attempt.completed", { id: attemptId, status: "failed", failureCategory: "runtime" }, { type: "controller" }, `attempt-completed:${attemptId}`);
-        await this.emit(missionId, "work.failed", { id: work.id, attemptId, reason: message }, { type: "controller" }, `work-failed:${attemptId}`);
-        await this.openGap(missionId, {
-          id: `runtime-gap:${work.id}:${attemptId}`,
-          severity: "major",
-          description: `Execution failed for ${work.id}: ${message}`,
-          blocking: true,
-          category: "runtime",
-          requirementRefs: work.requirementRefs,
-          artifactRefs: work.inputArtifactRefs
-        });
+        await this.recordRuntimeFailure(
+          missionId,
+          work,
+          attemptId,
+          executionId,
+          "execution.failed",
+          `Execution failed for ${work.id}: ${message}`
+        );
         continue;
       }
 
-      await this.emitExecutionTerminal(missionId, work, attemptId, outcome);
-      if (outcome.result.state !== "succeeded") {
-        await this.emit(missionId, "attempt.completed", { id: attemptId, status: "failed", failureCategory: outcome.result.state }, { type: "controller" }, `attempt-completed:${attemptId}`);
-        await this.emit(missionId, "work.failed", { id: work.id, attemptId, reason: `execution ${outcome.result.state}` }, { type: "controller" }, `work-failed:${attemptId}`);
-        await this.openGap(missionId, {
-          id: `runtime-gap:${work.id}:${attemptId}`,
-          severity: "major",
-          description: `Execution ${executionId} ended in state ${outcome.result.state}.`,
-          blocking: true,
-          category: "runtime",
-          requirementRefs: work.requirementRefs,
-          artifactRefs: work.inputArtifactRefs
-        });
-        continue;
-      }
-
-      for (const artifact of outcome.artifacts) {
-        const ref = artifactRef(artifact);
-        await this.emit(
-          missionId,
-          "artifact.created",
-          { artifactRef: ref, artifact },
-          { type: "worker", id: this.executionDriver!.id },
-          `artifact-created:${ref}`
-        );
-      }
-
-      const missing = missingRequiredOutputs(work, outcome.artifacts);
-      let verificationFailed = false;
-      const gapEvidence = new Map<string, GapEvidenceAggregate>();
-      for (const expected of missing) {
-        verificationFailed = true;
-        await this.openGap(missionId, {
-          id: `missing-output:${work.id}:${attemptId}:${expected.logicalName}`,
-          severity: "major",
-          description: `Required output ${expected.logicalName} (${expected.type}) was not produced by ${work.id}.`,
-          blocking: true,
-          category: "missing_output",
-          requirementRefs: work.requirementRefs,
-          artifactRefs: work.inputArtifactRefs
-        });
-      }
-
-      if (outcome.artifacts.length > 0) {
-        await this.emit(missionId, "work.updated", { id: work.id, status: "verifying" }, { type: "controller" }, `work-verifying:${attemptId}`);
-        if (!this.verifier) {
-          verificationFailed = true;
-          await this.openGap(missionId, {
-            id: `verification-capability:${work.id}:${attemptId}`,
-            severity: "major",
-            description: `Artifacts were produced for ${work.id}, but no independent verifier is configured.`,
-            blocking: true,
-            category: "capability",
-            requirementRefs: work.requirementRefs,
-            artifactRefs: outcome.artifacts.map(artifactRef)
-          });
-        } else {
-          for (const artifact of outcome.artifacts) {
-            const verification = await this.verifyArtifact(missionId, work, artifact, attemptId);
-            verifications.push(verification.runId);
-            mergeGapEvidence(gapEvidence, verification);
-            if (!verification.passed) verificationFailed = true;
-          }
-        }
-      }
-
-      if (verificationFailed) {
-        await this.emit(missionId, "attempt.completed", { id: attemptId, status: "failed", failureCategory: "verification" }, { type: "controller" }, `attempt-completed:${attemptId}`);
-        await this.emit(missionId, "work.failed", { id: work.id, attemptId, reason: "verification failed" }, { type: "controller" }, `work-failed:${attemptId}`);
-      } else {
-        await this.resolveVerifiedGaps(missionId, work, gapEvidence);
-        await this.emit(
-          missionId,
-          "attempt.completed",
-          { id: attemptId, status: "succeeded", artifactRefs: outcome.artifacts.map(artifactRef) },
-          { type: "controller" },
-          `attempt-completed:${attemptId}`
-        );
-        await this.emit(
-          missionId,
-          "work.completed",
-          { id: work.id, attemptId, artifactRefs: outcome.artifacts.map(artifactRef) },
-          { type: "controller" },
-          `work-completed:${attemptId}`
-        );
-      }
+      const settled = await this.settleExecutionOutcome(missionId, work, attemptId, outcome);
+      verifications.push(...settled.verifications);
     }
 
     return { executions, verifications };
+  }
+
+  private async settleExecutionOutcome(
+    missionId: string,
+    work: WorkItem,
+    attemptId: string,
+    outcome: WorkExecutionOutcome
+  ): Promise<{ verifications: string[] }> {
+    const verifications: string[] = [];
+    const executionId = outcome.result.executionId;
+    await this.emitExecutionTerminal(missionId, work, attemptId, outcome);
+    if (outcome.result.state !== "succeeded") {
+      await this.emit(missionId, "attempt.completed", { id: attemptId, status: "failed", failureCategory: outcome.result.state }, { type: "controller" }, `attempt-completed:${attemptId}`);
+      await this.emit(missionId, "work.failed", { id: work.id, attemptId, reason: `execution ${outcome.result.state}` }, { type: "controller" }, `work-failed:${attemptId}`);
+      await this.openGap(missionId, {
+        id: `runtime-gap:${work.id}:${attemptId}`,
+        severity: "major",
+        description: `Execution ${executionId} ended in state ${outcome.result.state}.`,
+        blocking: true,
+        category: "runtime",
+        requirementRefs: work.requirementRefs,
+        artifactRefs: work.inputArtifactRefs
+      });
+      return { verifications };
+    }
+
+    for (const artifact of outcome.artifacts) {
+      const ref = artifactRef(artifact);
+      await this.emit(
+        missionId,
+        "artifact.created",
+        { artifactRef: ref, artifact },
+        { type: "worker", id: this.executionDriver!.id },
+        `artifact-created:${ref}`
+      );
+    }
+
+    const missing = missingRequiredOutputs(work, outcome.artifacts);
+    let verificationFailed = false;
+    const gapEvidence = new Map<string, GapEvidenceAggregate>();
+    for (const expected of missing) {
+      verificationFailed = true;
+      await this.openGap(missionId, {
+        id: `missing-output:${work.id}:${attemptId}:${expected.logicalName}`,
+        severity: "major",
+        description: `Required output ${expected.logicalName} (${expected.type}) was not produced by ${work.id}.`,
+        blocking: true,
+        category: "missing_output",
+        requirementRefs: work.requirementRefs,
+        artifactRefs: work.inputArtifactRefs
+      });
+    }
+
+    if (outcome.artifacts.length > 0) {
+      await this.emit(missionId, "work.updated", { id: work.id, status: "verifying" }, { type: "controller" }, `work-verifying:${attemptId}`);
+      if (!this.verifier) {
+        verificationFailed = true;
+        await this.openGap(missionId, {
+          id: `verification-capability:${work.id}:${attemptId}`,
+          severity: "major",
+          description: `Artifacts were produced for ${work.id}, but no independent verifier is configured.`,
+          blocking: true,
+          category: "capability",
+          requirementRefs: work.requirementRefs,
+          artifactRefs: outcome.artifacts.map(artifactRef)
+        });
+      } else {
+        for (const artifact of outcome.artifacts) {
+          const verification = await this.verifyArtifact(missionId, work, artifact, attemptId);
+          verifications.push(verification.runId);
+          mergeGapEvidence(gapEvidence, verification);
+          if (!verification.passed) verificationFailed = true;
+        }
+      }
+    }
+
+    if (verificationFailed) {
+      await this.emit(missionId, "attempt.completed", { id: attemptId, status: "failed", failureCategory: "verification" }, { type: "controller" }, `attempt-completed:${attemptId}`);
+      await this.emit(missionId, "work.failed", { id: work.id, attemptId, reason: "verification failed" }, { type: "controller" }, `work-failed:${attemptId}`);
+    } else {
+      await this.resolveVerifiedGaps(missionId, work, gapEvidence);
+      await this.emit(
+        missionId,
+        "attempt.completed",
+        { id: attemptId, status: "succeeded", artifactRefs: outcome.artifacts.map(artifactRef) },
+        { type: "controller" },
+        `attempt-completed:${attemptId}`
+      );
+      await this.emit(
+        missionId,
+        "work.completed",
+        { id: work.id, attemptId, artifactRefs: outcome.artifacts.map(artifactRef) },
+        { type: "controller" },
+        `work-completed:${attemptId}`
+      );
+    }
+    return { verifications };
+  }
+
+  private async recordRuntimeFailure(
+    missionId: string,
+    work: WorkItem,
+    attemptId: string,
+    executionId: string,
+    terminalType: "execution.failed" | "execution.lost",
+    reason: string
+  ): Promise<void> {
+    await this.emit(
+      missionId,
+      terminalType,
+      { id: executionId, workItemId: work.id, attemptId, error: reason },
+      { type: "host", id: this.executionDriver?.id },
+      `${terminalType}:${executionId}`
+    );
+    await this.emit(
+      missionId,
+      "attempt.completed",
+      { id: attemptId, status: "failed", failureCategory: terminalType === "execution.lost" ? "lost" : "runtime" },
+      { type: "controller" },
+      `attempt-completed:${attemptId}`
+    );
+    await this.emit(
+      missionId,
+      "work.failed",
+      { id: work.id, attemptId, reason },
+      { type: "controller" },
+      `work-failed:${attemptId}`
+    );
+    await this.openGap(missionId, {
+      id: `runtime-gap:${work.id}:${attemptId}`,
+      severity: "major",
+      description: reason,
+      blocking: true,
+      category: "runtime",
+      requirementRefs: work.requirementRefs,
+      artifactRefs: work.inputArtifactRefs
+    });
   }
 
   private async resolveWorkCapabilities(
@@ -980,6 +1154,20 @@ function normalizeCapabilityNeed(need: CapabilityNeed) {
     requirementRefs: [...need.requirementRefs],
     gapRefs: [...need.gapRefs]
   };
+}
+
+function assertRuntimeBinding(
+  work: WorkItem,
+  attemptId: string,
+  executionId: string,
+  binding: ExecutionRuntimeBinding
+): void {
+  if (binding.executionId !== executionId) throw new Error(`Runtime binding execution mismatch for ${work.id}`);
+  if (binding.attemptId !== attemptId) throw new Error(`Runtime binding attempt mismatch for ${work.id}`);
+  if (binding.workItemId !== work.id) throw new Error(`Runtime binding work item mismatch for ${work.id}`);
+  if (!binding.driverId.trim()) throw new Error(`Runtime binding missing driver id for ${work.id}`);
+  if (!binding.hostHandleId.trim()) throw new Error(`Runtime binding missing host handle id for ${work.id}`);
+  if (!binding.workspaceRoot.trim()) throw new Error(`Runtime binding missing workspace for ${work.id}`);
 }
 
 function assertExecutionOutcome(

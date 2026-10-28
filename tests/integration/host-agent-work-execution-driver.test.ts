@@ -7,6 +7,7 @@ import test from "node:test";
 import type { CapabilityDescriptor } from "../../src/core/domain/capability.ts";
 import type {
   AgentCreateRequest,
+  AgentResumeRequest,
   ApprovalRequest,
   ApprovalResult,
   ContextDelta,
@@ -14,6 +15,7 @@ import type {
   HostAdapter,
   HostAgentEvent,
   HostAgentHandle,
+  HostAgentResumeResult,
   HostCapabilityInvocation,
   HostCapabilityResult,
   HostDescriptor
@@ -60,6 +62,9 @@ class WritingHost implements HostAdapter {
     return { id: `agent-${this.nextId++}` };
   }
 
+  async resumeAgent(_request: AgentResumeRequest): Promise<HostAgentResumeResult> {
+    return { status: "unsupported", reason: "WritingHost has no durable native session" };
+  }
   async steerAgent(_handle: HostAgentHandle, _delta: ContextDelta): Promise<void> {}
   async cancelAgent(_handle: HostAgentHandle): Promise<void> {}
   async *observeAgent(_handle: HostAgentHandle): AsyncIterable<HostAgentEvent> {

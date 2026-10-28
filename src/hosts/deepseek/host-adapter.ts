@@ -36,6 +36,15 @@ export interface AgentCreateRequest {
   workspaceRoot?: string;
 }
 
+export interface AgentResumeRequest extends AgentCreateRequest {
+  handleId: string;
+  nativeRef: string;
+}
+
+export type HostAgentResumeResult =
+  | { status: "resumed"; handle: HostAgentHandle }
+  | { status: "unsupported" | "not_found" | "failed"; reason: string };
+
 export interface HostAgentEvent {
   type: "started" | "message" | "tool" | "artifact" | "completed" | "failed";
   payload: unknown;
@@ -69,6 +78,7 @@ export interface HostAdapter {
   describeHost(): Promise<HostDescriptor>;
   snapshotEnvironment(): Promise<EnvironmentSnapshot>;
   createAgent(request: AgentCreateRequest): Promise<HostAgentHandle>;
+  resumeAgent(request: AgentResumeRequest): Promise<HostAgentResumeResult>;
   steerAgent(handle: HostAgentHandle, delta: ContextDelta): Promise<void>;
   cancelAgent(handle: HostAgentHandle): Promise<void>;
   observeAgent(handle: HostAgentHandle): AsyncIterable<HostAgentEvent>;
