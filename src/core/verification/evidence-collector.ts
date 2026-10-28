@@ -72,7 +72,11 @@ export class VerificationEvidenceCollectorRegistry {
 
   async collect(input: VerificationEvidenceCollectorInput): Promise<VerificationEvidenceCollection> {
     const applicable = this.collectors.filter(collector => collector.supports(input));
-    const settled = await Promise.allSettled(applicable.map(collector => Promise.resolve(collector.collect(input))));
+    // Start collection from a resolved promise so synchronous throws are turned
+    // into rejected promises and isolated by allSettled just like async failures.
+    const settled = await Promise.allSettled(
+      applicable.map(collector => Promise.resolve().then(() => collector.collect(input)))
+    );
     const collected: VerificationEvidenceCollectedDraft[] = [];
     const failures: VerificationEvidenceCollectorFailure[] = [];
 
