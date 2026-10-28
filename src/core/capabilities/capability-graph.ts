@@ -96,7 +96,7 @@ function inferDelivery(descriptor: CapabilityDescriptor): CapabilityDeliveryMode
 
 function inferIsolation(descriptor: CapabilityDescriptor): CapabilityIsolationLevel {
   if (descriptor.permissions.some(permission => permission.includes("container"))) return "container";
-  if (descriptor.permissions.some(permission => permission.includes("remote"))) return "remote";
+  if (descriptor.permissions.some(permission => permission.includes("mcp-http") || permission.includes("remote"))) return "remote";
   if (descriptor.permissions.some(permission => permission.includes("restricted"))) return "restricted";
   if (descriptor.permissions.some(permission => permission.includes("process") || permission.includes("stdio"))) return "process";
   if (descriptor.hostNative) return "host";
@@ -118,6 +118,7 @@ function inferSideEffects(descriptor: CapabilityDescriptor): CapabilitySideEffec
 }
 
 function inferTrust(descriptor: CapabilityDescriptor): CapabilityTrustLevel {
+  if (descriptor.kind === "mcp" && descriptor.id.startsWith("trusted-mcp:")) return "operator-trusted";
   if (descriptor.hostNative) return "host-native";
   if (descriptor.scope === "trusted-cache") return "trusted-cache";
   if (descriptor.scope === "mission") return "mission-acquired";
