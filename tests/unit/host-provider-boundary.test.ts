@@ -13,8 +13,12 @@ function sourceFiles(root: string): string[] {
   return files;
 }
 
-test("generic runtime and execution modules do not import HostAdapter through a provider namespace", () => {
-  const roots = [join(process.cwd(), "src", "runtime"), join(process.cwd(), "src", "execution")];
+test("generic core, runtime and execution modules do not import HostAdapter through a provider namespace", () => {
+  const roots = [
+    join(process.cwd(), "src", "core"),
+    join(process.cwd(), "src", "runtime"),
+    join(process.cwd(), "src", "execution")
+  ];
   const violations: string[] = [];
   for (const root of roots) {
     for (const file of sourceFiles(root)) {
