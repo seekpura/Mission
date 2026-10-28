@@ -16,6 +16,7 @@ import type { InvocationReceipt } from "../../core/domain/invocation.ts";
 import { writeExecutionRecoveryManifest } from "../recovery/recovery-manifest.ts";
 import type { WorkerKnowledgeIngestor } from "../../core/knowledge/worker-knowledge-ingestor.ts";
 import { KnowledgeContextSelector } from "../../core/context/knowledge-context-selector.ts";
+import type { KnowledgeStalenessManager } from "../../core/knowledge/knowledge-staleness-manager.ts";
 
 export interface MissionOrchestratorOptions {
   maxConcurrency?: number;
@@ -36,6 +37,7 @@ export class MissionOrchestrator {
   private readonly capabilityCoordinator?: CapabilityCoordinator;
   private readonly executionRouter?: WorkExecutionRouter;
   private readonly knowledgeIngestor?: WorkerKnowledgeIngestor;
+  private readonly knowledge?: KnowledgeStalenessManager;
   private readonly knowledgeSelector = new KnowledgeContextSelector();
   private readonly running = new Map<string, Promise<void>>();
   private readonly rerunRequested = new Set<string>();
@@ -52,6 +54,7 @@ export class MissionOrchestrator {
     capabilityCoordinator?: CapabilityCoordinator;
     executionRouter?: WorkExecutionRouter;
     knowledgeIngestor?: WorkerKnowledgeIngestor;
+    knowledge?: KnowledgeStalenessManager;
     assurance?: ArtifactAssurancePipeline;
     options?: MissionOrchestratorOptions;
   }) {
@@ -67,6 +70,7 @@ export class MissionOrchestrator {
     this.capabilityCoordinator = input.capabilityCoordinator;
     this.executionRouter = input.executionRouter;
     this.knowledgeIngestor = input.knowledgeIngestor;
+    this.knowledge = input.knowledge;
     this.assurance = input.assurance ?? new ArtifactAssurancePipeline({ controller: input.controller, projections: input.projections, artifacts: input.artifacts, verifier: input.verifier });
   }
 
@@ -99,6 +103,7 @@ export class MissionOrchestrator {
 
   async runUntilQuiescent(missionId: string): Promise<void> {
     for (let cycle = 0; cycle < this.maxCyclesPerWake; cycle++) {
+      await this.knowledge?.scanFreshness(missionId);
       await this.controller.runControllerCycle({ missionId, trigger: cycle === 0 ? "manual" : "execution_event" });
       const state = await this.controller.state(missionId);
       if (["completed", "cancelled", "failed", "blocked", "plateau"].includes(state.status)) return;

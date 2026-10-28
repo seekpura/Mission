@@ -120,6 +120,7 @@ export class MissionRuntime {
         }),
         executionRouter,
         knowledgeIngestor: new WorkerKnowledgeIngestor({ knowledge: this.knowledge, projections: this.projections }),
+        knowledge: this.knowledge,
         options: { maxConcurrency: options.maxConcurrency }
       });
     }
