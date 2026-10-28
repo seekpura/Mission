@@ -5,6 +5,7 @@ import { DeepSeekAcpProcessBindings } from "../hosts/deepseek/acp-process-bindin
 import { MissionDatabase } from "../persistence/sqlite/database.ts";
 import { SqliteEventStore } from "../persistence/sqlite/sqlite-event-store.ts";
 import { SqliteMissionCatalog } from "../persistence/sqlite/sqlite-mission-catalog.ts";
+import { SqliteMissionReader } from "../persistence/sqlite/sqlite-mission-reader.ts";
 import { MissionController } from "../core/mission/controller.ts";
 import { ExecutorRouter } from "../core/execution/executor-router.ts";
 import { MissionCapabilityOverlay } from "../core/capabilities/mission-capability-overlay.ts";
@@ -52,6 +53,7 @@ export interface MissionRuntime {
   database: MissionDatabase;
   events: SqliteEventStore;
   catalog: SqliteMissionCatalog;
+  reader: SqliteMissionReader;
   host: HostAdapter;
   approvals: RuntimeApprovalManager;
   controller: MissionController;
@@ -66,6 +68,7 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   database.migrate(resolve(options.schemaPath));
   const events = new SqliteEventStore(database);
   const catalog = new SqliteMissionCatalog(database);
+  const reader = new SqliteMissionReader(database);
   const approvals = new RuntimeApprovalManager(events, { timeoutMs: options.approvalTimeoutMs });
 
   const baseHost = options.host ?? new DeepSeekHarnessAdapter(new DeepSeekAcpProcessBindings({
@@ -86,10 +89,11 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const deliberation = new HostDeliberationProvider({
     transport: controlTransport,
     events,
+    reader,
     knownExecutorIds: [executorId],
     defaultExecutorId: executorId
   });
-  const verifier = new HostArtifactVerifier({ transport: controlTransport, events });
+  const verifier = new HostArtifactVerifier({ transport: controlTransport, events, reader });
   const workDriver = new HostAgentWorkExecutionDriver(
     host,
     new WorkspaceManager(resolve(root, "workspaces")),
@@ -107,13 +111,14 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     approvals,
     acquisition: options.capabilityAcquisition
   });
-  const controller = new MissionController(events, deliberation, execution, verifier, capabilities);
+  const controller = new MissionController(events, deliberation, execution, verifier, capabilities, reader);
   const supervisor = new MissionSupervisor(controller, events, { maxCyclesPerWake: options.maxSupervisorCycles });
 
   return {
     database,
     events,
     catalog,
+    reader,
     host,
     approvals,
     controller,
