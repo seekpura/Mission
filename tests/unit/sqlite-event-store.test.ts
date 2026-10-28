@@ -18,7 +18,11 @@ test("SQLite event store appends in order and enforces optimistic concurrency", 
   assert.equal(e1.sequence, 1);
   await assert.rejects(() => store.append({
     id: "e2", missionId: "m1", type: "mission.completed", actor: { type: "controller" }, payload: {}, schemaVersion: 1, createdAt: new Date().toISOString()
-  }, 0), ConcurrencyConflictError);
+  }, 0), error => {
+    assert.equal(error instanceof ConcurrencyConflictError, true);
+    assert.equal((error as Error).name, "ConcurrencyConflictError");
+    return true;
+  });
   const events = await store.list("m1");
   assert.equal(events.length, 1);
   db.close();
