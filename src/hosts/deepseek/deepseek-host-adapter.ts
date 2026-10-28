@@ -30,7 +30,41 @@ export class DeepSeekHarnessAdapter implements HostAdapter {
   private readonly bindings: DeepSeekBindings;
   constructor(bindings: DeepSeekBindings) { this.bindings = bindings; }
   describeHost() { return this.bindings.describe(); }
-  snapshotEnvironment() { return this.bindings.environment(); }
+  async snapshotEnvironment(): Promise<EnvironmentSnapshot> {
+    const snapshot = await this.bindings.environment();
+    return {
+      ...snapshot,
+      capabilities: snapshot.capabilities.map(capability => {
+        if (capability.id !== "deepseek-harness.acp-agent") return capability;
+        return {
+          ...capability,
+          functions: capability.functions ?? [
+            "create agent session",
+            "resume agent session",
+            "execute mission work",
+            "observe agent execution",
+            "produce workspace artifacts"
+          ],
+          accepts: capability.accepts ?? ["mission context", "work item", "workspace", "capability instructions"],
+          produces: capability.produces ?? ["artifact", "execution evidence", "agent events"],
+          constraints: capability.constraints ?? {
+            supportedPurposes: ["production", "verification", "research", "integration"]
+          },
+          routing: capability.routing ?? {
+            executionMode: "host-agent",
+            resumable: true,
+            concurrent: true,
+            isolation: "host"
+          },
+          cost: capability.cost ?? {
+            monetaryClass: "unknown",
+            latencyClass: "interactive",
+            metered: true
+          }
+        };
+      })
+    };
+  }
   createAgent(request: AgentCreateRequest) { return this.bindings.createAgent(request); }
   resumeAgent(request: AgentResumeRequest) { return this.bindings.resumeAgent(request); }
   steerAgent(handle: HostAgentHandle, delta: ContextDelta) { return this.bindings.steerAgent(handle, delta); }
