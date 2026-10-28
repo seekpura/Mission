@@ -2,7 +2,7 @@ import type { MissionEvent } from "../../core/domain/event.ts";
 import type { InvocationReceipt } from "../../core/domain/invocation.ts";
 import type { AcceptanceContract, MissionSpec, MissionState, Requirement } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
-import type { Evidence, Gap, VerificationResult } from "../../core/domain/verification.ts";
+import type { Evidence, Finding, Gap, VerificationResult } from "../../core/domain/verification.ts";
 import type { Artifact } from "../../core/domain/artifact.ts";
 import type { AcquisitionReceipt, CapabilityDescriptor, CapabilityNeed } from "../../core/domain/capability.ts";
 import { applyMissionEvent, initialMissionState } from "../../core/events/state-projector.ts";
@@ -51,6 +51,7 @@ export class SqliteProjectionStore implements MissionProjectionReader, MissionPr
     db.prepare("DELETE FROM verification_results WHERE mission_id = ?").run(missionId);
     db.prepare("DELETE FROM artifacts WHERE mission_id = ?").run(missionId);
     db.prepare("DELETE FROM work_items WHERE mission_id = ?").run(missionId);
+    db.prepare("DELETE FROM findings WHERE mission_id = ?").run(missionId);
     db.prepare("DELETE FROM gaps WHERE mission_id = ?").run(missionId);
     db.prepare("DELETE FROM decisions WHERE mission_id = ?").run(missionId);
     db.prepare("DELETE FROM approvals WHERE mission_id = ?").run(missionId);
@@ -132,6 +133,12 @@ export class SqliteProjectionStore implements MissionProjectionReader, MissionPr
     const rows = this.database.db.prepare("SELECT data_json FROM work_items WHERE mission_id = ? ORDER BY priority DESC, created_at ASC")
       .all(missionId) as Array<{ data_json: string }>;
     return rows.map(row => JSON.parse(row.data_json) as WorkItem);
+  }
+
+  async listFindings(missionId: string): Promise<Finding[]> {
+    const rows = this.database.db.prepare("SELECT data_json FROM findings WHERE mission_id = ? ORDER BY created_at ASC")
+      .all(missionId) as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as Finding);
   }
 
   async listGaps(missionId: string): Promise<Gap[]> {
