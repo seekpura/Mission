@@ -102,8 +102,7 @@ export function applyMissionEvent(state: MissionState, event: MissionEvent): Mis
     }
     case "work.completed":
     case "work.failed":
-    case "work.invalidated":
-    case "work.superseded": {
+    case "work.invalidated": {
       const id = (event.payload as { id: string }).id;
       removeWorkFromStatusLists(state, id);
       break;
