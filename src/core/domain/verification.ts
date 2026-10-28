@@ -9,6 +9,10 @@ export interface VerificationCheck {
   method: VerificationMethod;
   priority: "critical" | "required" | "preferred";
   requirementRefs: string[];
+  config?: {
+    runtime?: { command: string; args?: string[]; timeoutMs?: number; env?: Record<string, string> };
+    integration?: { mode: "artifacts-present"; artifactLogicalNames: string[] };
+  };
 }
 
 export interface VerificationProfile {

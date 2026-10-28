@@ -20,7 +20,7 @@ export class ProfiledVerifier implements Verifier {
         results.push({ id: check.id, status: "inconclusive", detail: `No verifier is available for required method: ${check.method}`, evidenceRefs: [], method: check.method, priority: check.priority, category: check.category, requirementRefs: check.requirementRefs });
         continue;
       }
-      results.push(await executor.execute(artifact, check, { missionId: artifact.missionId }));
+      results.push(await executor.execute(artifact, check, { missionId: artifact.missionId, artifacts: context.artifacts }));
     }
     const required = results.filter(result => result.priority !== "preferred");
     const hasFail = required.some(result => result.status === "fail");

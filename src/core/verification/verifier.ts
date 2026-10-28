@@ -6,6 +6,7 @@ export interface VerificationContext {
   acceptanceContract?: AcceptanceContract | null;
   requirements?: Requirement[];
   explicitRequirementRefs?: string[];
+  artifacts?: Artifact[];
 }
 
 export interface Verifier {

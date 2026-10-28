@@ -19,6 +19,10 @@ export class VerificationPlanner {
     for (const requirement of linked) {
       const method = methodForRequirement(requirement);
       if (method === "deterministic") continue;
+      const covered = (context.acceptanceContract?.requiredValidations ?? []).some(validation =>
+        validation.requirementRefs.includes(requirement.id) && methodForValidation(validation.level ?? "quality", artifact.type) === method
+      );
+      if (covered) continue;
       checks.push(check(
         `requirement-${requirement.id}`,
         requirement.description,
@@ -41,7 +45,8 @@ export class VerificationPlanner {
         level,
         methodForValidation(level, artifact.type),
         "required",
-        refs
+        refs,
+        { runtime: validation.runtime, integration: validation.integration }
       ));
     }
 
@@ -87,14 +92,14 @@ function methodForValidation(level: VerificationCheck["level"], artifactType: st
   return "semantic";
 }
 
-function check(id: string, description: string, category: VerificationCheck["category"], level: VerificationCheck["level"], method: VerificationMethod, priority: VerificationCheck["priority"], requirementRefs: string[]): VerificationCheck {
-  return { id, description, category, level, method, priority, requirementRefs };
+function check(id: string, description: string, category: VerificationCheck["category"], level: VerificationCheck["level"], method: VerificationMethod, priority: VerificationCheck["priority"], requirementRefs: string[], config?: VerificationCheck["config"]): VerificationCheck {
+  return { id, description, category, level, method, priority, requirementRefs, config };
 }
 
 function dedupe(checks: VerificationCheck[]): VerificationCheck[] {
   const seen = new Set<string>();
   return checks.filter(check => {
-    const key = `${check.id}:${check.method}:${check.requirementRefs.join(",")}`;
+    const key = `${check.id}:${check.method}:${check.requirementRefs.join(",")}:${JSON.stringify(check.config ?? {})}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -103,7 +108,7 @@ function dedupe(checks: VerificationCheck[]): VerificationCheck[] {
 
 function fingerprint(checks: VerificationCheck[]): string {
   let hash = 2166136261;
-  for (const char of checks.map(check => `${check.id}:${check.method}:${check.priority}`).sort().join("|")) {
+  for (const char of checks.map(check => `${check.id}:${check.method}:${check.priority}:${JSON.stringify(check.config ?? {})}`).sort().join("|")) {
     hash ^= char.charCodeAt(0);
     hash = Math.imul(hash, 16777619);
   }
