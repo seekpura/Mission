@@ -51,7 +51,7 @@ function missionState(missionId: string): MissionState {
     cancelledWorkItemRefs: [],
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z"
-  } as MissionState;
+  } as unknown as MissionState;
 }
 
 class BlockingHost implements HostAdapter {
