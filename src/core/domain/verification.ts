@@ -1,3 +1,22 @@
+
+export type VerificationMethod = "deterministic" | "semantic" | "perceptual" | "runtime" | "source" | "human" | "integration";
+
+export interface VerificationCheck {
+  id: string;
+  description: string;
+  category: "structural" | "functional" | "content" | "visual" | "technical" | "integration" | "evidence" | "constraint";
+  level: "structural" | "functional" | "quality" | "integration" | "mission";
+  method: VerificationMethod;
+  priority: "critical" | "required" | "preferred";
+  requirementRefs: string[];
+}
+
+export interface VerificationProfile {
+  id: string;
+  artifactType: string;
+  checks: VerificationCheck[];
+}
+
 export interface FindingLocation {
   page?: number;
   slide?: number;
@@ -40,6 +59,10 @@ export interface VerificationCheckResult {
   status: "pass" | "fail" | "warning" | "inconclusive";
   detail?: string;
   evidenceRefs: string[];
+  method?: VerificationMethod;
+  priority?: "critical" | "required" | "preferred";
+  category?: VerificationCheck["category"];
+  requirementRefs?: string[];
 }
 
 export interface VerificationResult {
