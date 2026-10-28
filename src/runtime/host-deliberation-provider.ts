@@ -6,6 +6,7 @@ import type { ArtifactExpectation, LocalAcceptanceCriterion, WorkItem, WorkPurpo
 import type { Gap } from "../core/domain/verification.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 import { projectMissionJournal } from "../core/mission/journal-view.ts";
+import type { MissionReadModelReader } from "../core/mission/mission-reader.ts";
 import type {
   CompletionChallenge,
   DeliberationProvider,
@@ -18,6 +19,7 @@ import type { HostJsonTransport } from "./host-agent-json-transport.ts";
 export interface HostDeliberationProviderOptions {
   transport: HostJsonTransport;
   events: EventStore;
+  reader?: MissionReadModelReader;
   knownExecutorIds: string[];
   defaultExecutorId?: string;
   maxFrontierWorkItems?: number;
@@ -47,6 +49,7 @@ const GAP_INTERVENTIONS = new Set<GapDiagnosis["intervention"]>([
 export class HostDeliberationProvider implements DeliberationProvider {
   private readonly transport: HostJsonTransport;
   private readonly events: EventStore;
+  private readonly reader?: MissionReadModelReader;
   private readonly knownExecutorIds: Set<string>;
   private readonly defaultExecutorId?: string;
   private readonly maxFrontierWorkItems: number;
@@ -55,6 +58,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
   constructor(options: HostDeliberationProviderOptions) {
     this.transport = options.transport;
     this.events = options.events;
+    this.reader = options.reader;
     this.knownExecutorIds = new Set(options.knownExecutorIds);
     this.defaultExecutorId = options.defaultExecutorId;
     this.maxFrontierWorkItems = Math.max(1, options.maxFrontierWorkItems ?? 8);
@@ -230,6 +234,22 @@ export class HostDeliberationProvider implements DeliberationProvider {
   }
 
   private async context(missionId: string): Promise<DurablePlannerContext> {
+    if (this.reader) {
+      const [journal, strategy] = await Promise.all([
+        this.reader.journal(missionId),
+        this.reader.latestStrategy(missionId)
+      ]);
+      return {
+        missionId,
+        userGoal: journal.userGoal,
+        ...(strategy ? { strategy } : {}),
+        capabilityNeeds: [...journal.capabilityNeeds.values()],
+        workItems: [...journal.workItems.values()],
+        artifacts: [...journal.artifacts.values()],
+        openGaps: [...journal.gaps.values()].filter(gap => gap.status === "open" || gap.status === "working" || gap.status === "blocked")
+      };
+    }
+
     const events = await this.events.list(missionId);
     const journal = projectMissionJournal(missionId, events);
     let strategy: StrategyProposal | undefined;
