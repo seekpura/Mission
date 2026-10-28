@@ -23,6 +23,12 @@ export interface MissionSpec {
   createdAt: string;
 }
 
+export interface MissionSteeringMessage {
+  sequence: number;
+  message: string;
+  receivedAt: string;
+}
+
 export interface Requirement {
   id: string;
   description: string;
@@ -50,6 +56,8 @@ export interface MissionState {
   missionSpecRevision: number;
   acceptanceRevision: number;
   strategyRevision: number | null;
+  /** Highest durable user-steering event sequence incorporated into strategy. */
+  strategyAppliedSteeringSequence?: number;
   graphRevision: number;
   environmentSnapshotRevision: number;
   activeWorkstreamIds: string[];
