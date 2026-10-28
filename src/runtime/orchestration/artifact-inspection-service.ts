@@ -81,7 +81,13 @@ export class ArtifactInspectionService {
           sourceArtifactRefs: [sourceRef],
           mimeType: product.mimeType
         });
-        await this.controller.recordArtifact(artifact.missionId, inspectionArtifact, "verifier");
+        await this.controller.emit(
+          artifact.missionId,
+          "artifact.created",
+          { artifact: inspectionArtifact },
+          { type: "verifier", id: bundle.providerId },
+          `artifact-created:${inspectionArtifact.id}:${inspectionArtifact.version}`
+        );
         derived.push(inspectionArtifact);
       }
       if (!derived.some(item => item.sourceArtifactRefs.includes(sourceRef) && item.logicalName.includes(safeSegment(request.kind)))) {
