@@ -72,6 +72,8 @@ interface JsonRpcHandlers {
   onServerRequest(method: string, params: unknown): Promise<unknown>;
 }
 
+type CodexSandboxMode = "read-only" | "workspace-write";
+
 export class CodexAppServerHostAdapter implements HostAdapter {
   private readonly binary: string;
   private readonly argsPrefix: string[];
@@ -153,6 +155,8 @@ export class CodexAppServerHostAdapter implements HostAdapter {
             "turn-interrupt",
             "observe-events",
             "workspace-context",
+            "workspace-write",
+            "control-read-only",
             "command-approval",
             "file-change-approval"
           ],
@@ -168,8 +172,8 @@ export class CodexAppServerHostAdapter implements HostAdapter {
       revision: 1,
       host,
       capabilities,
-      shellAvailable: false,
-      filesystemAvailable: false,
+      shellAvailable: true,
+      filesystemAvailable: true,
       browserAvailable: false
     });
     return {
@@ -177,8 +181,8 @@ export class CodexAppServerHostAdapter implements HostAdapter {
       host,
       capabilities,
       capabilityGraph,
-      shellAvailable: false,
-      filesystemAvailable: false,
+      shellAvailable: true,
+      filesystemAvailable: true,
       browserAvailable: false,
       capturedAt: new Date().toISOString()
     };
@@ -198,7 +202,7 @@ export class CodexAppServerHostAdapter implements HostAdapter {
         cwd: workspaceRoot,
         approvalPolicy: "untrusted",
         approvalsReviewer: "user",
-        sandbox: "read-only",
+        sandbox: sandboxModeFor(request),
         ephemeral: false,
         model: this.model
       })));
@@ -248,7 +252,7 @@ export class CodexAppServerHostAdapter implements HostAdapter {
           cwd: workspaceRoot,
           approvalPolicy: "untrusted",
           approvalsReviewer: "user",
-          sandbox: "read-only",
+          sandbox: sandboxModeFor(request),
           excludeTurns: true,
           model: this.model
         }));
@@ -709,6 +713,10 @@ function chooseCodexApprovalDecision(approved: boolean, params: Record<string, u
   const available = Array.isArray(params.availableDecisions) ? params.availableDecisions : [];
   if (available.some(value => value === "decline")) return "decline";
   return "cancel";
+}
+
+function sandboxModeFor(request: AgentCreateRequest): CodexSandboxMode {
+  return request.workItemId.startsWith("control:") ? "read-only" : "workspace-write";
 }
 
 function compilePrompt(request: AgentCreateRequest): string {
