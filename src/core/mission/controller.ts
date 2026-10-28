@@ -27,6 +27,7 @@ import {
   terminalWorkCountForGap,
   type MissionJournalView
 } from "./journal-view.ts";
+import type { MissionReadModelReader } from "./mission-reader.ts";
 
 export interface ControllerCycleInput {
   missionId: string;
@@ -75,6 +76,7 @@ export class MissionController {
   private readonly executionDriver?: WorkExecutionDriver;
   private readonly verifier?: Verifier;
   private readonly capabilities?: CapabilityRuntime;
+  private readonly reader?: MissionReadModelReader;
   private readonly contextCompiler = new ContextCompiler();
 
   constructor(
@@ -82,13 +84,15 @@ export class MissionController {
     deliberation?: DeliberationProvider,
     executionDriver?: WorkExecutionDriver,
     verifier?: Verifier,
-    capabilities?: CapabilityRuntime
+    capabilities?: CapabilityRuntime,
+    reader?: MissionReadModelReader
   ) {
     this.store = store;
     this.deliberation = deliberation;
     this.executionDriver = executionDriver;
     this.verifier = verifier;
     this.capabilities = capabilities;
+    this.reader = reader;
   }
 
   async emit(
@@ -393,6 +397,7 @@ export class MissionController {
   }
 
   async state(missionId: string) {
+    if (this.reader) return this.reader.state(missionId);
     return projectMissionState(missionId, await this.store.list(missionId));
   }
 
@@ -1006,6 +1011,13 @@ export class MissionController {
   }
 
   private async cycleView(missionId: string): Promise<CycleView> {
+    if (this.reader) {
+      const [state, journal] = await Promise.all([
+        this.reader.state(missionId),
+        this.reader.journal(missionId)
+      ]);
+      return { state, journal };
+    }
     const events = await this.store.list(missionId);
     return {
       state: projectMissionState(missionId, events),
