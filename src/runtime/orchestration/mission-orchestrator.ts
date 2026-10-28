@@ -95,22 +95,31 @@ export class MissionOrchestrator {
     for (let cycle = 0; cycle < this.maxCyclesPerWake; cycle++) {
       await this.controller.runControllerCycle({ missionId, trigger: cycle === 0 ? "manual" : "execution_event" });
       const state = await this.controller.state(missionId);
-      if (["completed", "cancelled", "failed", "blocked", "plateau"].includes(state.status)) return;
+      if (["completed", "cancelled", "failed", "blocked", "plateau", "budget_exhausted"].includes(state.status)) return;
       const ready = (await this.projections.listWorkItems(missionId))
         .filter(work => work.status === "ready")
         .sort((a, b) => b.priority - a.priority || a.createdAt.localeCompare(b.createdAt));
       if (ready.length === 0) return;
+      const budget = await this.controller.budgetAssessment(missionId);
+      const attemptSlots = budget.budget?.maxAttempts === undefined ? this.maxConcurrency : Math.max(0, budget.budget.maxAttempts - budget.usage.attempts);
+      const dispatchLimit = Math.min(this.maxConcurrency, budget.availableExecutionSlots ?? this.maxConcurrency, attemptSlots);
+      let acquisitionSlots = budget.capabilityAcquisitionRemaining ?? Number.POSITIVE_INFINITY;
       const dispatchable: Array<{ work: WorkItem; capabilities: CapabilityDescriptor[] }> = [];
       for (const work of ready) {
-        if (dispatchable.length >= this.maxConcurrency) break;
-        if (work.purpose === "acquisition") { dispatchable.push({ work, capabilities: [] }); continue; }
+        if (dispatchable.length >= dispatchLimit) break;
+        if (work.purpose === "acquisition") {
+          if (acquisitionSlots <= 0) continue;
+          acquisitionSlots -= 1;
+          dispatchable.push({ work, capabilities: [] });
+          continue;
+        }
         const preparation = this.capabilityCoordinator ? await this.capabilityCoordinator.prepare(work) : { status: "ready" as const, capabilities: [], missingNeeds: [] };
         if (preparation.status === "ready") dispatchable.push({ work, capabilities: preparation.capabilities });
       }
       if (dispatchable.length === 0) continue;
       await Promise.all(dispatchable.map(item => this.executeWork(item.work, item.capabilities)));
     }
-    await this.controller.emit(missionId, "mission.status.changed", { status: "plateau", reason: "orchestrator cycle budget exhausted" }, { type: "system" }, `plateau:cycle-budget:${missionId}`);
+    return;
   }
 
   private async executeWork(work: WorkItem, capabilities: CapabilityDescriptor[] = []): Promise<void> {
@@ -182,6 +191,11 @@ export class MissionOrchestrator {
         const handle = await this.hostBackend.allocate(request);
         await this.hostBackend.start(handle);
         result = await this.hostBackend.collect(handle);
+      }
+      if (result.usage && Object.entries(result.usage).some(([key, value]) => key !== "source" && typeof value === "number" && value > 0)) {
+        await this.controller.recordCost(work.missionId, {
+          id: `cost-${executionId}`, missionId: work.missionId, executionId, attemptId, usage: result.usage, recordedAt: new Date().toISOString()
+        });
       }
       const envelope = parseWorkerOutput(result.runtimeObservationRef);
       writeExecutionRecoveryManifest(workspace.root, {

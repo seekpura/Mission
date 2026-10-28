@@ -30,6 +30,7 @@ import { ArtifactInspectionService } from "./orchestration/artifact-inspection-s
 import { CapabilityCoordinator } from "./orchestration/capability-coordinator.ts";
 import { VerificationContinuationService } from "./orchestration/verification-continuation-service.ts";
 import type { SecureAcquisitionService } from "../core/capabilities/secure-acquisition-service.ts";
+import type { MissionBudget } from "../core/domain/budget.ts";
 
 export interface MissionRuntimeOptions {
   dbPath?: string;
@@ -40,6 +41,7 @@ export interface MissionRuntimeOptions {
   maxConcurrency?: number;
   acquisition?: SecureAcquisitionService;
   inspectionProviders?: InspectionProvider[];
+  defaultBudget?: MissionBudget;
 }
 
 export class MissionRuntime {
@@ -54,6 +56,7 @@ export class MissionRuntime {
   readonly executionRouter?: WorkExecutionRouter;
   readonly recovery?: ExecutionRecoveryManager;
   readonly inspection?: ArtifactInspectionService;
+  readonly defaultBudget?: MissionBudget;
 
   constructor(options: MissionRuntimeOptions = {}) {
     const rootDir = options.rootDir ?? join(process.cwd(), ".mission");
@@ -70,6 +73,7 @@ export class MissionRuntime {
     });
     this.workspaces = new WorkspaceManager(rootDir);
     this.artifacts = new FileArtifactStore(rootDir);
+    this.defaultBudget = options.defaultBudget;
     if (options.host) {
       const hostAgentBackend = new HostAgentExecutionBackend(options.host);
       const executionRouter = new WorkExecutionRouter({

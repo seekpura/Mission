@@ -1,4 +1,5 @@
 import type { ArtifactExpectation } from "./work-item.ts";
+import type { ExecutionUsage } from "./budget.ts";
 
 export interface PermissionEnvelope {
   filesystemRead: string[];
@@ -83,6 +84,7 @@ export interface ExecutionResult {
   state: "succeeded" | "failed" | "partial" | "cancelled" | "timed_out" | "lost";
   exitCode?: number;
   executorRef?: string;
+  usage?: ExecutionUsage;
   producedFiles: ProducedFile[];
   committedArtifactRefs: string[];
   runtimeObservationRef?: string;

@@ -6,6 +6,7 @@ export type MissionStatus =
   | "waiting_external"
   | "blocked"
   | "plateau"
+  | "budget_exhausted"
   | "completed"
   | "reopened"
   | "cancelled"

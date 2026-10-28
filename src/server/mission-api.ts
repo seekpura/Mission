@@ -11,6 +11,7 @@ export interface MissionApiOptions {
   projections?: MissionProjectionReader;
   orchestrator?: MissionOrchestrator;
   steer?: (missionId: string, message: string) => Promise<unknown>;
+  defaultBudget?: import("../core/domain/budget.ts").MissionBudget;
 }
 
 export function createMissionApi(controller: MissionController, events: EventStore, options: MissionApiOptions = {}) {
@@ -37,6 +38,8 @@ export function createMissionApi(controller: MissionController, events: EventSto
         const body = await readJson(req);
         const missionId = body.missionId ?? randomUUID();
         const state = await controller.createMission(missionId, body.userGoal ?? "");
+        const budget = body.budget ?? options.defaultBudget;
+        if (budget) await controller.configureBudget(missionId, budget);
         await controller.runControllerCycle({ missionId, trigger: "mission_created" });
         options.orchestrator?.wake(missionId);
         await publish(missionId);

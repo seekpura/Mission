@@ -15,6 +15,8 @@ import type { DeliberationProvider, CompletionChallenge, GapDiagnosis } from "..
 import type { SteeringApplicationResult, SteeringInterpretation } from "../domain/steering.ts";
 import { SteeringImpactAnalyzer } from "../steering/steering-impact-analyzer.ts";
 import { MissionProgressTracker } from "../progress/progress-tracker.ts";
+import { BudgetTracker } from "../budget/budget-tracker.ts";
+import type { BudgetAssessment, CostEvent, MissionBudget } from "../domain/budget.ts";
 import { normalizeGapDiagnosis } from "../planning/repair-scope-policy.ts";
 import { RepairEnactmentPolicy } from "../planning/repair-enactment-policy.ts";
 
@@ -47,6 +49,7 @@ export class MissionController {
   private readonly repairEnactment = new RepairEnactmentPolicy();
   private readonly steeringImpact = new SteeringImpactAnalyzer();
   private readonly progressTracker: MissionProgressTracker;
+  private readonly budgetTracker: BudgetTracker;
 
   constructor(store: EventStore, dependencies: MissionControllerDependencies = {}) {
     this.store = store;
@@ -55,6 +58,7 @@ export class MissionController {
     this.concurrencyRetries = dependencies.concurrencyRetries ?? 5;
     this.readModel = new MissionReadModel(store, dependencies.projections);
     this.progressTracker = new MissionProgressTracker(store, this.readModel);
+    this.budgetTracker = new BudgetTracker(store, this.readModel);
   }
 
   async emit(
@@ -135,6 +139,27 @@ export class MissionController {
       this.readModel.verifications(missionId)
     ]);
     return new AcceptanceEvaluator().evaluate({ contract, requirements, artifacts, evidence, verifications });
+  }
+
+  async configureBudget(missionId: string, budget: MissionBudget): Promise<BudgetAssessment> {
+    validateBudget(budget);
+    await this.emit(missionId, "budget.configured", { budget }, { type: "user" }, `budget-configured:${missionId}:${budgetFingerprint(budget)}`);
+    const state = await this.state(missionId);
+    const assessment = await this.budgetTracker.assess(missionId, state);
+    if (state.status === "budget_exhausted" && !assessment.exhausted) {
+      await this.emit(missionId, "mission.status.changed", { status: "active", reason: "Budget increased or reset" }, { type: "user" }, `budget-resumed:${state.revision}`);
+    }
+    return this.budgetTracker.assess(missionId, await this.state(missionId));
+  }
+
+  async recordCost(missionId: string, cost: CostEvent): Promise<void> {
+    if (cost.missionId !== missionId) throw new Error("Cost event mission mismatch");
+    validateUsage(cost.usage);
+    await this.emit(missionId, "cost.recorded", { cost }, { type: "system" }, `cost:${cost.id}`);
+  }
+
+  async budgetAssessment(missionId: string): Promise<BudgetAssessment> {
+    return this.budgetTracker.assess(missionId, await this.state(missionId));
   }
 
   async steer(missionId: string, message: string) {
@@ -249,6 +274,20 @@ export class MissionController {
     const decisionsCreated: string[] = [];
     const workItemsCreated: string[] = [];
     let state = await this.state(input.missionId);
+
+    if (state.status !== "completed") {
+      const budget = await this.budgetTracker.assess(input.missionId, state);
+      if (budget.exhausted) {
+        const completion = await this.completeIfEligible(input.missionId);
+        if (completion.status === "completed") {
+          return { missionRevision: completion.revision, decisionsCreated, workItemsCreated, executionsDispatched: [], verificationsScheduled: [], status: completion.status };
+        }
+        await this.emit(input.missionId, "budget.exhausted", { assessment: budget }, { type: "controller" }, `budget-exhausted:${budgetFingerprint(budget.budget ?? {})}:${budget.usage.attempts}:${budget.usage.totalTokens}:${budget.usage.capabilityAcquisitions}`);
+        await this.emit(input.missionId, "mission.status.changed", { status: "budget_exhausted", reason: budget.reasons.join("; ") }, { type: "controller" }, `mission-budget-exhausted:${state.revision}`);
+        state = await this.state(input.missionId);
+        return { missionRevision: state.revision, decisionsCreated, workItemsCreated, executionsDispatched: [], verificationsScheduled: [], status: state.status };
+      }
+    }
 
     if (this.deliberation && state.strategyRevision === null) {
       const proposal = await this.deliberation.composeStrategy({ state, userGoal: await this.readModel.userGoal(input.missionId), acceptanceContract: await this.readModel.acceptanceContract(input.missionId) });
@@ -502,6 +541,23 @@ export class MissionController {
     }
   }
 }
+function validateBudget(budget: MissionBudget): void {
+  for (const [key, value] of Object.entries(budget)) {
+    if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value < 0)) throw new Error(`Invalid mission budget ${key}`);
+  }
+}
+
+function validateUsage(usage: CostEvent["usage"]): void {
+  for (const [key, value] of Object.entries(usage)) {
+    if (key === "source" || value === undefined) continue;
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(`Invalid measured usage ${key}`);
+  }
+}
+
+function budgetFingerprint(budget: MissionBudget): string {
+  return JSON.stringify(Object.fromEntries(Object.entries(budget).sort(([a], [b]) => a.localeCompare(b))));
+}
+
 function definedPatch<T extends Record<string, unknown>>(value: T): Partial<T> {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as Partial<T>;
 }
