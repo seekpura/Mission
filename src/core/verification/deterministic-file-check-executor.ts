@@ -5,11 +5,13 @@ import type { VerificationCheckExecutor, VerificationCheckExecutorContext } from
 
 export class DeterministicFileCheckExecutor implements VerificationCheckExecutor {
   id = "deterministic-file-checks";
-  supports(check: VerificationCheck): boolean { return check.method === "deterministic" && ["file-exists", "file-non-empty"].includes(check.id); }
+  supports(check: VerificationCheck): boolean { return check.method === "deterministic" && check.level === "structural"; }
   async execute(artifact: Artifact, check: VerificationCheck, _context: VerificationCheckExecutorContext): Promise<VerificationCheckResult> {
     const exists = existsSync(artifact.uri);
-    const pass = check.id === "file-exists" ? exists : exists && statSync(artifact.uri).size > 0;
-    return result(check, pass ? "pass" : "fail", pass ? undefined : check.id === "file-exists" ? "Artifact file does not exist" : "Artifact file is empty");
+    const nonEmpty = exists && statSync(artifact.uri).size > 0;
+    const pass = check.id === "file-exists" ? exists : nonEmpty;
+    const detail = pass ? undefined : !exists ? "Artifact file does not exist" : "Artifact file is empty";
+    return result(check, pass ? "pass" : "fail", detail);
   }
 }
 
