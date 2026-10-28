@@ -18,6 +18,7 @@ export class MissionSupervisor {
   private readonly pendingTriggers = new Map<string, ControllerCycleInput["trigger"]>();
   private readonly updateListeners = new Set<MissionUpdateListener>();
   private readonly errorListeners = new Set<MissionErrorListener>();
+  private draining = false;
 
   constructor(controller: MissionController, events: EventStore, options: MissionSupervisorOptions = {}) {
     this.controller = controller;
@@ -36,6 +37,7 @@ export class MissionSupervisor {
   }
 
   wake(missionId: string, trigger: ControllerCycleInput["trigger"] = "manual"): Promise<void> {
+    if (this.draining) return Promise.resolve();
     this.pendingTriggers.set(missionId, trigger);
     const existing = this.running.get(missionId);
     if (existing) return existing;
@@ -47,10 +49,26 @@ export class MissionSupervisor {
       })
       .finally(() => {
         this.running.delete(missionId);
-        if (this.pendingTriggers.has(missionId)) void this.wake(missionId, this.pendingTriggers.get(missionId));
+        if (!this.draining && this.pendingTriggers.has(missionId)) {
+          void this.wake(missionId, this.pendingTriggers.get(missionId));
+        }
       });
     this.running.set(missionId, task);
     return task;
+  }
+
+  beginDrain(): void {
+    if (this.draining) return;
+    this.draining = true;
+    this.pendingTriggers.clear();
+  }
+
+  isDraining(): boolean {
+    return this.draining;
+  }
+
+  activeMissionIds(): string[] {
+    return [...this.running.keys()].sort();
   }
 
   async waitForIdle(missionId: string): Promise<void> {
@@ -58,7 +76,16 @@ export class MissionSupervisor {
       const current = this.running.get(missionId);
       if (!current) return;
       await current;
-      if (!this.running.has(missionId) && !this.pendingTriggers.has(missionId)) return;
+      if (!this.running.has(missionId) && (this.draining || !this.pendingTriggers.has(missionId))) return;
+    }
+  }
+
+  async waitForAllIdle(): Promise<void> {
+    for (;;) {
+      const current = [...this.running.values()];
+      if (current.length === 0) return;
+      await Promise.all(current);
+      if (this.running.size === 0) return;
     }
   }
 
@@ -67,7 +94,7 @@ export class MissionSupervisor {
   }
 
   private async drive(missionId: string): Promise<void> {
-    while (this.pendingTriggers.has(missionId)) {
+    while (!this.draining && this.pendingTriggers.has(missionId)) {
       const trigger = this.pendingTriggers.get(missionId) ?? "manual";
       this.pendingTriggers.delete(missionId);
       await this.drain(missionId, trigger);
@@ -77,6 +104,7 @@ export class MissionSupervisor {
   private async drain(missionId: string, initialTrigger: ControllerCycleInput["trigger"]): Promise<void> {
     let trigger = initialTrigger;
     for (let cycle = 0; cycle < this.maxCyclesPerWake; cycle += 1) {
+      if (this.draining) return;
       const before = await this.events.lastSequence(missionId);
       const beforeState = await this.controller.state(missionId);
       if (isTerminal(beforeState.status)) {
@@ -89,6 +117,9 @@ export class MissionSupervisor {
       const state = await this.controller.state(missionId);
       await this.publishUpdate(missionId, state);
 
+      // Shutdown waits for the currently executing controller cycle to reach
+      // this durable boundary, but never admits another cycle afterward.
+      if (this.draining) return;
       if (isTerminal(state.status)) return;
       if (after === before) return;
       if (state.pendingApprovalIds.length > 0) return;
