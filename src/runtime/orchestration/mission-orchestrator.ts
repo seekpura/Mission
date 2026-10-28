@@ -11,6 +11,7 @@ import type { CapabilityCoordinator } from "./capability-coordinator.ts";
 import type { WorkspaceManager } from "../../execution/workspace/workspace-manager.ts";
 import type { FileArtifactStore } from "../../execution/artifacts/artifact-store.ts";
 import type { Verifier } from "../../core/verification/verifier.ts";
+import type { WorkExecutionRouter, ExecutionRoute } from "./executor-router.ts";
 
 export interface MissionOrchestratorOptions {
   maxConcurrency?: number;
@@ -29,6 +30,7 @@ export class MissionOrchestrator {
   private readonly maxCyclesPerWake: number;
   private readonly assurance: ArtifactAssurancePipeline;
   private readonly capabilityCoordinator?: CapabilityCoordinator;
+  private readonly executionRouter?: WorkExecutionRouter;
   private readonly running = new Map<string, Promise<void>>();
   private readonly rerunRequested = new Set<string>();
 
@@ -41,6 +43,7 @@ export class MissionOrchestrator {
     verifier: Verifier;
     contextCompiler?: ContextCompiler;
     capabilityCoordinator?: CapabilityCoordinator;
+    executionRouter?: WorkExecutionRouter;
     options?: MissionOrchestratorOptions;
   }) {
     this.controller = input.controller;
@@ -53,6 +56,7 @@ export class MissionOrchestrator {
     this.maxConcurrency = Math.max(1, input.options?.maxConcurrency ?? 4);
     this.maxCyclesPerWake = Math.max(1, input.options?.maxCyclesPerWake ?? 64);
     this.capabilityCoordinator = input.capabilityCoordinator;
+    this.executionRouter = input.executionRouter;
     this.assurance = new ArtifactAssurancePipeline({ controller: input.controller, projections: input.projections, artifacts: input.artifacts, verifier: input.verifier });
   }
 
@@ -121,9 +125,10 @@ export class MissionOrchestrator {
       outputProtocol: workerProtocolInstruction(workspace.root)
     };
 
-    await this.controller.emit(work.missionId, "attempt.created", { id: attemptId, workItemId: work.id, executorId: "host-agent", contextPacketId: contextPacket.id }, { type: "controller" }, `attempt:${attemptId}`);
+    const selectedRoute: ExecutionRoute = this.executionRouter?.select(work, capabilities) ?? { kind: "host_agent", reason: "legacy host-agent route", sideEffectPolicy: { externalWrites: "approval", destructiveWrites: "approval", irreversibleActions: "approval", idempotencyRequired: true }, resourceRequest: {}, requiresApproval: false };
+    await this.controller.emit(work.missionId, "attempt.created", { id: attemptId, workItemId: work.id, executorId: selectedRoute.kind, contextPacketId: contextPacket.id }, { type: "controller" }, `attempt:${attemptId}`);
     await this.controller.emit(work.missionId, "work.started", { id: work.id }, { type: "controller" }, `work-started:${work.id}:${attemptId}`);
-    await this.controller.emit(work.missionId, "execution.created", { id: executionId, workItemId: work.id, attemptId }, { type: "controller" }, `execution-created:${executionId}`);
+    await this.controller.emit(work.missionId, "execution.created", { id: executionId, workItemId: work.id, attemptId, executorType: selectedRoute.kind, routeReason: selectedRoute.reason }, { type: "controller" }, `execution-created:${executionId}`);
 
     const request: HostAgentExecutionRequest = {
       executionId,
@@ -146,10 +151,16 @@ export class MissionOrchestrator {
     };
 
     try {
-      const handle = await this.hostBackend.allocate(request);
-      await this.controller.emit(work.missionId, "execution.started", { id: executionId }, { type: "host" }, `execution-started:${executionId}`);
-      await this.hostBackend.start(handle);
-      const result = await this.hostBackend.collect(handle);
+      await this.controller.emit(work.missionId, "execution.started", { id: executionId, executorType: selectedRoute.kind }, { type: "host" }, `execution-started:${executionId}`);
+      let result;
+      if (this.executionRouter) {
+        const routed = await this.executionRouter.execute({ work, capabilities, baseRequest: request });
+        result = routed.result;
+      } else {
+        const handle = await this.hostBackend.allocate(request);
+        await this.hostBackend.start(handle);
+        result = await this.hostBackend.collect(handle);
+      }
       await this.controller.emit(work.missionId, result.state === "succeeded" ? "execution.completed" : "execution.failed", { id: executionId, result }, { type: "host" }, `execution-settled:${executionId}`);
       const envelope = parseWorkerOutput(result.runtimeObservationRef);
       if (result.state !== "succeeded" || envelope?.status === "failed") {

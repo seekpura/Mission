@@ -91,6 +91,7 @@ export class LocalExecutionBackend {
       exitCode: run.exitCode ?? undefined,
       producedFiles,
       committedArtifactRefs,
+      runtimeObservationRef: run.stdout.trim() || undefined,
       logRef: logPath,
       sideEffects: [],
       startedAt: run.startedAt,

@@ -27,8 +27,8 @@ export interface WorkspacePolicy {
 
 export interface SideEffectPolicy {
   externalWrites: "deny" | "approval" | "allow";
-  destructiveWrites: "deny" | "approval";
-  irreversibleActions: "deny" | "approval";
+  destructiveWrites: "deny" | "approval" | "allow";
+  irreversibleActions: "deny" | "approval" | "allow";
   idempotencyRequired: boolean;
 }
 
@@ -43,7 +43,7 @@ export interface ResourceRequest {
 
 export interface ExecutorRef {
   id: string;
-  type: "host_agent" | "workflow" | "cli" | "tool" | "verifier";
+  type: "host_agent" | "host_capability" | "local_cli" | "workflow" | "cli" | "tool" | "verifier";
 }
 
 export interface ExecutionRequest {

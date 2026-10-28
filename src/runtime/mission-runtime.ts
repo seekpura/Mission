@@ -8,6 +8,9 @@ import { SqliteProjectionStore } from "../persistence/sqlite/sqlite-projection-s
 import { SnapshotStore } from "../persistence/sqlite/snapshot-store.ts";
 import type { HostAdapter } from "../hosts/deepseek/host-adapter.ts";
 import { HostAgentExecutionBackend } from "../execution/host/host-agent-execution-backend.ts";
+import { HostCapabilityExecutionBackend } from "../execution/host/host-capability-execution-backend.ts";
+import { LocalExecutionBackend } from "../execution/local/local-execution-backend.ts";
+import { WorkExecutionRouter } from "./orchestration/executor-router.ts";
 import { WorkspaceManager } from "../execution/workspace/workspace-manager.ts";
 import { FileArtifactStore } from "../execution/artifacts/artifact-store.ts";
 import { BasicFileVerifier } from "../core/verification/basic-file-verifier.ts";
@@ -51,14 +54,22 @@ export class MissionRuntime {
     this.workspaces = new WorkspaceManager(rootDir);
     this.artifacts = new FileArtifactStore(rootDir);
     if (options.host) {
+      const hostAgentBackend = new HostAgentExecutionBackend(options.host);
+      const executionRouter = new WorkExecutionRouter({
+        host: options.host,
+        agents: hostAgentBackend,
+        hostCapabilities: new HostCapabilityExecutionBackend(options.host),
+        local: new LocalExecutionBackend(this.workspaces, this.artifacts)
+      });
       this.orchestrator = new MissionOrchestrator({
         controller: this.controller,
         projections: this.projections,
-        hostBackend: new HostAgentExecutionBackend(options.host),
+        hostBackend: hostAgentBackend,
         workspaces: this.workspaces,
         artifacts: this.artifacts,
         verifier: new BasicFileVerifier(),
         capabilityCoordinator: new CapabilityCoordinator({ controller: this.controller, projections: this.projections, host: options.host, acquisition: options.acquisition }),
+        executionRouter,
         options: { maxConcurrency: options.maxConcurrency }
       });
     }
