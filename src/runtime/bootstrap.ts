@@ -126,6 +126,11 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
       "Production Agent Skill acquisition is not yet deliverable through Codex app-server; refusing to project DeepSeek-native .agents/skills semantics into a different HostAdapter"
     );
   }
+  if (options.host && options.capabilityAcquisition) {
+    throw new Error(
+      "A custom HostAdapter cannot use production Agent Skill acquisition without an explicit provider-native Skill delivery adapter"
+    );
+  }
   const approvalHandler = (request: Parameters<RuntimeSideEffectManager["authorizeHostPermission"]>[0]) =>
     sideEffects.authorizeHostPermission(sideEffectScopes.enrich(request));
   const baseHost = options.host ?? (hostKind === "codex"
@@ -145,7 +150,7 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   });
   const mcpHost = new TrustedMcpHostAdapter(baseHost, trustedMcp);
   const overlay = new MissionCapabilityOverlay();
-  const capabilityHost = hostKind === "deepseek" || options.host
+  const capabilityHost = !options.host && hostKind === "deepseek"
     ? new CapabilityWorkspaceHostAdapter(mcpHost, new MissionAgentSkillWorkspaceProjector(overlay))
     : mcpHost;
   const host = new SideEffectHostAdapter(capabilityHost, sideEffects, { scopeRegistry: sideEffectScopes });
