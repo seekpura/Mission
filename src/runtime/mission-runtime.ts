@@ -158,7 +158,6 @@ export class MissionRuntime {
 
   async configureBudget(budget: MissionBudget): Promise<void> {
     await this.budget.configure(budget);
-    this.orchestrator?.wake(budget.missionId);
   }
 
   async cancelExecution(missionId: string, executionId: string): Promise<boolean> {
