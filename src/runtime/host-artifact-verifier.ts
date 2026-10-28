@@ -179,7 +179,8 @@ export class HostArtifactVerifier implements Verifier {
 
     const normalized = normalizeReview(raw, new Set(context.gaps.map(gap => gap.id)));
     validateRuntimeEvidenceReferences(normalized, evidenceById);
-    const covered = enforceProfileCoverage(normalized, profile);
+    const groundedGaps = enforceResolvedGapEvidence(normalized, evidenceById);
+    const covered = enforceProfileCoverage(groundedGaps, profile);
     const reviewed = enforceProfileEvidence(covered, profile, evidenceById);
     if ((reviewed.overall === "pass" || reviewed.overall === "pass_with_warnings") &&
         reviewed.checkResults.some(check => check.status === "fail" || check.status === "inconclusive")) {
@@ -207,8 +208,7 @@ export class HostArtifactVerifier implements Verifier {
   ): Promise<RegisteredEvidence[]> {
     const registered: RegisteredEvidence[] = [];
     const subjectRef = `${artifact.id}@${artifact.version}`;
-    for (let index = 0; index < collection.collected.length; index += 1) {
-      const item = collection.collected[index]!;
+    for (const item of collection.collected) {
       const draft = item.draft;
       const token = createHash("sha256").update(stableJson({
         subjectRef,
@@ -220,8 +220,7 @@ export class HostArtifactVerifier implements Verifier {
         claim: draft.claim,
         result: draft.result,
         sourceRef: draft.sourceRef ?? null,
-        details: draft.details ?? null,
-        index
+        details: draft.details ?? null
       })).digest("hex");
       const evidence: Evidence = {
         id: `evidence:${token.slice(0, 40)}`,
@@ -264,9 +263,9 @@ function buildProfileInstruction(profile: VerificationProfile): string {
     "runtimeEvidence is the authoritative evidence registry for this review. Cite only runtimeEvidence[].id in checkResults/evidenceRefs/gapAssessments; never invent an evidence id and never cite a raw filename, hash, test claim, render claim, browser claim or producer claim as if it were registered Evidence.",
     "deterministicEvidence contains structural file checks for context, but required profile evidence policies are satisfied only by supporting Runtime Evidence of the declared kinds.",
     "Do not trust producer completion claims. Never infer that a render, browser interaction, playback, test, build, source validation or accessibility check occurred unless corresponding Runtime Evidence is supplied.",
-    "Every required profile check id must appear exactly once in checkResults. When the required Runtime Evidence kind is unavailable, mark that check inconclusive instead of omitting it or guessing.",
+    "Every required profile check id must appear exactly once in checkResults. A pass, warning, or fail judgment for a required check must cite supporting Runtime Evidence that satisfies that check's evidence policy. When the required evidence is unavailable, mark the check inconclusive instead of guessing.",
     "Return JSON with overall:pass|pass_with_warnings|fail|inconclusive, checkResults:[{id,status:pass|fail|warning|inconclusive,detail?,evidenceRefs[]}], evidenceRefs:[], gapAssessments:[{gapId,status:resolved|still_open|inconclusive,evidenceRefs[],confidence,detail?}].",
-    "Assess only gaps explicitly supplied in input.gaps. A resolved assessment must cite concrete Runtime Evidence refs.",
+    "Assess only gaps explicitly supplied in input.gaps. A resolved assessment must cite at least one supporting Runtime Evidence ref; inconclusive or contradictory Evidence cannot close a gap.",
     "A pass result must not contain failed or inconclusive checks."
   ].join(" ");
 }
@@ -368,6 +367,28 @@ function validateRuntimeEvidenceReferences(review: NormalizedReview, evidenceByI
   for (const gap of review.gapAssessments) validate(gap.evidenceRefs, `gap ${gap.gapId}`);
 }
 
+function enforceResolvedGapEvidence(review: NormalizedReview, evidenceById: Map<string, Evidence>): NormalizedReview {
+  return {
+    ...review,
+    gapAssessments: review.gapAssessments.map(assessment => {
+      if (assessment.status !== "resolved") return assessment;
+      const supporting = assessment.evidenceRefs
+        .map(ref => evidenceById.get(ref))
+        .filter((evidence): evidence is Evidence => Boolean(evidence) && evidence!.result === "supports");
+      if (supporting.length > 0) return assessment;
+      return {
+        ...assessment,
+        status: "inconclusive" as const,
+        confidence: Math.min(assessment.confidence, 0.5),
+        detail: [
+          assessment.detail,
+          "Gap resolution was downgraded because none of the cited Runtime Evidence has result=supports."
+        ].filter(Boolean).join(" ")
+      };
+    })
+  };
+}
+
 function enforceProfileCoverage(review: NormalizedReview, profile: VerificationProfile): NormalizedReview {
   const requiredIds = new Set(profile.checks.map(check => check.id));
   const seen = new Set<string>();
@@ -407,7 +428,7 @@ function enforceProfileEvidence(
   let downgraded = false;
   const checkResults = review.checkResults.map(check => {
     const profileCheck = profileChecks.get(check.id);
-    if (!profileCheck || (check.status !== "pass" && check.status !== "warning")) return check;
+    if (!profileCheck || check.status === "inconclusive") return check;
     const availability = checkEvidenceAvailability(profileCheck.evidencePolicy, evidenceById, check.evidenceRefs);
     if (availability.satisfied) return check;
     downgraded = true;
@@ -421,9 +442,10 @@ function enforceProfileEvidence(
       evidenceRefs: [...check.evidenceRefs]
     };
   });
+  const remainingFailure = checkResults.some(check => check.status === "fail");
   return {
     ...review,
-    overall: downgraded && review.overall !== "fail" ? "inconclusive" : review.overall,
+    overall: downgraded ? (remainingFailure ? "fail" : "inconclusive") : review.overall,
     checkResults
   };
 }
@@ -454,7 +476,7 @@ function checkEvidenceAvailability(
     ? "required Runtime Evidence is present"
     : [
         missingAllOf.length > 0 ? `missing allOf kinds ${missingAllOf.join(", ")}` : "",
-        !anyOfSatisfied ? `none of anyOf kinds present (${anyOf.join(", ")})` : "",
+        !anyOfSatisfied ? `none of anyOf kinds present (${anyOf.join(",")})` : "",
         !countSatisfied ? `only ${supporting.length} supporting refs; minimum ${minimum}` : ""
       ].filter(Boolean).join("; ");
   return {
