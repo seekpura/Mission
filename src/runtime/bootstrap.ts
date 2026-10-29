@@ -44,6 +44,11 @@ import {
   type RuntimeShutdownResult
 } from "./runtime-shutdown.ts";
 import { createProductionAgentSkillCapabilityRuntime } from "./production-capability-runtime.ts";
+import {
+  createStructuredProviderEvidenceCollectors,
+  parseTrustedProviderEvidenceRoutesJson,
+  type TrustedProviderEvidenceRoute
+} from "./provider-evidence-collector.ts";
 import { RuntimeSideEffectManager } from "./side-effect-manager.ts";
 import { SideEffectHostAdapter } from "./side-effect-host-adapter.ts";
 import { HostSideEffectScopeRegistry } from "./side-effect-host-scope.ts";
@@ -94,9 +99,15 @@ export interface MissionRuntimeOptions {
    */
   verificationEvidenceCollectors?: VerificationEvidenceCollector[];
   /**
-   * Explicit read-only bindings from live HostAdapter capabilities into typed
-   * Runtime Evidence. No host capability is auto-invoked merely because it
-   * exists in the semantic capability graph.
+   * Production structured provider routes. Runtime owns the semantic mapping,
+   * evidence type/profile/artifact scope and durable claim for each evidence
+   * kind; deployment only pins a real host capability/provider/protocol.
+   */
+  providerEvidenceRoutes?: TrustedProviderEvidenceRoute[];
+  /**
+   * Explicit low-level read-only bindings from live HostAdapter capabilities
+   * into typed Runtime Evidence. Kept for trusted custom integrations. No host
+   * capability is auto-invoked merely because it exists in the semantic graph.
    */
   hostEvidenceCapabilities?: TrustedHostCapabilityEvidenceBinding[];
 }
@@ -178,6 +189,10 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     knownExecutorIds: [executorId],
     defaultExecutorId: executorId
   });
+  const providerEvidenceCollectors = createStructuredProviderEvidenceCollectors(
+    host,
+    options.providerEvidenceRoutes ?? []
+  );
   const hostEvidenceCollectors = createTrustedHostCapabilityEvidenceCollectors(
     host,
     options.hostEvidenceCapabilities ?? []
@@ -187,6 +202,7 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     events,
     reader,
     evidenceCollectors: createDefaultVerificationEvidenceCollectorRegistry([
+      ...providerEvidenceCollectors,
       ...hostEvidenceCollectors,
       ...(options.verificationEvidenceCollectors ?? [])
     ])
@@ -301,6 +317,9 @@ export function createProductionMissionRuntimeFromEnv(
   const trustedMcpServers = parseTrustedMcpServersJson(env.MISSION_TRUSTED_MCP_SERVERS_JSON, {
     allowInsecureHttp: allowInsecureTrustedMcpHttp
   });
+  const providerEvidenceRoutes = parseTrustedProviderEvidenceRoutesJson(
+    env.MISSION_EVIDENCE_PROVIDER_ROUTES_JSON
+  );
   const hostEvidenceCapabilities = parseTrustedHostCapabilityEvidenceBindingsJson(
     env.MISSION_HOST_EVIDENCE_BINDINGS_JSON
   );
@@ -323,6 +342,7 @@ export function createProductionMissionRuntimeFromEnv(
     capabilityAcquisition: capabilityAcquisitionFromEnv(env),
     trustedMcpServers,
     allowInsecureTrustedMcpHttp,
+    providerEvidenceRoutes,
     hostEvidenceCapabilities
   });
 }
