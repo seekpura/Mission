@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { MissionEvent } from "../../core/domain/event.ts";
 import type { MissionDatabase } from "./database.ts";
@@ -33,19 +32,6 @@ export interface MissionHistoryRetentionState {
   }>;
   deletionEligibleThroughSequence: 0;
   deletionReason: string;
-}
-
-export interface MissionArchiveReceipt {
-  format: "mission-archive-receipt/v1";
-  eventFormat: "mission-events/v1";
-  eventCanonicalization: "canonical-json-lines/v1";
-  receiptCanonicalization: "canonical-json/v1";
-  hashAlgorithm: "sha256";
-  missionId: string;
-  throughSequence: number;
-  eventCount: number;
-  contentSha256: string;
-  receiptSha256: string;
 }
 
 /**
@@ -108,60 +94,6 @@ export class SqliteHistoryReader {
       ...(!complete ? { nextAfterSequence: lastSequence } : {}),
       complete
     };
-  }
-
-  createArchiveReceipt(missionId: string, throughSequence?: number): MissionArchiveReceipt | undefined {
-    const firstPage = this.readExportPage(missionId, {
-      ...(throughSequence === undefined ? {} : { throughSequence }),
-      limit: 1000
-    });
-    if (!firstPage) return undefined;
-
-    const frozenThrough = firstPage.throughSequence;
-    const contentHash = createHash("sha256");
-    let eventCount = 0;
-    let page = firstPage;
-
-    while (true) {
-      for (const event of page.events) {
-        contentHash.update(`${canonicalJson(event)}\n`, "utf8");
-        eventCount += 1;
-      }
-      if (page.complete) break;
-      if (page.nextAfterSequence === undefined) {
-        throw new Error("Incomplete Mission history export page is missing nextAfterSequence");
-      }
-      const next = this.readExportPage(missionId, {
-        afterSequence: page.nextAfterSequence,
-        throughSequence: frozenThrough,
-        limit: 1000
-      });
-      if (!next) throw new Error(`Mission disappeared while creating archive receipt: ${missionId}`);
-      if (next.throughSequence !== frozenThrough) {
-        throw new Error("Mission archive receipt export boundary changed during hashing");
-      }
-      page = next;
-    }
-
-    if (eventCount !== frozenThrough) {
-      throw new Error(
-        `Mission archive receipt event count mismatch: expected ${frozenThrough}, received ${eventCount}`
-      );
-    }
-
-    const core = {
-      format: "mission-archive-receipt/v1" as const,
-      eventFormat: "mission-events/v1" as const,
-      eventCanonicalization: "canonical-json-lines/v1" as const,
-      receiptCanonicalization: "canonical-json/v1" as const,
-      hashAlgorithm: "sha256" as const,
-      missionId,
-      throughSequence: frozenThrough,
-      eventCount,
-      contentSha256: contentHash.digest("hex")
-    };
-    const receiptSha256 = createHash("sha256").update(canonicalJson(core), "utf8").digest("hex");
-    return { ...core, receiptSha256 };
   }
 
   readRetentionState(missionId: string): MissionHistoryRetentionState | undefined {
@@ -235,27 +167,6 @@ function assertContiguous(
     throw new Error(
       `Mission history export sequence gap after ${events.at(-1)!.sequence} through ${throughSequence}`
     );
-  }
-}
-
-function canonicalJson(value: unknown): string {
-  if (value === null) return "null";
-  switch (typeof value) {
-    case "string":
-    case "boolean":
-      return JSON.stringify(value);
-    case "number":
-      if (!Number.isFinite(value)) throw new Error("Canonical JSON does not support non-finite numbers");
-      return JSON.stringify(value);
-    case "object":
-      if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-      return `{${Object.entries(value as Record<string, unknown>)
-        .filter(([, item]) => item !== undefined)
-        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
-        .map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`)
-        .join(",")}}`;
-    default:
-      throw new Error(`Canonical JSON does not support ${typeof value}`);
   }
 }
 
