@@ -185,8 +185,11 @@ export class DrainableHostAdapter implements HostAdapter {
 
   private track(handle: HostAgentHandle): void {
     const existing = this.active.get(handle.id);
-    if (existing && existing.nativeRef !== handle.nativeRef) {
-      throw new Error(`Host reused active handle id ${handle.id} for a different native session`);
+    if (existing) {
+      throw new Error(
+        `Host reused active handle id ${handle.id}` +
+        (existing.nativeRef === handle.nativeRef ? "" : " for a different native session")
+      );
     }
     this.observedTerminal.delete(handle);
     this.active.set(handle.id, handle);
