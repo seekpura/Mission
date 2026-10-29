@@ -94,7 +94,7 @@ function output(patch: Record<string, unknown> = {}): Record<string, unknown> {
     result: "supports",
     observedAt: "2026-10-29T00:30:00.000Z",
     summary: "root route loaded and interactive behavior was observed",
-    observation: { route: "/", loaded: true, consoleErrors: [] },
+    observation: { loaded: true, blockingErrorCount: 0, interactions: ["navigation"] },
     claim: "provider supplied claim must never become durable Runtime authority",
     sourceRef: "provider-controlled-source",
     ...patch
@@ -157,7 +157,7 @@ test("structured provider evidence binds provider/protocol and exact artifact su
   assert.equal(JSON.stringify(drafts[0]).includes("provider-controlled-source"), false);
   assert.deepEqual(drafts[0]?.inspectionPayload, {
     summary: "root route loaded and interactive behavior was observed",
-    evidence: { route: "/", loaded: true, consoleErrors: [] }
+    evidence: { loaded: true, blockingErrorCount: 0, interactions: ["navigation"] }
   });
 });
 

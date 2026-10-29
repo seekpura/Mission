@@ -93,10 +93,9 @@ class StructuredBrowserProviderHost implements HostAdapter {
         observedAt: "2026-10-29T00:10:00.000Z",
         summary: "Root route loaded, primary navigation responded and keyboard focus reached the primary action.",
         observation: {
-          route: "/",
-          viewport: "1440x900",
-          interactions: ["primary-navigation", "keyboard-focus"],
-          blockingConsoleErrors: 0
+          loaded: true,
+          blockingErrorCount: 0,
+          interactions: ["primary-navigation", "keyboard-focus"]
         },
         claim: "provider cannot replace Runtime durable claim",
         sourceRef: "provider cannot replace Runtime source"
@@ -234,12 +233,12 @@ test("structured provider browser response becomes durable Runtime Evidence and 
     assert.equal(runtimeEvidence?.result, "supports");
     assert.equal((runtimeEvidence?.details as any).provider, "browser-provider");
     assert.equal((runtimeEvidence?.details as any).protocol, STRUCTURED_PROVIDER_EVIDENCE_PROTOCOL);
-    assert.equal(JSON.stringify(runtimeEvidence).includes("blockingConsoleErrors"), false);
+    assert.equal(JSON.stringify(runtimeEvidence).includes("blockingErrorCount"), false);
     assert.equal(JSON.stringify(runtimeEvidence).includes("provider cannot replace Runtime"), false);
 
     const hostReviewInput = transport.requests[0]?.input as any;
     const transientRuntime = hostReviewInput.runtimeEvidence.find((item: any) => item.kind === "browser-runtime");
-    assert.equal(transientRuntime.inspectionPayload.evidence.blockingConsoleErrors, 0);
+    assert.equal(transientRuntime.inspectionPayload.evidence.blockingErrorCount, 0);
     assert.deepEqual(transientRuntime.inspectionPayload.evidence.interactions, ["primary-navigation", "keyboard-focus"]);
   } finally {
     database.close();

@@ -8,6 +8,7 @@ import type {
 } from "../core/verification/evidence-collector.ts";
 import type { VerificationProfileKind } from "../core/verification/verification-profile.ts";
 import type { HostAdapter } from "../hosts/host-adapter.ts";
+import { validateStructuredProviderObservation } from "./provider-evidence-observation.ts";
 
 export const STRUCTURED_PROVIDER_EVIDENCE_PROTOCOL = "mission-evidence/v1" as const;
 
@@ -421,11 +422,16 @@ function normalizeStructuredOutput(
   }
   const summary = typeof object.summary === "string" ? object.summary.trim() : undefined;
   if (summary && summary.length > 4_096) throw new Error(`Provider evidence output summary is too long: ${summary.length}`);
+  const observation = validateStructuredProviderObservation(
+    expectedKind,
+    result as Evidence["result"],
+    object.observation
+  );
   return {
     result: result as Evidence["result"],
     observedAt,
     ...(summary ? { summary } : {}),
-    ...(object.observation === undefined ? {} : { observation: structuredClone(object.observation) })
+    ...(observation === undefined ? {} : { observation })
   };
 }
 
