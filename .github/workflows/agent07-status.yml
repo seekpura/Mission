@@ -1,0 +1,32 @@
+name: agent07-status
+
+on:
+  push:
+    branches:
+      - feat/graceful-shutdown-drain
+    paths:
+      - .github/workflows/agent07-status.yml
+
+permissions:
+  contents: write
+
+jobs:
+  checkpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/graceful-shutdown-drain
+      - name: Apply status checkpoint
+        run: |
+          python -m py_compile scripts/agent07-status.py
+          python scripts/agent07-status.py
+      - name: Commit checkpoint and remove temporary machinery
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/agent07-status.yml scripts/agent07-status.py
+          git add CURRENT_STATUS.md
+          git diff --cached --check
+          git commit -m "docs: checkpoint graceful shutdown and drain"
+          git push origin HEAD:feat/graceful-shutdown-drain
