@@ -1,0 +1,99 @@
+name: agent09-native-semantics
+on:
+  push:
+    branches: [feat/provider-native-execution-capabilities]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/provider-native-execution-capabilities
+      - name: Patch Codex, DeepSeek, bootstrap and tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              assert text.count(old) == 1, (path, text.count(old), old[:120])
+              p.write_text(text.replace(old, new, 1))
+
+          # Codex: explicit reasoning override + structured truthful semantics.
+          path = 'src/hosts/codex/codex-app-server-host-adapter.ts'
+          replace_once(path,
+            '  model?: string;\n  approvalHandler?: (request: ApprovalRequest) => Promise<ApprovalResult>;\n',
+            '  model?: string;\n  reasoningEffort?: string;\n  approvalHandler?: (request: ApprovalRequest) => Promise<ApprovalResult>;\n')
+          replace_once(path,
+            '  private readonly model?: string;\n  private readonly approvalHandler?: (request: ApprovalRequest) => Promise<ApprovalResult>;\n',
+            '  private readonly model?: string;\n  private readonly reasoningEffort?: string;\n  private readonly approvalHandler?: (request: ApprovalRequest) => Promise<ApprovalResult>;\n')
+          replace_once(path,
+            '    this.model = options.model?.trim() || undefined;\n    this.approvalHandler = options.approvalHandler;\n',
+            '    this.model = boundedOptionalSetting(options.model, "Codex model");\n    this.reasoningEffort = boundedOptionalSetting(options.reasoningEffort, "Codex reasoning effort");\n    this.approvalHandler = options.approvalHandler;\n')
+          replace_once(path,
+            '    const capabilities: CapabilityDescriptor[] = [\n',
+            '    const nativeFeatures = [\n      "thread-start",\n      "thread-resume",\n      "turn-start",\n      "turn-steer",\n      "turn-interrupt",\n      "observe-events",\n      "workspace-context",\n      "workspace-write",\n      "control-read-only",\n      "command-approval",\n      "file-change-approval",\n      ...(this.model ? ["model-override"] : []),\n      ...(this.reasoningEffort ? ["reasoning-effort-override"] : [])\n    ];\n    const capabilities: CapabilityDescriptor[] = [\n')
+          old_features = '''          features: [\n            "thread-start",\n            "thread-resume",\n            "turn-start",\n            "turn-steer",\n            "turn-interrupt",\n            "observe-events",\n            "workspace-context",\n            "workspace-write",\n            "control-read-only",\n            "command-approval",\n            "file-change-approval"\n          ],\n          persistence: ["session", "resume", "recovery"]\n'''
+          new_features = '''          features: nativeFeatures,\n          persistence: ["session", "resume", "recovery"],\n          model: {\n            ...(this.model ? { configuredModel: this.model } : {}),\n            ...(this.reasoningEffort ? { configuredReasoningEffort: this.reasoningEffort } : {}),\n            catalogValidated: false\n          },\n          coordination: {\n            runtimeManagedSubagents: false,\n            runtimeManagedTeams: false,\n            delegatedTurns: false\n          },\n          jobs: {\n            background: false,\n            durable: false,\n            observable: false,\n            cancellable: false\n          }\n'''
+          replace_once(path, old_features, new_features)
+          replace_once(path,
+            '        cwd: running.request.workspaceRoot ?? process.cwd()\n      }));\n',
+            '        cwd: running.request.workspaceRoot ?? process.cwd(),\n        model: this.model,\n        effort: this.reasoningEffort\n      }));\n')
+          replace_once(path,
+            '      transport: "codex-app-server-jsonrpc-v2",\n      resumed\n',
+            '      transport: "codex-app-server-jsonrpc-v2",\n      resumed,\n      ...(this.model ? { configuredModel: this.model } : {}),\n      ...(this.reasoningEffort ? { configuredReasoningEffort: this.reasoningEffort } : {})\n')
+          # Add bounded setting helper before compact.
+          replace_once(path,
+            'function compact<T extends Record<string, unknown>>(value: T): T {\n',
+            'function boundedOptionalSetting(value: string | undefined, label: string): string | undefined {\n  const clean = value?.trim();\n  if (!clean) return undefined;\n  if (clean.length > 128) throw new Error(`${label} exceeds 128 characters`);\n  return clean;\n}\n\nfunction compact<T extends Record<string, unknown>>(value: T): T {\n')
+
+          # DeepSeek default capability: do not advertise steer when ACP binding throws for it.
+          path = 'src/hosts/deepseek/deepseek-host-adapter.ts'
+          replace_once(path,
+            '          features: ["create-session", "resume-session", "steer", "cancel", "observe-events", "workspace-context"],\n          persistence: ["session", "resume", "recovery"]\n',
+            '          features: ["create-session", "resume-session", "cancel", "observe-events", "workspace-context"],\n          persistence: ["session", "resume", "recovery"],\n          model: { catalogValidated: false },\n          coordination: {\n            runtimeManagedSubagents: false,\n            runtimeManagedTeams: false,\n            delegatedTurns: false\n          },\n          jobs: {\n            background: false,\n            durable: false,\n            observable: false,\n            cancellable: false\n          }\n')
+
+          # Bootstrap: trusted static Codex reasoning override without spawning model discovery.
+          path = 'src/runtime/bootstrap.ts'
+          replace_once(path,
+            '  codexModel?: string;\n  executorId?: string;\n',
+            '  codexModel?: string;\n  codexReasoningEffort?: string;\n  executorId?: string;\n')
+          replace_once(path,
+            '        model: options.codexModel,\n        approvalHandler\n',
+            '        model: options.codexModel,\n        reasoningEffort: options.codexReasoningEffort,\n        approvalHandler\n')
+          replace_once(path,
+            '    codexModel: env.MISSION_CODEX_MODEL?.trim() || undefined,\n    executorId:',
+            '    codexModel: env.MISSION_CODEX_MODEL?.trim() || undefined,\n    codexReasoningEffort: env.MISSION_CODEX_REASONING_EFFORT?.trim() || undefined,\n    executorId:')
+
+          # Fake Codex emits exact turn/start overrides for regression assertion.
+          path = 'tests/integration/codex-app-server-host-adapter.test.ts'
+          replace_once(path,
+            '    if (prompt.includes("hold-case")) return;\n    send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: message.params.threadId, turnId: currentTurn, delta: "hello from codex" } });\n',
+            '    if (prompt.includes("hold-case")) return;\n    if (prompt.includes("native-settings-case")) {\n      send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: message.params.threadId, turnId: currentTurn, delta: JSON.stringify({ model: message.params.model, effort: message.params.effort }) } });\n    } else {\n      send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: message.params.threadId, turnId: currentTurn, delta: "hello from codex" } });\n    }\n')
+          append = '''\n\ntest("Codex configured model/reasoning overrides are truthful graph features and exact turn/start parameters", async () => {\n  const { root, script } = await fixture();\n  try {\n    const adapter = new CodexAppServerHostAdapter({\n      binary: process.execPath,\n      argsPrefix: [script],\n      model: "fixture-model",\n      reasoningEffort: "high"\n    });\n    const snapshot = await adapter.snapshotEnvironment();\n    const capability = snapshot.capabilities.find(item => item.id === "openai-codex.app-server-agent");\n    assert(capability);\n    assert.equal(capability.native?.model?.configuredModel, "fixture-model");\n    assert.equal(capability.native?.model?.configuredReasoningEffort, "high");\n    assert.equal(capability.native?.model?.catalogValidated, false);\n    assert(capability.native?.features?.includes("model-override"));\n    assert(capability.native?.features?.includes("reasoning-effort-override"));\n    assert.deepEqual(capability.native?.coordination, {\n      runtimeManagedSubagents: false,\n      runtimeManagedTeams: false,\n      delegatedTurns: false\n    });\n    assert.deepEqual(capability.native?.jobs, {\n      background: false,\n      durable: false,\n      observable: false,\n      cancellable: false\n    });\n    assert.equal(capability.native?.features?.includes("subagents"), false);\n    assert.equal(capability.native?.features?.includes("background-job"), false);\n\n    const handle = await adapter.createAgent({\n      missionId: "mission-codex-native-settings",\n      workItemId: "work-native-settings",\n      workspaceRoot: root,\n      allowedCapabilityRefs: [],\n      context: "native-settings-case"\n    });\n    const events = await collect(adapter, handle);\n    const message = events.find(event => event.type === "message")?.payload as { text?: string } | undefined;\n    assert(message?.text);\n    assert.deepEqual(JSON.parse(message.text), { model: "fixture-model", effort: "high" });\n    const started = events.find(event => event.type === "started")?.payload as Record<string, unknown> | undefined;\n    assert.equal(started?.configuredModel, "fixture-model");\n    assert.equal(started?.configuredReasoningEffort, "high");\n  } finally {\n    await rm(root, { recursive: true, force: true });\n  }\n});\n'''
+          p = Path(path)
+          p.write_text(p.read_text() + append)
+
+          # Bootstrap no-spawn test also verifies structured configured overrides.
+          path = 'tests/integration/capability-bootstrap-policy.test.ts'
+          replace_once(path,
+            '    MISSION_CODEX_BINARY: "codex-fixture-not-spawned",\n    MISSION_CODEX_MODEL: "fixture-model"\n',
+            '    MISSION_CODEX_BINARY: "codex-fixture-not-spawned",\n    MISSION_CODEX_MODEL: "fixture-model",\n    MISSION_CODEX_REASONING_EFFORT: "high"\n')
+          replace_once(path,
+            '    assert(capability.native?.features?.includes("turn-steer"));\n',
+            '    assert(capability.native?.features?.includes("turn-steer"));\n    assert(capability.native?.features?.includes("model-override"));\n    assert(capability.native?.features?.includes("reasoning-effort-override"));\n    assert.equal(capability.native?.model?.configuredModel, "fixture-model");\n    assert.equal(capability.native?.model?.configuredReasoningEffort, "high");\n    assert.equal(capability.native?.model?.catalogValidated, false);\n    assert.equal(capability.native?.coordination?.runtimeManagedSubagents, false);\n    assert.equal(capability.native?.jobs?.background, false);\n')
+          PY
+      - name: Commit patch and remove temporary machinery
+        shell: bash
+        run: |
+          rm .github/workflows/agent09-native-semantics.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/hosts/codex/codex-app-server-host-adapter.ts src/hosts/deepseek/deepseek-host-adapter.ts src/runtime/bootstrap.ts tests/integration/codex-app-server-host-adapter.test.ts tests/integration/capability-bootstrap-policy.test.ts .github/workflows/agent09-native-semantics.yml
+          git commit -m "feat: expose truthful provider-native model and runtime semantics"
+          git push origin HEAD:feat/provider-native-execution-capabilities
