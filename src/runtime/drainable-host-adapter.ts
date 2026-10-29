@@ -33,7 +33,7 @@ export class DrainableHostAdapter implements HostAdapter {
   private readonly idleWaiters = new Set<() => void>();
   private readonly cancellationTasks = new Map<string, Promise<void>>();
   private readonly cancellationFailures = new Map<string, string>();
-  private readonly observedTerminal = new Set<string>();
+  private readonly observedTerminal = new WeakSet<HostAgentHandle>();
   private draining = false;
   private admissionsInFlight = 0;
 
@@ -82,7 +82,7 @@ export class DrainableHostAdapter implements HostAdapter {
   }
 
   async cancelAgent(handle: HostAgentHandle): Promise<void> {
-    if (!this.active.has(handle.id) && this.observedTerminal.has(handleIdentity(handle))) return;
+    if (!this.active.has(handle.id) && this.observedTerminal.has(handle)) return;
     await this.requestCancel(handle);
   }
 
@@ -188,13 +188,13 @@ export class DrainableHostAdapter implements HostAdapter {
     if (existing && existing.nativeRef !== handle.nativeRef) {
       throw new Error(`Host reused active handle id ${handle.id} for a different native session`);
     }
-    this.observedTerminal.delete(handleIdentity(handle));
+    this.observedTerminal.delete(handle);
     this.active.set(handle.id, handle);
   }
 
   private release(handle: HostAgentHandle, terminalObserved: boolean): void {
     if (!this.active.delete(handle.id)) return;
-    if (terminalObserved) this.observedTerminal.add(handleIdentity(handle));
+    if (terminalObserved) this.observedTerminal.add(handle);
     this.cancellationTasks.delete(handle.id);
     this.cancellationFailures.delete(handle.id);
     this.notifyIdleIfNeeded();
@@ -221,8 +221,4 @@ export class DrainableHostAdapter implements HostAdapter {
     for (const resolve of this.idleWaiters) resolve();
     this.idleWaiters.clear();
   }
-}
-
-function handleIdentity(handle: HostAgentHandle): string {
-  return `${handle.id}\u0000${handle.nativeRef ?? ""}`;
 }
