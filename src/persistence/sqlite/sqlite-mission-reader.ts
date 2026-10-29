@@ -6,6 +6,7 @@ import type {
   CapabilityTrustRecord
 } from "../../core/domain/capability-ledger.ts";
 import type { SideEffectOperationStatus, SideEffectOperationView } from "../../core/domain/execution.ts";
+import type { MissionEvent, MissionEventType } from "../../core/domain/event.ts";
 import type { MissionState } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
 import type { Evidence, Gap } from "../../core/domain/verification.ts";
@@ -14,6 +15,7 @@ import type { MissionJournalView } from "../../core/mission/journal-view.ts";
 import type { MissionReadModelReader } from "../../core/mission/mission-reader.ts";
 import type { StrategyProposal } from "../../core/planning/deliberation-provider.ts";
 import type { MissionDatabase } from "./database.ts";
+import { rowToMissionEvent, type SqliteMissionEventRow } from "./sqlite-event-row.ts";
 
 export interface SideEffectQuery {
   operationKey?: string;
@@ -21,6 +23,23 @@ export interface SideEffectQuery {
   workItemId?: string;
   status?: SideEffectOperationStatus;
   afterSequence?: number;
+  limit?: number;
+}
+
+export interface AttemptQuery {
+  workItemId?: string;
+  status?: string;
+  afterId?: string;
+  limit?: number;
+}
+
+export interface ExecutionQuery extends AttemptQuery {
+  attemptId?: string;
+}
+
+export interface ActivityQuery {
+  afterSequence?: number;
+  type?: MissionEventType | string;
   limit?: number;
 }
 
@@ -101,12 +120,65 @@ export class SqliteMissionReader implements MissionReadModelReader {
     return row?.strategy_json ? JSON.parse(row.strategy_json) as StrategyProposal : undefined;
   }
 
-  readAttempts(missionId: string): Array<Record<string, unknown>> {
-    return this.rows("rm_attempts", missionId).map(row => JSON.parse(row.data_json) as Record<string, unknown>);
+  readAttempts(missionId: string, query: AttemptQuery = {}): Array<Record<string, unknown>> {
+    const clauses = ["mission_id = ?"];
+    const params: Array<string | number> = [missionId];
+    appendLifecycleFilters(clauses, params, query);
+    const limit = boundedLimit(query.limit, "attempt");
+    params.push(limit);
+    const rows = this.database.db.prepare(`
+      SELECT data_json
+      FROM rm_attempts
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY id ASC
+      LIMIT ?
+    `).all(...params) as unknown as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as Record<string, unknown>);
   }
 
-  readExecutions(missionId: string): Array<Record<string, unknown>> {
-    return this.rows("rm_executions", missionId).map(row => JSON.parse(row.data_json) as Record<string, unknown>);
+  readExecutions(missionId: string, query: ExecutionQuery = {}): Array<Record<string, unknown>> {
+    const clauses = ["mission_id = ?"];
+    const params: Array<string | number> = [missionId];
+    appendLifecycleFilters(clauses, params, query);
+    if (query.attemptId !== undefined) {
+      clauses.push("attempt_id = ?");
+      params.push(boundedIdentifier(query.attemptId, "execution attemptId"));
+    }
+    const limit = boundedLimit(query.limit, "execution");
+    params.push(limit);
+    const rows = this.database.db.prepare(`
+      SELECT data_json
+      FROM rm_executions
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY id ASC
+      LIMIT ?
+    `).all(...params) as unknown as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as Record<string, unknown>);
+  }
+
+  readActivity(missionId: string, query: ActivityQuery = {}): MissionEvent[] {
+    const clauses = ["mission_id = ?"];
+    const params: Array<string | number> = [missionId];
+    const afterSequence = query.afterSequence ?? 0;
+    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
+      throw new Error("activity afterSequence must be a non-negative safe integer");
+    }
+    clauses.push("sequence > ?");
+    params.push(afterSequence);
+    if (query.type !== undefined) {
+      clauses.push("type = ?");
+      params.push(boundedToken(query.type, "activity type"));
+    }
+    const limit = boundedLimit(query.limit, "activity");
+    params.push(limit);
+    const rows = this.database.db.prepare(`
+      SELECT *
+      FROM mission_events
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY sequence ASC
+      LIMIT ?
+    `).all(...params) as unknown as SqliteMissionEventRow[];
+    return rows.map(rowToMissionEvent);
   }
 
   readFindings(missionId: string): Array<Record<string, unknown>> {
@@ -227,8 +299,6 @@ export class SqliteMissionReader implements MissionReadModelReader {
   private rows(
     table:
       | "rm_work_items"
-      | "rm_attempts"
-      | "rm_executions"
       | "rm_findings"
       | "rm_gaps"
       | "rm_decisions"
@@ -241,4 +311,45 @@ export class SqliteMissionReader implements MissionReadModelReader {
       `SELECT data_json FROM ${table} WHERE mission_id = ? ORDER BY id`
     ).all(missionId) as Array<{ data_json: string }>;
   }
+}
+
+function appendLifecycleFilters(
+  clauses: string[],
+  params: Array<string | number>,
+  query: AttemptQuery
+): void {
+  if (query.workItemId !== undefined) {
+    clauses.push("work_item_id = ?");
+    params.push(boundedIdentifier(query.workItemId, "workItemId"));
+  }
+  if (query.status !== undefined) {
+    clauses.push("status = ?");
+    params.push(boundedToken(query.status, "lifecycle status"));
+  }
+  if (query.afterId !== undefined) {
+    clauses.push("id > ?");
+    params.push(boundedIdentifier(query.afterId, "afterId"));
+  }
+}
+
+function boundedLimit(value: number | undefined, label: string): number {
+  const limit = value ?? 100;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+    throw new Error(`${label} query limit must be an integer between 1 and 500`);
+  }
+  return limit;
+}
+
+function boundedIdentifier(value: string, label: string): string {
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 256) throw new Error(`${label} must be between 1 and 256 characters`);
+  return normalized;
+}
+
+function boundedToken(value: string, label: string): string {
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 128 || !/^[A-Za-z0-9_.:-]+$/.test(normalized)) {
+    throw new Error(`${label} must be a bounded token`);
+  }
+  return normalized;
 }

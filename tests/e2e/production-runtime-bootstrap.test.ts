@@ -222,7 +222,8 @@ test("production runtime API automatically drives planner -> worker -> verifier 
   });
   const server = createMissionApi(runtime.controller, runtime.events, {
     supervisor: runtime.supervisor,
-    approvals: runtime.approvals
+    approvals: runtime.approvals,
+    operationalReader: runtime.reader
   });
 
   try {

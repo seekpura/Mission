@@ -26,7 +26,8 @@ const server = createMissionApi(runtime.controller, runtime.events, {
   capabilityLifecycle: runtime.capabilityLifecycle,
   capabilityLedgerReader: runtime.reader,
   evidenceReader: runtime.reader,
-  sideEffectReader: runtime.reader
+  sideEffectReader: runtime.reader,
+  operationalReader: runtime.reader
 });
 
 let shutdownTask: Promise<void> | undefined;

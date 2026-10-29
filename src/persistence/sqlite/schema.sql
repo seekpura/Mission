@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS mission_events (
   UNIQUE(mission_id, idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS idx_events_mission_sequence ON mission_events(mission_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_events_mission_type_sequence ON mission_events(mission_id, type, sequence);
 
 CREATE TABLE IF NOT EXISTS snapshots (
   id TEXT PRIMARY KEY,
@@ -209,6 +210,8 @@ CREATE TABLE IF NOT EXISTS rm_attempts (
   PRIMARY KEY(mission_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_rm_attempt_work ON rm_attempts(mission_id, work_item_id);
+CREATE INDEX IF NOT EXISTS idx_rm_attempt_work_page ON rm_attempts(mission_id, work_item_id, id);
+CREATE INDEX IF NOT EXISTS idx_rm_attempt_status_page ON rm_attempts(mission_id, status, id);
 
 CREATE TABLE IF NOT EXISTS rm_executions (
   mission_id TEXT NOT NULL,
@@ -221,6 +224,9 @@ CREATE TABLE IF NOT EXISTS rm_executions (
   PRIMARY KEY(mission_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_rm_execution_status ON rm_executions(mission_id, status);
+CREATE INDEX IF NOT EXISTS idx_rm_execution_work_page ON rm_executions(mission_id, work_item_id, id);
+CREATE INDEX IF NOT EXISTS idx_rm_execution_attempt_page ON rm_executions(mission_id, attempt_id, id);
+CREATE INDEX IF NOT EXISTS idx_rm_execution_status_page ON rm_executions(mission_id, status, id);
 
 CREATE TABLE IF NOT EXISTS rm_artifacts (
   mission_id TEXT NOT NULL,

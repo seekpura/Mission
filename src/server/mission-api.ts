@@ -29,6 +29,7 @@ export interface MissionApiRuntime {
   >;
   evidenceReader?: Pick<SqliteMissionReader, "readEvidence">;
   sideEffectReader?: Pick<SqliteMissionReader, "readSideEffects">;
+  operationalReader?: Pick<SqliteMissionReader, "readActivity" | "readAttempts" | "readExecutions">;
 }
 
 export interface MissionApiServer extends Server {
@@ -147,6 +148,57 @@ export function createMissionApi(
             ...(typeof limit === "number" ? { limit } : {})
           }));
         }
+        if (req.method === "GET" && parts[2] === "activity" && parts.length === 3) {
+          if (!runtime.operationalReader) return json(res, 503, { error: "operational_reader_unavailable" });
+          const afterSequence = parseOptionalInteger(url.searchParams.get("afterSequence"), 0, Number.MAX_SAFE_INTEGER);
+          if (afterSequence === "invalid") return json(res, 400, { error: "invalid_after_sequence" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 500);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_activity_limit" });
+          const type = parseOptionalToken(url.searchParams.get("type"));
+          if (type === "invalid") return json(res, 400, { error: "invalid_activity_type" });
+          return json(res, 200, runtime.operationalReader.readActivity(missionId, {
+            ...(typeof afterSequence === "number" ? { afterSequence } : {}),
+            ...(typeof type === "string" ? { type } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          }));
+        }
+        if (req.method === "GET" && parts[2] === "attempts" && parts.length === 3) {
+          if (!runtime.operationalReader) return json(res, 503, { error: "operational_reader_unavailable" });
+          const workItemId = parseOptionalIdentifier(url.searchParams.get("workItemId"));
+          if (workItemId === "invalid") return json(res, 400, { error: "invalid_work_item_id" });
+          const status = parseOptionalToken(url.searchParams.get("status"));
+          if (status === "invalid") return json(res, 400, { error: "invalid_lifecycle_status" });
+          const afterId = parseOptionalIdentifier(url.searchParams.get("afterId"));
+          if (afterId === "invalid") return json(res, 400, { error: "invalid_after_id" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 500);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_attempt_limit" });
+          return json(res, 200, runtime.operationalReader.readAttempts(missionId, {
+            ...(typeof workItemId === "string" ? { workItemId } : {}),
+            ...(typeof status === "string" ? { status } : {}),
+            ...(typeof afterId === "string" ? { afterId } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          }));
+        }
+        if (req.method === "GET" && parts[2] === "executions" && parts.length === 3) {
+          if (!runtime.operationalReader) return json(res, 503, { error: "operational_reader_unavailable" });
+          const workItemId = parseOptionalIdentifier(url.searchParams.get("workItemId"));
+          if (workItemId === "invalid") return json(res, 400, { error: "invalid_work_item_id" });
+          const attemptId = parseOptionalIdentifier(url.searchParams.get("attemptId"));
+          if (attemptId === "invalid") return json(res, 400, { error: "invalid_attempt_id" });
+          const status = parseOptionalToken(url.searchParams.get("status"));
+          if (status === "invalid") return json(res, 400, { error: "invalid_lifecycle_status" });
+          const afterId = parseOptionalIdentifier(url.searchParams.get("afterId"));
+          if (afterId === "invalid") return json(res, 400, { error: "invalid_after_id" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 500);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_execution_limit" });
+          return json(res, 200, runtime.operationalReader.readExecutions(missionId, {
+            ...(typeof workItemId === "string" ? { workItemId } : {}),
+            ...(typeof attemptId === "string" ? { attemptId } : {}),
+            ...(typeof status === "string" ? { status } : {}),
+            ...(typeof afterId === "string" ? { afterId } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          }));
+        }
         if (
           req.method === "GET" &&
           parts[2] === "capabilities" &&
@@ -221,7 +273,6 @@ export function createMissionApi(
             state: await controller.state(missionId)
           });
         }
-        if (req.method === "GET" && parts[2] === "activity") return json(res, 200, await events.list(missionId));
         if (req.method === "GET" && parts[2] === "events") {
           res.writeHead(200, {
             "Content-Type": "text/event-stream",
@@ -281,6 +332,20 @@ function parseOptionalInteger(raw: string | null, minimum: number, maximum: numb
   if (!/^\d+$/.test(raw)) return "invalid";
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) return "invalid";
+  return value;
+}
+
+function parseOptionalIdentifier(raw: string | null): string | undefined | "invalid" {
+  if (raw === null || raw.trim() === "") return undefined;
+  const value = raw.trim();
+  if (value.length > 256) return "invalid";
+  return value;
+}
+
+function parseOptionalToken(raw: string | null): string | undefined | "invalid" {
+  if (raw === null || raw.trim() === "") return undefined;
+  const value = raw.trim();
+  if (value.length > 128 || !/^[A-Za-z0-9_.:-]+$/.test(value)) return "invalid";
   return value;
 }
 
