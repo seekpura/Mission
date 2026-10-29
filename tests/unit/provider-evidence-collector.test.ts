@@ -103,10 +103,13 @@ function output(patch: Record<string, unknown> = {}): Record<string, unknown> {
 
 class ProviderHost implements HostAdapter {
   readonly invocations: HostCapabilityInvocation[] = [];
-  constructor(
-    private readonly descriptor: CapabilityDescriptor,
-    private readonly response: HostCapabilityResult = { ok: true, output: output() }
-  ) {}
+  private readonly descriptor: CapabilityDescriptor;
+  private readonly response: HostCapabilityResult;
+
+  constructor(descriptor: CapabilityDescriptor, response: HostCapabilityResult = { ok: true, output: output() }) {
+    this.descriptor = descriptor;
+    this.response = response;
+  }
 
   async describeHost(): Promise<HostDescriptor> { return { type: "fixture-provider-host", version: "1" }; }
   async snapshotEnvironment(): Promise<EnvironmentSnapshot> {
