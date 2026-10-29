@@ -26,6 +26,38 @@ export interface CapabilityCostProfile {
   metered?: boolean;
 }
 
+/**
+ * Provider model/reasoning settings that the current Runtime adapter can
+ * truthfully preserve. A configured override is not the same thing as a live
+ * provider model catalog: catalogValidated remains false until an adapter
+ * actually performs provider-native discovery/validation.
+ */
+export interface CapabilityNativeModelSemantics {
+  configuredModel?: string;
+  configuredReasoningEffort?: string;
+  catalogValidated?: boolean;
+  providerMultiAgentVersion?: "disabled" | "v1" | "v2";
+}
+
+/**
+ * Coordination controls are deliberately explicit about Runtime authority.
+ * Provider/model metadata alone must not be interpreted as Mission being able
+ * to spawn, route or observe subagents/teams.
+ */
+export interface CapabilityNativeCoordinationSemantics {
+  runtimeManagedSubagents: boolean;
+  runtimeManagedTeams: boolean;
+  delegatedTurns: boolean;
+}
+
+/** Provider-native background/job lifecycle that Mission can actually control. */
+export interface CapabilityNativeJobSemantics {
+  background: boolean;
+  durable: boolean;
+  observable: boolean;
+  cancellable: boolean;
+}
+
 export interface CapabilityNativeSemantics {
   provider?: string;
   nativeId?: string;
@@ -34,6 +66,9 @@ export interface CapabilityNativeSemantics {
   approvalModes?: Array<"none" | "once" | "mission" | "revision" | "host" | "provider-native">;
   features?: string[];
   persistence?: Array<"session" | "resume" | "recovery" | "background-job" | "durable-state">;
+  model?: CapabilityNativeModelSemantics;
+  coordination?: CapabilityNativeCoordinationSemantics;
+  jobs?: CapabilityNativeJobSemantics;
 }
 
 export interface CapabilityProvenance {
