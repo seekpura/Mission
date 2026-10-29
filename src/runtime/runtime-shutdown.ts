@@ -47,19 +47,19 @@ export async function shutdownMissionRuntime(input: {
   const graceful = await settleWithin(input.supervisor.waitForAllIdle(), gracefulTimeoutMs);
   if (graceful) {
     input.host.beginDrain();
-    const hostIdle = await settleWithin(input.host.waitForIdle(), forcedTimeoutMs);
-    if (!hostIdle) {
-      const cancellation = await forceSettle(input, forcedTimeoutMs);
+    const host = input.host.snapshot();
+    if (host.activeHandleIds.length === 0 && host.admissionsInFlight === 0) {
       disposeRuntime(input.approvals, input.database);
-      return {
-        forced: true,
-        cancelledHandleIds: cancellation.attempted,
-        cancellationFailures: cancellation.failures
-      };
+      return { forced: false, cancelledHandleIds: [], cancellationFailures: [] };
     }
 
+    const cancellation = await forceSettle(input, forcedTimeoutMs);
     disposeRuntime(input.approvals, input.database);
-    return { forced: false, cancelledHandleIds: [], cancellationFailures: [] };
+    return {
+      forced: true,
+      cancelledHandleIds: cancellation.attempted,
+      cancellationFailures: cancellation.failures
+    };
   }
 
   const cancellation = await forceSettle(input, forcedTimeoutMs);
