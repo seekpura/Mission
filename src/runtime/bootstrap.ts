@@ -11,6 +11,7 @@ import { MissionController } from "../core/mission/controller.ts";
 import { ExecutorRouter } from "../core/execution/executor-router.ts";
 import { MissionCapabilityOverlay } from "../core/capabilities/mission-capability-overlay.ts";
 import type { CapabilityRuntime } from "../core/capabilities/capability-coordinator.ts";
+import { FileAcquisitionReceiptStore } from "../core/capabilities/acquisition-receipt.ts";
 import {
   FileTrustedCapabilityCache,
   type TrustedCapabilityCache
@@ -26,6 +27,15 @@ import {
   RuntimeCapabilityLifecycleManager
 } from "./capability-ledger-runtime.ts";
 import { CapabilityWorkspaceHostAdapter } from "./capability-context-host-adapter.ts";
+import {
+  ExternalMcpAcquirer,
+  ExternalMcpCapabilityRuntime,
+  ExternalMcpCatalog,
+  MissionExternalMcpHostAdapter,
+  MissionExternalMcpRegistry,
+  parseExternalMcpCatalogJson,
+  type ExternalMcpCatalogEntry
+} from "./external-mcp-runtime.ts";
 import {
   createTrustedHostCapabilityEvidenceCollectors,
   parseTrustedHostCapabilityEvidenceBindingsJson,
@@ -97,6 +107,9 @@ export interface MissionRuntimeOptions {
   capabilityAcquisition?: ProductionCapabilityAcquisitionOptions;
   trustedMcpServers?: TrustedMcpServerConfig[];
   allowInsecureTrustedMcpHttp?: boolean;
+  /** Untrusted registry-fed HTTPS/no-credential MCP candidates. Catalog presence is discovery, not trust. */
+  externalMcpCatalog?: ExternalMcpCatalogEntry[];
+  externalMcpMaxCandidates?: number;
   /**
    * Provider-/deployment-specific collectors for evidence that cannot be
    * established from artifact bytes alone. These are trusted in-process
@@ -143,6 +156,8 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const approvals = new RuntimeApprovalManager(events, { timeoutMs: options.approvalTimeoutMs });
   const sideEffects = new RuntimeSideEffectManager(events, approvals);
   const sideEffectScopes = new HostSideEffectScopeRegistry();
+  const externalMcpCatalog = new ExternalMcpCatalog(options.externalMcpCatalog ?? []);
+  const externalMcpRegistry = new MissionExternalMcpRegistry();
 
   const hostKind = options.hostKind ?? "deepseek";
   if (hostKind === "codex" && options.capabilityAcquisition) {
@@ -174,10 +189,11 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
         argsPrefix: options.dshArgsPrefix,
         approvalHandler
       })));
+  const missionMcpHost = new MissionExternalMcpHostAdapter(baseHost, externalMcpRegistry);
   const trustedMcp = new TrustedMcpRegistry(options.trustedMcpServers ?? [], {
     allowInsecureHttp: options.allowInsecureTrustedMcpHttp
   });
-  const mcpHost = new TrustedMcpHostAdapter(baseHost, trustedMcp);
+  const mcpHost = new TrustedMcpHostAdapter(missionMcpHost, trustedMcp);
   const overlay = new MissionCapabilityOverlay();
   const capabilityHost = !options.host && hostKind === "deepseek"
     ? new CapabilityWorkspaceHostAdapter(mcpHost, new MissionAgentSkillWorkspaceProjector(overlay))
@@ -231,13 +247,26 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const trustedCapabilityCache: TrustedCapabilityCache | undefined = options.capabilityAcquisition
     ? new FileTrustedCapabilityCache(resolve(root, "capabilities", "trusted-cache"))
     : undefined;
-  const baseCapabilities = createCapabilityRuntime({
+  const rawCapabilities = createCapabilityRuntime({
     root,
     host,
     overlay,
     approvals,
     acquisition: options.capabilityAcquisition,
     trustedCache: trustedCapabilityCache
+  });
+  const externalMcpAcquirer = new ExternalMcpAcquirer({
+    catalog: externalMcpCatalog,
+    approvals,
+    receipts: new FileAcquisitionReceiptStore(resolve(root, "capabilities", "mcp-receipts")),
+    registry: externalMcpRegistry
+  });
+  const baseCapabilities: CapabilityRuntime = new ExternalMcpCapabilityRuntime({
+    base: rawCapabilities,
+    catalog: externalMcpCatalog,
+    acquirer: externalMcpAcquirer,
+    registry: externalMcpRegistry,
+    maxCandidates: options.externalMcpMaxCandidates
   });
   const capabilities = new CapabilityLedgerRuntime(baseCapabilities, events);
   const capabilityLifecycle = new RuntimeCapabilityLifecycleManager(
@@ -327,6 +356,7 @@ export function createProductionMissionRuntimeFromEnv(
   const trustedMcpServers = parseTrustedMcpServersJson(env.MISSION_TRUSTED_MCP_SERVERS_JSON, {
     allowInsecureHttp: allowInsecureTrustedMcpHttp
   });
+  const externalMcpCatalog = parseExternalMcpCatalogJson(env.MISSION_EXTERNAL_MCP_CATALOG_JSON);
   const providerEvidenceRoutes = parseTrustedProviderEvidenceRoutesJson(
     env.MISSION_EVIDENCE_PROVIDER_ROUTES_JSON
   );
@@ -357,6 +387,8 @@ export function createProductionMissionRuntimeFromEnv(
     capabilityAcquisition: capabilityAcquisitionFromEnv(env),
     trustedMcpServers,
     allowInsecureTrustedMcpHttp,
+    externalMcpCatalog,
+    externalMcpMaxCandidates: positiveNumber(env.MISSION_EXTERNAL_MCP_MAX_CANDIDATES),
     providerEvidenceRoutes,
     hostEvidenceCapabilities
   });
