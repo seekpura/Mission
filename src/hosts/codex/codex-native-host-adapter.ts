@@ -208,7 +208,7 @@ export class CodexNativeCapabilityHostAdapter implements HostAdapter {
       argsPrefix: [
         ...this.argsPrefix,
         ...(selection.reasoningEffort
-          ? ["-c", `model_reasoning_effort=${selection.reasoningEffort}`]
+          ? ["-c", `model_reasoning_effort=${JSON.stringify(selection.reasoningEffort)}`]
           : [])
       ],
       env: this.env,
