@@ -10,7 +10,7 @@ import type { SideEffectOperationStatus, SideEffectOperationView } from "../../c
 import type { MissionEvent, MissionEventType } from "../../core/domain/event.ts";
 import type { MissionState } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
-import type { Evidence, Gap } from "../../core/domain/verification.ts";
+import type { Evidence, Finding, Gap } from "../../core/domain/verification.ts";
 import { initialMissionState } from "../../core/events/state-projector.ts";
 import type { MissionJournalView } from "../../core/mission/journal-view.ts";
 import type { MissionReadModelReader } from "../../core/mission/mission-reader.ts";
@@ -76,6 +76,17 @@ export interface ExecutionQuery extends AttemptQuery {
 export interface ActivityQuery {
   afterSequence?: number;
   type?: MissionEventType | string;
+  limit?: number;
+}
+
+export interface FindingQuery {
+  afterId?: string;
+  limit?: number;
+}
+
+export interface ApprovalQuery {
+  status?: "pending" | "approved" | "rejected";
+  afterId?: string;
   limit?: number;
 }
 
@@ -217,12 +228,44 @@ export class SqliteMissionReader implements MissionReadModelReader {
     return rows.map(rowToMissionEvent);
   }
 
-  readFindings(missionId: string): Array<Record<string, unknown>> {
-    return this.rows("rm_findings", missionId).map(row => JSON.parse(row.data_json) as Record<string, unknown>);
+  readFindings(missionId: string, query: FindingQuery = {}): Finding[] {
+    const clauses = ["mission_id = ?"];
+    const params: Array<string | number> = [missionId];
+    if (query.afterId !== undefined) {
+      clauses.push("id > ?");
+      params.push(boundedIdentifier(query.afterId, "finding afterId"));
+    }
+    params.push(boundedLimit(query.limit, "finding"));
+    const rows = this.database.db.prepare(`
+      SELECT data_json
+      FROM rm_findings
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY id ASC
+      LIMIT ?
+    `).all(...params) as unknown as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as Finding);
   }
 
-  readApprovals(missionId: string): Array<Record<string, unknown>> {
-    return this.rows("rm_approvals", missionId).map(row => JSON.parse(row.data_json) as Record<string, unknown>);
+  readApprovals(missionId: string, query: ApprovalQuery = {}): Array<Record<string, unknown>> {
+    const clauses = ["mission_id = ?"];
+    const params: Array<string | number> = [missionId];
+    if (query.status !== undefined) {
+      clauses.push("status = ?");
+      params.push(query.status);
+    }
+    if (query.afterId !== undefined) {
+      clauses.push("id > ?");
+      params.push(boundedIdentifier(query.afterId, "approval afterId"));
+    }
+    params.push(boundedLimit(query.limit, "approval"));
+    const rows = this.database.db.prepare(`
+      SELECT data_json
+      FROM rm_approvals
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY id ASC
+      LIMIT ?
+    `).all(...params) as unknown as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as Record<string, unknown>);
   }
 
   readCapabilityTrust(missionId: string): CapabilityTrustRecord[] {
@@ -438,10 +481,8 @@ export class SqliteMissionReader implements MissionReadModelReader {
   private rows(
     table:
       | "rm_work_items"
-      | "rm_findings"
       | "rm_gaps"
       | "rm_decisions"
-      | "rm_approvals"
       | "rm_capability_needs"
       | "rm_capabilities",
     missionId: string
