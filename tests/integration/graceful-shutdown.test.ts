@@ -285,7 +285,7 @@ test("synchronous close fails closed while async shutdown is already draining", 
     const shutdown = runtime.shutdown({ gracefulTimeoutMs: 20, forcedTimeoutMs: 1_000 });
     assert.throws(
       () => runtime.close(),
-      /asynchronous Mission Runtime shutdown is in progress/,
+      /Cannot synchronously close Mission Runtime while asynchronous shutdown is in progress/,
       "sync close must not race the async shutdown coordinator or close SQLite early"
     );
     await shutdown;
