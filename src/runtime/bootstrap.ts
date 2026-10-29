@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import type { HostAdapter } from "../hosts/host-adapter.ts";
-import { CodexAppServerHostAdapter } from "../hosts/codex/codex-app-server-host-adapter.ts";
+import { CodexNativeCapabilityHostAdapter } from "../hosts/codex/codex-native-host-adapter.ts";
 import { DeepSeekHarnessAdapter } from "../hosts/deepseek/deepseek-host-adapter.ts";
 import { DeepSeekAcpProcessBindings } from "../hosts/deepseek/acp-process-bindings.ts";
 import { MissionDatabase } from "../persistence/sqlite/database.ts";
@@ -83,6 +83,11 @@ export interface MissionRuntimeOptions {
   codexBinary?: string;
   codexArgsPrefix?: string[];
   codexModel?: string;
+  codexReasoningEffort?: string;
+  codexNativeDiscovery?: boolean;
+  codexNativeDiscoveryTimeoutMs?: number;
+  codexNativeDiscoveryCacheMs?: number;
+  codexNativeDiscoveryMaxPages?: number;
   executorId?: string;
   approvalTimeoutMs?: number;
   controlTimeoutMs?: number;
@@ -153,10 +158,15 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const approvalHandler = (request: Parameters<RuntimeSideEffectManager["authorizeHostPermission"]>[0]) =>
     sideEffects.authorizeHostPermission(sideEffectScopes.enrich(request));
   const baseHost = options.host ?? (hostKind === "codex"
-    ? new CodexAppServerHostAdapter({
+    ? new CodexNativeCapabilityHostAdapter({
         binary: options.codexBinary,
         argsPrefix: options.codexArgsPrefix,
         model: options.codexModel,
+        reasoningEffort: options.codexReasoningEffort,
+        nativeDiscovery: options.codexNativeDiscovery,
+        nativeDiscoveryTimeoutMs: options.codexNativeDiscoveryTimeoutMs,
+        nativeDiscoveryCacheMs: options.codexNativeDiscoveryCacheMs,
+        nativeDiscoveryMaxPages: options.codexNativeDiscoveryMaxPages,
         approvalHandler
       })
     : new DeepSeekHarnessAdapter(new DeepSeekAcpProcessBindings({
@@ -333,6 +343,11 @@ export function createProductionMissionRuntimeFromEnv(
     codexBinary: env.MISSION_CODEX_BINARY || "codex",
     codexArgsPrefix,
     codexModel: env.MISSION_CODEX_MODEL?.trim() || undefined,
+    codexReasoningEffort: env.MISSION_CODEX_REASONING_EFFORT?.trim() || undefined,
+    codexNativeDiscovery: parseBoolean01(env.MISSION_CODEX_NATIVE_DISCOVERY, "MISSION_CODEX_NATIVE_DISCOVERY", true),
+    codexNativeDiscoveryTimeoutMs: positiveNumber(env.MISSION_CODEX_NATIVE_DISCOVERY_TIMEOUT_MS),
+    codexNativeDiscoveryCacheMs: positiveNumber(env.MISSION_CODEX_NATIVE_DISCOVERY_CACHE_MS),
+    codexNativeDiscoveryMaxPages: positiveNumber(env.MISSION_CODEX_NATIVE_DISCOVERY_MAX_PAGES),
     executorId: env.MISSION_EXECUTOR_ID || (hostKind === "codex" ? "codex-host" : "deepseek-host"),
     approvalTimeoutMs: positiveNumber(env.MISSION_APPROVAL_TIMEOUT_MS),
     controlTimeoutMs: positiveNumber(env.MISSION_CONTROL_TIMEOUT_MS),
@@ -402,6 +417,13 @@ function positiveNumber(value: string | undefined): number | undefined {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`Expected positive numeric environment value, received: ${value}`);
   return parsed;
+}
+
+function parseBoolean01(value: string | undefined, name: string, fallback: boolean): boolean {
+  if (value === undefined || value === "") return fallback;
+  if (value === "1") return true;
+  if (value === "0") return false;
+  throw new Error(`${name} must be 0 or 1`);
 }
 
 function parseStringArrayEnv(value: string | undefined, name: string): string[] | undefined {
