@@ -20,6 +20,7 @@ const SIDE_EFFECT_STATUSES = new Set<SideEffectOperationStatus>([
   "failed",
   "unknown"
 ]);
+const APPROVAL_STATUSES = new Set(["pending", "approved", "rejected"] as const);
 const EVIDENCE_KINDS = new Set<Evidence["kind"]>([
   "file-integrity",
   "text-content",
@@ -52,6 +53,8 @@ const CAPABILITY_AUDIT_DECISIONS = new Set<CapabilityAuditDecision>([
 export interface MissionApiRuntime {
   supervisor?: MissionSupervisor;
   approvals?: RuntimeApprovalManager;
+  approvalReader?: Pick<SqliteMissionReader, "readApprovals">;
+  findingReader?: Pick<SqliteMissionReader, "readFindings">;
   capabilityLifecycle?: RuntimeCapabilityLifecycleManager;
   capabilityLedgerReader?: Pick<
     SqliteMissionReader,
@@ -134,8 +137,20 @@ export function createMissionApi(
           return json(res, 202, await controller.state(missionId));
         }
         if (req.method === "GET" && parts[2] === "approvals" && parts.length === 3) {
-          if (!runtime.approvals) return json(res, 503, { error: "approval_manager_unavailable" });
-          return json(res, 200, await runtime.approvals.list(missionId));
+          if (!runtime.approvalReader) return json(res, 503, { error: "approval_reader_unavailable" });
+          const statusValue = parseOptionalToken(url.searchParams.get("status"));
+          if (statusValue === "invalid" || (statusValue && !APPROVAL_STATUSES.has(statusValue as "pending" | "approved" | "rejected"))) {
+            return json(res, 400, { error: "invalid_approval_status" });
+          }
+          const afterId = parseOptionalIdentifier(url.searchParams.get("afterId"));
+          if (afterId === "invalid") return json(res, 400, { error: "invalid_after_id" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 500);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_approval_limit" });
+          return json(res, 200, runtime.approvalReader.readApprovals(missionId, {
+            ...(typeof statusValue === "string" ? { status: statusValue as "pending" | "approved" | "rejected" } : {}),
+            ...(typeof afterId === "string" ? { afterId } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          }));
         }
         if (req.method === "POST" && parts[2] === "approvals" && parts[3] && parts.length === 4) {
           if (!runtime.approvals) return json(res, 503, { error: "approval_manager_unavailable" });
@@ -153,6 +168,17 @@ export function createMissionApi(
           await publish(missionId);
           void runtime.supervisor?.wake(missionId, "approval_event");
           return json(res, 200, record);
+        }
+        if (req.method === "GET" && parts[2] === "findings" && parts.length === 3) {
+          if (!runtime.findingReader) return json(res, 503, { error: "finding_reader_unavailable" });
+          const afterId = parseOptionalIdentifier(url.searchParams.get("afterId"));
+          if (afterId === "invalid") return json(res, 400, { error: "invalid_after_id" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 500);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_finding_limit" });
+          return json(res, 200, runtime.findingReader.readFindings(missionId, {
+            ...(typeof afterId === "string" ? { afterId } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          }));
         }
         if (req.method === "GET" && parts[2] === "evidence" && (parts.length === 3 || (parts[3] === "page" && parts.length === 4))) {
           if (!runtime.evidenceReader) return json(res, 503, { error: "evidence_reader_unavailable" });
