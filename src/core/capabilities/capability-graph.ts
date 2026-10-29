@@ -123,7 +123,7 @@ export function environmentAvailability(
 ): boolean | "unknown" {
   const node = graph.nodes.find(
     (candidate): candidate is Extract<CapabilityGraphNode, { kind: "environment" }> =>
-      node.kind === "environment" && node.environment === environment
+      candidate.kind === "environment" && candidate.environment === environment
   );
   return node?.available ?? "unknown";
 }
