@@ -139,6 +139,10 @@ class SkillOnlyRankedDiscovery implements CapabilityCandidateDiscovery {
   }
 
   async discover(need: CapabilityNeed): Promise<RankedCandidate[]> {
+    const acceptableKinds = need.policy?.acceptableKinds;
+    if (acceptableKinds && acceptableKinds.length > 0 && !acceptableKinds.includes("skill")) {
+      return [];
+    }
     const settled = await Promise.allSettled(this.providers.map(provider => provider.discover(need)));
     const successful = settled.filter((item): item is PromiseFulfilledResult<CapabilityCandidate[]> => item.status === "fulfilled");
     if (successful.length === 0) {
