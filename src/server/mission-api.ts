@@ -7,6 +7,7 @@ import type { SideEffectOperationStatus } from "../core/domain/execution.ts";
 import type { Evidence } from "../core/domain/verification.ts";
 import type { MissionController } from "../core/mission/controller.ts";
 import type { EventStore } from "../core/events/event-store.ts";
+import type { SqliteHistoryReader } from "../persistence/sqlite/sqlite-history-reader.ts";
 import type { SqliteMissionReader } from "../persistence/sqlite/sqlite-mission-reader.ts";
 import type { SqliteOperationalSummaryReader } from "../persistence/sqlite/sqlite-operational-summary-reader.ts";
 import type { RuntimeApprovalManager } from "../runtime/approval-manager.ts";
@@ -65,6 +66,7 @@ export interface MissionApiRuntime {
   sideEffectReader?: Pick<SqliteMissionReader, "readSideEffects">;
   operationalReader?: Pick<SqliteMissionReader, "readActivity" | "readAttempts" | "readExecutions">;
   summaryReader?: Pick<SqliteOperationalSummaryReader, "readSummary">;
+  historyReader?: Pick<SqliteHistoryReader, "readExportPage" | "readRetentionState">;
 }
 
 export interface MissionApiServer extends Server {
@@ -130,6 +132,26 @@ export function createMissionApi(
           if (!runtime.summaryReader) return json(res, 503, { error: "operational_summary_reader_unavailable" });
           const summary = runtime.summaryReader.readSummary(missionId);
           return summary ? json(res, 200, summary) : json(res, 404, { error: "mission_not_found" });
+        }
+        if (req.method === "GET" && parts[2] === "history" && parts[3] === "export" && parts.length === 4) {
+          if (!runtime.historyReader) return json(res, 503, { error: "history_reader_unavailable" });
+          const afterSequence = parseOptionalInteger(url.searchParams.get("afterSequence"), 0, Number.MAX_SAFE_INTEGER);
+          if (afterSequence === "invalid") return json(res, 400, { error: "invalid_history_after_sequence" });
+          const throughSequence = parseOptionalInteger(url.searchParams.get("throughSequence"), 0, Number.MAX_SAFE_INTEGER);
+          if (throughSequence === "invalid") return json(res, 400, { error: "invalid_history_through_sequence" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 5000);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_history_limit" });
+          const page = runtime.historyReader.readExportPage(missionId, {
+            ...(typeof afterSequence === "number" ? { afterSequence } : {}),
+            ...(typeof throughSequence === "number" ? { throughSequence } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          });
+          return page ? json(res, 200, page) : json(res, 404, { error: "mission_not_found" });
+        }
+        if (req.method === "GET" && parts[2] === "history" && parts[3] === "retention" && parts.length === 4) {
+          if (!runtime.historyReader) return json(res, 503, { error: "history_reader_unavailable" });
+          const retention = runtime.historyReader.readRetentionState(missionId);
+          return retention ? json(res, 200, retention) : json(res, 404, { error: "mission_not_found" });
         }
         if (req.method === "POST" && parts[2] === "steer") {
           const body = await readJson(req);
