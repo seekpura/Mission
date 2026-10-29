@@ -62,6 +62,11 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 - production `MISSION_HOST_EVIDENCE_BINDINGS_JSON` configuration validates trusted read-only evidence bindings at startup before any provider invocation
 - browser-runtime integration coverage proves Host capability -> typed Evidence -> transactional SQLite -> website profile evidence gate end to end
 - missing provider-specific render/browser/media/test/recency capability bindings never fabricate evidence; the corresponding profile checks remain inconclusive until a real host capability is explicitly bound
+- production structured provider Evidence routes use the Runtime-owned `mission-evidence/v1` contract for presentation render, browser runtime, accessibility, media probe/playback, executable test/build/integration and research-recency observations
+- `MISSION_EVIDENCE_PROVIDER_ROUTES_JSON` pins an exact live capability id plus provider/protocol/native identity while Runtime fixes the semantic function, verification profile/artifact scope, Evidence type and durable claim for each Evidence kind
+- structured provider responses must bind back to the exact Artifact id/content hash, use a bounded common verdict envelope and pass kind-specific observation schemas with verdict-consistency checks before any Runtime Evidence is registered
+- provider configuration never synthesizes capabilities into the HostAdapter graph: absent, unavailable or incompatible capabilities are isolated as collector failures and required verifier checks remain inconclusive
+- current DeepSeek ACP and Codex app-server adapters still reject arbitrary `invokeHostCapability` execution; provider Evidence becomes available only when a real host/provider adapter explicitly exposes the trusted read-only capability contract
 - conflicting or absent gap evidence leaves the gap open
 - synthesized Findings and blocking Gaps from grounded failed verification
 - execution/verifier exceptions converted to runtime gaps
@@ -214,10 +219,9 @@ Architecture Freeze F0-F8 + Implementation Freeze 1.
 
 Development continues toward the complete runtime, not a minimal demo. Highest-value unfinished areas are:
 
-1. concrete provider-specific read-only Evidence bindings/adapters for deployed presentation render, browser/accessibility, media probe/playback, executable test/build and research-recency capabilities as hosts expose them; the Runtime Evidence framework and fail-closed gates are implemented, but unavailable host capabilities remain inconclusive
-2. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as HostAdapters expose them
-3. external MCP discovery/acquisition plus provider-native MCP/Agent-Skill/CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles, including Codex-native delivery instead of reusing DeepSeek/ACP semantics
-4. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction
+1. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as HostAdapters expose them
+2. external MCP discovery/acquisition plus provider-native MCP/Agent-Skill/CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles, including Codex-native delivery instead of reusing DeepSeek/ACP semantics
+3. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction
 
 ## GitHub source control
 
