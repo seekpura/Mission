@@ -280,6 +280,7 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     },
     close(): void {
       if (closed) return;
+      if (shutdownPromise) throw new Error("Cannot synchronously close Mission Runtime while asynchronous shutdown is in progress");
       shutdownStarted = true;
       if (recoveryPromise) throw new Error("Cannot synchronously close Mission Runtime while startup recovery is active");
       closeMissionRuntimeIfIdle(lifecycle);
