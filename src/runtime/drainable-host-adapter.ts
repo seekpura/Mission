@@ -90,11 +90,10 @@ export class DrainableHostAdapter implements HostAdapter {
     let terminalObserved = false;
     try {
       for await (const event of this.base.observeAgent(handle)) {
+        const terminal = event.type === "completed" || event.type === "failed";
+        if (terminal) terminalObserved = true;
         yield event;
-        if (event.type === "completed" || event.type === "failed") {
-          terminalObserved = true;
-          return;
-        }
+        if (terminal) return;
       }
     } finally {
       this.release(handle, terminalObserved);
