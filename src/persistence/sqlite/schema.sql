@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS mission_events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_mission_sequence ON mission_events(mission_id, sequence);
 CREATE INDEX IF NOT EXISTS idx_events_mission_type_sequence ON mission_events(mission_id, type, sequence);
+CREATE INDEX IF NOT EXISTS idx_events_mission_created_at ON mission_events(mission_id, created_at);
 
 CREATE TABLE IF NOT EXISTS snapshots (
   id TEXT PRIMARY KEY,

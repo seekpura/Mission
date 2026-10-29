@@ -1,8 +1,10 @@
+import { SqliteOperationalSummaryReader } from "../persistence/sqlite/sqlite-operational-summary-reader.ts";
 import { createProductionMissionRuntimeFromEnv } from "../runtime/bootstrap.ts";
 import { createMissionApi } from "./mission-api.ts";
 import { shutdownHttpRuntime } from "./graceful-shutdown.ts";
 
 const runtime = createProductionMissionRuntimeFromEnv();
+const summaryReader = new SqliteOperationalSummaryReader(runtime.database);
 const port = Number(process.env.PORT ?? 8787);
 if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
   throw new Error(`Invalid PORT: ${process.env.PORT ?? "8787"}`);
@@ -29,7 +31,8 @@ const server = createMissionApi(runtime.controller, runtime.events, {
   capabilityLedgerReader: runtime.reader,
   evidenceReader: runtime.reader,
   sideEffectReader: runtime.reader,
-  operationalReader: runtime.reader
+  operationalReader: runtime.reader,
+  summaryReader
 });
 
 let shutdownTask: Promise<void> | undefined;

@@ -8,6 +8,7 @@ import type { Evidence } from "../core/domain/verification.ts";
 import type { MissionController } from "../core/mission/controller.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 import type { SqliteMissionReader } from "../persistence/sqlite/sqlite-mission-reader.ts";
+import type { SqliteOperationalSummaryReader } from "../persistence/sqlite/sqlite-operational-summary-reader.ts";
 import type { RuntimeApprovalManager } from "../runtime/approval-manager.ts";
 import type { RuntimeCapabilityLifecycleManager } from "../runtime/capability-ledger-runtime.ts";
 import type { MissionSupervisor } from "../runtime/mission-supervisor.ts";
@@ -63,6 +64,7 @@ export interface MissionApiRuntime {
   evidenceReader?: Pick<SqliteMissionReader, "readEvidencePage">;
   sideEffectReader?: Pick<SqliteMissionReader, "readSideEffects">;
   operationalReader?: Pick<SqliteMissionReader, "readActivity" | "readAttempts" | "readExecutions">;
+  summaryReader?: Pick<SqliteOperationalSummaryReader, "readSummary">;
 }
 
 export interface MissionApiServer extends Server {
@@ -124,6 +126,11 @@ export function createMissionApi(
       if (parts[0] === "missions" && parts[1]) {
         const missionId = parts[1];
         if (req.method === "GET" && parts.length === 2) return json(res, 200, await controller.state(missionId));
+        if (req.method === "GET" && parts[2] === "summary" && parts.length === 3) {
+          if (!runtime.summaryReader) return json(res, 503, { error: "operational_summary_reader_unavailable" });
+          const summary = runtime.summaryReader.readSummary(missionId);
+          return summary ? json(res, 200, summary) : json(res, 404, { error: "mission_not_found" });
+        }
         if (req.method === "POST" && parts[2] === "steer") {
           const body = await readJson(req);
           const state = await controller.steer(missionId, body.message ?? "");
@@ -402,8 +409,6 @@ export function createMissionApi(
           const set = subscribers.get(missionId) ?? new Set<ServerResponse>();
           set.add(res); subscribers.set(missionId, set);
           res.write(`event: mission.updated\ndata: ${JSON.stringify(await controller.state(missionId))}\n\n`);
-          // After the initial durable state read, SSE is a passive subscriber and
-          // must not keep the request-mutation drain barrier open indefinitely.
           releaseRequest(res);
           req.on("close", () => {
             set.delete(res);
