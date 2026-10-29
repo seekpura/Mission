@@ -33,13 +33,14 @@ test("production bootstrap rejects unknown acquisition modes instead of silently
   );
 });
 
-test("production bootstrap selects Codex app-server as a real HostAdapter without spawning it for environment discovery", async () => {
+test("production bootstrap can explicitly disable Codex native discovery when the provider process must not be spawned", async () => {
   const root = mkdtempSync(join(tmpdir(), "mission-codex-bootstrap-"));
   const runtime = createProductionMissionRuntimeFromEnv({
     MISSION_HOME: root,
     MISSION_HOST_KIND: "codex",
     MISSION_CODEX_BINARY: "codex-fixture-not-spawned",
-    MISSION_CODEX_MODEL: "fixture-model"
+    MISSION_CODEX_MODEL: "fixture-model",
+    MISSION_CODEX_NATIVE_DISCOVERY: "0"
   }, process.cwd());
 
   try {
@@ -52,8 +53,25 @@ test("production bootstrap selects Codex app-server as a real HostAdapter withou
     assert.equal(capability.native?.protocol, "codex-app-server-jsonrpc-v2");
     assert.equal(capability.routing?.resumable, true);
     assert(capability.native?.features?.includes("turn-steer"));
+    assert.equal(environment.capabilities.some(item => item.id.startsWith("openai-codex.model.")), false);
   } finally {
     runtime.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("production bootstrap validates Codex native discovery boolean configuration", () => {
+  const root = mkdtempSync(join(tmpdir(), "mission-codex-discovery-config-"));
+  try {
+    assert.throws(
+      () => createProductionMissionRuntimeFromEnv({
+        MISSION_HOME: root,
+        MISSION_HOST_KIND: "codex",
+        MISSION_CODEX_NATIVE_DISCOVERY: "sometimes"
+      }, process.cwd()),
+      /MISSION_CODEX_NATIVE_DISCOVERY must be 0 or 1/
+    );
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
