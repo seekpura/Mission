@@ -5,6 +5,7 @@ import type {
   SideEffectClass,
   SideEffectCompletion,
   SideEffectIntent,
+  SideEffectOperationView,
   SideEffectPolicy,
   SideEffectRecord
 } from "../core/domain/execution.ts";
@@ -42,8 +43,20 @@ export interface HostSideEffectObservationResult {
   violations: string[];
 }
 
+/**
+ * Operational lookup used by production side-effect decisions. Implementations
+ * must represent the same durable Mission event stream as the EventStore.
+ */
+export interface SideEffectHistoryReader {
+  readSideEffects(
+    missionId: string,
+    query?: { operationKey?: string; limit?: number }
+  ): SideEffectOperationView[];
+}
+
 export interface RuntimeSideEffectManagerOptions {
   defaultHostPolicy?: SideEffectPolicy;
+  historyReader?: SideEffectHistoryReader;
 }
 
 interface HostToolCall {
@@ -88,6 +101,7 @@ export class RuntimeSideEffectManager {
   private readonly events: EventStore;
   private readonly approvals: SideEffectApprovalBroker;
   private readonly defaultHostPolicy: SideEffectPolicy;
+  private readonly historyReader?: SideEffectHistoryReader;
   private readonly inFlight = new Map<string, Promise<SideEffectAuthorizationResult>>();
 
   constructor(
@@ -98,6 +112,7 @@ export class RuntimeSideEffectManager {
     this.events = events;
     this.approvals = approvals;
     this.defaultHostPolicy = clonePolicy(options.defaultHostPolicy ?? DEFAULT_HOST_POLICY);
+    this.historyReader = options.historyReader;
   }
 
   async authorizeHostPermission(request: ApprovalRequest): Promise<ApprovalResult> {
@@ -329,6 +344,23 @@ export class RuntimeSideEffectManager {
   }
 
   private async history(missionId: string, operationKey: string): Promise<SideEffectHistory> {
+    if (this.historyReader) {
+      const view = this.historyReader.readSideEffects(missionId, { operationKey, limit: 1 })[0];
+      if (!view) return {};
+      return {
+        intent: view.intent,
+        ...(view.lastReplayBlocked || view.admission
+          ? { admission: view.lastReplayBlocked ?? view.admission }
+          : {}),
+        ...(view.completion
+          ? {
+              completion: view.completion,
+              terminalType: view.completion.status === "failed" ? "failed" : "completed"
+            }
+          : {})
+      };
+    }
+
     const history: SideEffectHistory = {};
     for (const event of await this.events.list(missionId)) {
       if (!event.type.startsWith("side_effect.")) continue;

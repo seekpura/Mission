@@ -141,7 +141,7 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const catalog = new SqliteMissionCatalog(database);
   const reader = new SqliteMissionReader(database);
   const approvals = new RuntimeApprovalManager(events, { timeoutMs: options.approvalTimeoutMs });
-  const sideEffects = new RuntimeSideEffectManager(events, approvals);
+  const sideEffects = new RuntimeSideEffectManager(events, approvals, { historyReader: reader });
   const sideEffectScopes = new HostSideEffectScopeRegistry();
 
   const hostKind = options.hostKind ?? "deepseek";
