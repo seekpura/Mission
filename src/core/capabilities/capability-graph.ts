@@ -123,7 +123,7 @@ export function environmentAvailability(
 ): boolean | "unknown" {
   const node = graph.nodes.find(
     (candidate): candidate is Extract<CapabilityGraphNode, { kind: "environment" }> =>
-      candidate.kind === "environment" && candidate.environment === environment
+      node.kind === "environment" && node.environment === environment
   );
   return node?.available ?? "unknown";
 }
@@ -184,7 +184,10 @@ function cloneCapability(capability: CapabilityDescriptor): CapabilityDescriptor
       ...capability.native,
       approvalModes: capability.native.approvalModes ? [...capability.native.approvalModes] : undefined,
       features: capability.native.features ? [...capability.native.features] : undefined,
-      persistence: capability.native.persistence ? [...capability.native.persistence] : undefined
+      persistence: capability.native.persistence ? [...capability.native.persistence] : undefined,
+      model: capability.native.model ? { ...capability.native.model } : undefined,
+      coordination: capability.native.coordination ? { ...capability.native.coordination } : undefined,
+      jobs: capability.native.jobs ? { ...capability.native.jobs } : undefined
     } : undefined,
     provenance: capability.provenance ? { ...capability.provenance } : undefined
   };
