@@ -7,6 +7,7 @@ import type { SideEffectOperationStatus } from "../core/domain/execution.ts";
 import type { Evidence } from "../core/domain/verification.ts";
 import type { MissionController } from "../core/mission/controller.ts";
 import type { EventStore } from "../core/events/event-store.ts";
+import { MissionHistoryArchiveReceiptReader } from "../persistence/sqlite/mission-history-archive-receipt.ts";
 import type { SqliteHistoryReader } from "../persistence/sqlite/sqlite-history-reader.ts";
 import type { SqliteMissionReader } from "../persistence/sqlite/sqlite-mission-reader.ts";
 import type { SqliteOperationalSummaryReader } from "../persistence/sqlite/sqlite-operational-summary-reader.ts";
@@ -152,6 +153,15 @@ export function createMissionApi(
           if (!runtime.historyReader) return json(res, 503, { error: "history_reader_unavailable" });
           const retention = runtime.historyReader.readRetentionState(missionId);
           return retention ? json(res, 200, retention) : json(res, 404, { error: "mission_not_found" });
+        }
+        if (req.method === "GET" && parts[2] === "history" && parts[3] === "archive-receipt" && parts.length === 4) {
+          if (!runtime.historyReader) return json(res, 503, { error: "history_reader_unavailable" });
+          const throughSequence = parseOptionalInteger(url.searchParams.get("throughSequence"), 0, Number.MAX_SAFE_INTEGER);
+          if (throughSequence === "invalid") return json(res, 400, { error: "invalid_history_through_sequence" });
+          const receipt = new MissionHistoryArchiveReceiptReader(runtime.historyReader).readReceipt(missionId, {
+            ...(typeof throughSequence === "number" ? { throughSequence } : {})
+          });
+          return receipt ? json(res, 200, receipt) : json(res, 404, { error: "mission_not_found" });
         }
         if (req.method === "POST" && parts[2] === "steer") {
           const body = await readJson(req);
