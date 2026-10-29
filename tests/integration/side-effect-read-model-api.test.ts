@@ -177,7 +177,7 @@ test("side-effect read model preserves operation state, replay blocks and bounde
   }
 });
 
-test("side-effect projection rebuilds from Mission events and rejects orphan terminal state transactionally", async () => {
+test("side-effect projection rebuilds and fails closed on invalid lifecycle history transactionally", async () => {
   const database = new MissionDatabase(":memory:");
   database.migrate(schemaPath());
   let events = new SqliteEventStore(database);
@@ -203,6 +203,19 @@ test("side-effect projection rebuilds from Mission events and rejects orphan ter
     const rebuilt = reader.readSideEffects(missionId);
     assert.deepEqual(rebuilt, before);
 
+    const sequenceBeforeDuplicate = await events.lastSequence(missionId);
+    await assert.rejects(
+      () => append(
+        events,
+        missionId,
+        "side_effect.intent.recorded",
+        { ...value, id: "duplicate-intent", fingerprint: "different-fingerprint" },
+        "2026-10-29T04:02:30.000Z"
+      ),
+      /Duplicate side-effect intent operation key/
+    );
+    assert.equal(await events.lastSequence(missionId), sequenceBeforeDuplicate);
+
     const sequenceBeforeOrphan = await events.lastSequence(missionId);
     const orphanCompletion: SideEffectCompletion = {
       intentId: "missing-intent",
@@ -212,9 +225,24 @@ test("side-effect projection rebuilds from Mission events and rejects orphan ter
     };
     await assert.rejects(
       () => append(events, missionId, "side_effect.failed", orphanCompletion, orphanCompletion.completedAt),
-      /references unknown intent/
+      /references unknown/
     );
     assert.equal(await events.lastSequence(missionId), sequenceBeforeOrphan);
+
+    const unadmitted = intent(missionId, "unadmitted-op", "execution-unadmitted", "work-unadmitted", "2026-10-29T04:04:00.000Z");
+    await append(events, missionId, "side_effect.intent.recorded", unadmitted, unadmitted.createdAt);
+    const sequenceBeforeInvalidTerminal = await events.lastSequence(missionId);
+    await assert.rejects(
+      () => append(
+        events,
+        missionId,
+        "side_effect.completed",
+        completion(unadmitted, "succeeded", "2026-10-29T04:05:00.000Z"),
+        "2026-10-29T04:05:00.000Z"
+      ),
+      /non-admitted/
+    );
+    assert.equal(await events.lastSequence(missionId), sequenceBeforeInvalidTerminal);
   } finally {
     database.close();
   }
