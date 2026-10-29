@@ -113,7 +113,7 @@ test("external MCP acquisition requires high-risk allowance and explicit per-Mis
   assert.equal(acquired.capability.native?.provider, "external-mcp");
   assert(acquired.capability.native?.features?.includes("no-credentials"));
   assert.equal(acquired.receipt.status, "activated");
-  assert.equal(acquired.receipt.smoke, undefined, "Runtime must not invent a remote MCP smoke result it did not execute");
+  assert.equal("smoke" in acquired.receipt, false, "Runtime must not invent a remote MCP smoke result it did not execute");
   assert.deepEqual(registry.select(need().missionId, [acquired.capability.id]), [{
     transport: "http",
     name: "vendor_docs",
