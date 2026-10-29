@@ -31,7 +31,7 @@ export class DrainableHostAdapter implements HostAdapter {
   private readonly base: HostAdapter;
   private readonly active = new Map<string, HostAgentHandle>();
   private readonly idleWaiters = new Set<() => void>();
-  private readonly cancelRequested = new Set<string>();
+  private readonly cancellationTasks = new Map<string, Promise<void>>();
   private readonly cancellationFailures = new Map<string, string>();
   private draining = false;
   private admissionsInFlight = 0;
@@ -54,7 +54,7 @@ export class DrainableHostAdapter implements HostAdapter {
     try {
       const handle = await this.base.createAgent(request);
       this.track(handle);
-      if (this.draining) void this.requestCancel(handle);
+      if (this.draining) void this.requestCancel(handle).catch(() => undefined);
       return handle;
     } finally {
       this.endAdmission();
@@ -68,7 +68,7 @@ export class DrainableHostAdapter implements HostAdapter {
       const result = await this.base.resumeAgent(request);
       if (result.status === "resumed") {
         this.track(result.handle);
-        if (this.draining) void this.requestCancel(result.handle);
+        if (this.draining) void this.requestCancel(result.handle).catch(() => undefined);
       }
       return result;
     } finally {
@@ -138,7 +138,13 @@ export class DrainableHostAdapter implements HostAdapter {
   async cancelActive(): Promise<{ attempted: string[]; failures: Array<{ handleId: string; error: string }> }> {
     this.beginDrain();
     const handles = [...this.active.values()];
-    await Promise.all(handles.map(handle => this.requestCancel(handle)));
+    await Promise.all(handles.map(async handle => {
+      try {
+        await this.requestCancel(handle);
+      } catch {
+        // Failure is retained below while the rest of the active set is still cancelled.
+      }
+    }));
     return {
       attempted: handles.map(handle => handle.id),
       failures: handles.flatMap(handle => {
@@ -181,19 +187,21 @@ export class DrainableHostAdapter implements HostAdapter {
 
   private release(handleId: string): void {
     if (!this.active.delete(handleId)) return;
-    this.cancelRequested.delete(handleId);
+    this.cancellationTasks.delete(handleId);
     this.cancellationFailures.delete(handleId);
     this.notifyIdleIfNeeded();
   }
 
-  private async requestCancel(handle: HostAgentHandle): Promise<void> {
-    if (this.cancelRequested.has(handle.id)) return;
-    this.cancelRequested.add(handle.id);
-    try {
-      await this.base.cancelAgent(handle);
-    } catch (error) {
+  private requestCancel(handle: HostAgentHandle): Promise<void> {
+    const existing = this.cancellationTasks.get(handle.id);
+    if (existing) return existing;
+
+    const task = this.base.cancelAgent(handle).catch(error => {
       this.cancellationFailures.set(handle.id, error instanceof Error ? error.message : String(error));
-    }
+      throw error;
+    });
+    this.cancellationTasks.set(handle.id, task);
+    return task;
   }
 
   private isIdle(): boolean {
