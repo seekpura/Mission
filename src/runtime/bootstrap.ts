@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import type { HostAdapter } from "../hosts/host-adapter.ts";
-import { CodexNativeCapabilityHostAdapter } from "../hosts/codex/codex-native-host-adapter.ts";
+import { CodexMcpHostAdapter } from "../hosts/codex/codex-mcp-host-adapter.ts";
 import { DeepSeekHarnessAdapter } from "../hosts/deepseek/deepseek-host-adapter.ts";
 import { DeepSeekAcpProcessBindings } from "../hosts/deepseek/acp-process-bindings.ts";
 import { MissionDatabase } from "../persistence/sqlite/database.ts";
@@ -158,7 +158,7 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const approvalHandler = (request: Parameters<RuntimeSideEffectManager["authorizeHostPermission"]>[0]) =>
     sideEffects.authorizeHostPermission(sideEffectScopes.enrich(request));
   const baseHost = options.host ?? (hostKind === "codex"
-    ? new CodexNativeCapabilityHostAdapter({
+    ? new CodexMcpHostAdapter({
         binary: options.codexBinary,
         argsPrefix: options.codexArgsPrefix,
         model: options.codexModel,
