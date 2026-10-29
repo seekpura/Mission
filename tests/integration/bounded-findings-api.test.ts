@@ -65,7 +65,7 @@ test("Mission API exposes bounded Finding history with a stable lexical id curso
   const missionId = "mission-findings-api";
   const first = finding(missionId, "finding-a", "2026-10-29T06:10:00.000Z");
   const second = finding(missionId, "finding-b", "2026-10-29T06:11:00.000Z");
-  const server = createMissionApi(controller, events, { operationalReader: reader });
+  const server = createMissionApi(controller, events, { findingReader: reader });
 
   try {
     await controller.createMission(missionId, "query bounded findings");
