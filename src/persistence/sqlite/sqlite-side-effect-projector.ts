@@ -93,40 +93,35 @@ export class SqliteSideEffectProjector {
 
   private recordIntent(event: MissionEvent): void {
     const intent = validateIntent(event);
-    this.db.prepare(`
-      INSERT INTO rm_side_effects (
-        mission_id, operation_key, intent_id, work_item_id, attempt_id, execution_id,
-        source, effect_class, effect_type, target, status, intent_json,
-        replay_block_count, created_at, updated_at, last_event_sequence
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?, ?, ?)
-      ON CONFLICT(mission_id, operation_key) DO UPDATE SET
-        intent_id = excluded.intent_id,
-        work_item_id = excluded.work_item_id,
-        attempt_id = excluded.attempt_id,
-        execution_id = excluded.execution_id,
-        source = excluded.source,
-        effect_class = excluded.effect_class,
-        effect_type = excluded.effect_type,
-        target = excluded.target,
-        intent_json = excluded.intent_json,
-        updated_at = excluded.updated_at,
-        last_event_sequence = excluded.last_event_sequence
-    `).run(
-      intent.missionId,
-      intent.operationKey,
-      intent.id,
-      intent.workItemId ?? null,
-      intent.attemptId ?? null,
-      intent.executionId ?? null,
-      intent.source,
-      intent.effectClass,
-      intent.type,
-      intent.target,
-      JSON.stringify(intent),
-      intent.createdAt,
-      event.createdAt,
-      event.sequence
-    );
+    try {
+      this.db.prepare(`
+        INSERT INTO rm_side_effects (
+          mission_id, operation_key, intent_id, work_item_id, attempt_id, execution_id,
+          source, effect_class, effect_type, target, status, intent_json,
+          replay_block_count, created_at, updated_at, last_event_sequence
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?, ?, ?)
+      `).run(
+        intent.missionId,
+        intent.operationKey,
+        intent.id,
+        intent.workItemId ?? null,
+        intent.attemptId ?? null,
+        intent.executionId ?? null,
+        intent.source,
+        intent.effectClass,
+        intent.type,
+        intent.target,
+        JSON.stringify(intent),
+        intent.createdAt,
+        event.createdAt,
+        event.sequence
+      );
+    } catch (error) {
+      if (isConstraintError(error)) {
+        throw new Error(`Duplicate side-effect intent operation key ${intent.operationKey}`);
+      }
+      throw error;
+    }
   }
 
   private recordAdmission(event: MissionEvent): void {
@@ -135,6 +130,7 @@ export class SqliteSideEffectProjector {
       UPDATE rm_side_effects
       SET admission_status = ?, admission_json = ?, status = ?, updated_at = ?, last_event_sequence = ?
       WHERE mission_id = ? AND operation_key = ? AND intent_id = ?
+        AND admission_json IS NULL AND completion_json IS NULL
     `).run(
       admission.status,
       JSON.stringify(admission),
@@ -146,7 +142,7 @@ export class SqliteSideEffectProjector {
       admission.intentId
     );
     if (Number(changed.changes) !== 1) {
-      throw new Error(`Side-effect admission references unknown intent ${admission.intentId}`);
+      throw new Error(`Side-effect admission references unknown or invalid lifecycle intent ${admission.intentId}`);
     }
   }
 
@@ -160,6 +156,7 @@ export class SqliteSideEffectProjector {
       SET replay_block_json = ?, replay_block_count = replay_block_count + 1,
           updated_at = ?, last_event_sequence = ?
       WHERE mission_id = ? AND operation_key = ? AND intent_id = ?
+        AND admission_status = 'admitted'
     `).run(
       JSON.stringify(admission),
       event.createdAt,
@@ -169,7 +166,7 @@ export class SqliteSideEffectProjector {
       admission.intentId
     );
     if (Number(changed.changes) !== 1) {
-      throw new Error(`Side-effect replay block references unknown intent ${admission.intentId}`);
+      throw new Error(`Side-effect replay block references unknown or non-admitted intent ${admission.intentId}`);
     }
   }
 
@@ -179,6 +176,7 @@ export class SqliteSideEffectProjector {
       UPDATE rm_side_effects
       SET completion_status = ?, completion_json = ?, status = ?, updated_at = ?, last_event_sequence = ?
       WHERE mission_id = ? AND operation_key = ? AND intent_id = ?
+        AND admission_status = 'admitted' AND completion_json IS NULL
     `).run(
       completion.status,
       JSON.stringify(completion),
@@ -190,7 +188,7 @@ export class SqliteSideEffectProjector {
       completion.intentId
     );
     if (Number(changed.changes) !== 1) {
-      throw new Error(`Side-effect completion references unknown intent ${completion.intentId}`);
+      throw new Error(`Side-effect completion references unknown, non-admitted or terminal intent ${completion.intentId}`);
     }
   }
 }
@@ -243,6 +241,9 @@ function validateCompletion(event: MissionEvent): SideEffectCompletion {
   if (event.type === "side_effect.failed" && value.status !== "failed") {
     throw new Error("side_effect.failed requires failed completion status");
   }
+  if (event.type === "side_effect.completed" && value.status === "failed") {
+    throw new Error("side_effect.completed cannot carry failed completion status");
+  }
   return structuredClone(value as SideEffectCompletion);
 }
 
@@ -256,4 +257,8 @@ function objectPayload(event: MissionEvent, type: string): Record<string, unknow
 function requiredString(value: unknown, path: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`Expected non-empty string at ${path}`);
   return value;
+}
+
+function isConstraintError(error: unknown): boolean {
+  return error instanceof Error && /constraint|unique/i.test(`${error.name} ${error.message}`);
 }
