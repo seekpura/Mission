@@ -269,3 +269,27 @@ test("Runtime forced shutdown cancels a blocked host session, settles the superv
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("synchronous close fails closed while async shutdown is already draining", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mission-shutdown-close-race-"));
+  const dbPath = join(root, "mission.db");
+  const schemaPath = join(process.cwd(), "src", "persistence", "sqlite", "schema.sql");
+  const host = new BlockingHost();
+  const runtime = createMissionRuntime({ rootDir: root, dbPath, schemaPath, host, executorId: "blocking-host" });
+
+  try {
+    await runtime.controller.createMission("mission-close-race", "guard sync close during async shutdown");
+    void runtime.supervisor.wake("mission-close-race", "manual");
+    await host.started.promise;
+
+    const shutdown = runtime.shutdown({ gracefulTimeoutMs: 20, forcedTimeoutMs: 1_000 });
+    assert.throws(
+      () => runtime.close(),
+      /asynchronous Mission Runtime shutdown is in progress/,
+      "sync close must not race the async shutdown coordinator or close SQLite early"
+    );
+    await shutdown;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
