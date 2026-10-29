@@ -36,6 +36,13 @@ import { HostArtifactVerifier } from "./host-artifact-verifier.ts";
 import { HostCapabilityRuntime } from "./host-capability-runtime.ts";
 import { HostDeliberationProvider } from "./host-deliberation-provider.ts";
 import { MissionSupervisor } from "./mission-supervisor.ts";
+import { DrainableHostAdapter } from "./drainable-host-adapter.ts";
+import {
+  closeMissionRuntimeIfIdle,
+  shutdownMissionRuntime,
+  type RuntimeShutdownOptions,
+  type RuntimeShutdownResult
+} from "./runtime-shutdown.ts";
 import { createProductionAgentSkillCapabilityRuntime } from "./production-capability-runtime.ts";
 import { RuntimeSideEffectManager } from "./side-effect-manager.ts";
 import { SideEffectHostAdapter } from "./side-effect-host-adapter.ts";
@@ -106,6 +113,7 @@ export interface MissionRuntime {
   controller: MissionController;
   supervisor: MissionSupervisor;
   recoverExistingMissions(): Promise<string[]>;
+  shutdown(options?: RuntimeShutdownOptions): Promise<RuntimeShutdownResult>;
   close(): void;
 }
 
@@ -153,7 +161,8 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   const capabilityHost = !options.host && hostKind === "deepseek"
     ? new CapabilityWorkspaceHostAdapter(mcpHost, new MissionAgentSkillWorkspaceProjector(overlay))
     : mcpHost;
-  const host = new SideEffectHostAdapter(capabilityHost, sideEffects, { scopeRegistry: sideEffectScopes });
+  const sideEffectHost = new SideEffectHostAdapter(capabilityHost, sideEffects, { scopeRegistry: sideEffectScopes });
+  const host = new DrainableHostAdapter(sideEffectHost);
 
   const executorId = options.executorId?.trim() || (hostKind === "codex" ? "codex-host" : "deepseek-host");
   const controlTransport = new HostAgentJsonTransport(host, {
@@ -212,6 +221,11 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
   );
   const controller = new MissionController(events, deliberation, execution, verifier, capabilities, reader);
   const supervisor = new MissionSupervisor(controller, events, { maxCyclesPerWake: options.maxSupervisorCycles });
+  let closed = false;
+  let shutdownStarted = false;
+  let shutdownPromise: Promise<RuntimeShutdownResult> | undefined;
+  let recoveryPromise: Promise<string[]> | undefined;
+  const lifecycle = { supervisor, host, approvals, database };
 
   return {
     database,
@@ -224,20 +238,53 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     capabilityLifecycle,
     controller,
     supervisor,
-    async recoverExistingMissions(): Promise<string[]> {
-      const resumed: string[] = [];
-      for (const missionId of await catalog.listMissionIds()) {
-        await approvals.rejectStalePending(missionId);
-        const state = await controller.state(missionId);
-        if (state.status === "completed" || state.status === "cancelled" || state.status === "failed") continue;
-        void supervisor.wake(missionId, "manual");
-        resumed.push(missionId);
+    recoverExistingMissions(): Promise<string[]> {
+      if (shutdownStarted || closed) return Promise.resolve([]);
+      if (recoveryPromise) return recoveryPromise;
+      recoveryPromise = (async () => {
+        const resumed: string[] = [];
+        for (const missionId of await catalog.listMissionIds()) {
+          if (shutdownStarted) break;
+          await approvals.rejectStalePending(missionId);
+          const state = await controller.state(missionId);
+          if (state.status === "completed" || state.status === "cancelled" || state.status === "failed") continue;
+          if (shutdownStarted) break;
+          void supervisor.wake(missionId, "manual");
+          resumed.push(missionId);
+        }
+        return resumed;
+      })().finally(() => {
+        recoveryPromise = undefined;
+      });
+      return recoveryPromise;
+    },
+    shutdown(shutdownOptions: RuntimeShutdownOptions = {}): Promise<RuntimeShutdownResult> {
+      if (closed) {
+        return Promise.resolve({ forced: false, cancelledHandleIds: [], cancellationFailures: [] });
       }
-      return resumed;
+      if (shutdownPromise) return shutdownPromise;
+      shutdownStarted = true;
+      shutdownPromise = (async () => {
+        if (recoveryPromise) await recoveryPromise;
+        return shutdownMissionRuntime(lifecycle, shutdownOptions);
+      })()
+        .then(result => {
+          closed = true;
+          return result;
+        })
+        .catch(error => {
+          shutdownPromise = undefined;
+          throw error;
+        });
+      return shutdownPromise;
     },
     close(): void {
-      approvals.dispose();
-      database.close();
+      if (closed) return;
+      if (shutdownPromise) throw new Error("Cannot synchronously close Mission Runtime while asynchronous shutdown is in progress");
+      shutdownStarted = true;
+      if (recoveryPromise) throw new Error("Cannot synchronously close Mission Runtime while startup recovery is active");
+      closeMissionRuntimeIfIdle(lifecycle);
+      closed = true;
     }
   };
 }

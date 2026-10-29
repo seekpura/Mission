@@ -1,4 +1,4 @@
-import { createServer, type ServerResponse } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -20,12 +20,28 @@ export interface MissionApiRuntime {
   evidenceReader?: Pick<SqliteMissionReader, "readEvidence">;
 }
 
+export interface MissionApiServer extends Server {
+  beginDrain(): void;
+  waitForRequestDrain(): Promise<void>;
+  isDraining(): boolean;
+}
+
 export function createMissionApi(
   controller: MissionController,
   events: EventStore,
   runtime: MissionApiRuntime = {}
 ) {
   const subscribers = new Map<string, Set<ServerResponse>>();
+  const activeRequests = new Set<ServerResponse>();
+  const requestDrainWaiters = new Set<() => void>();
+  let draining = false;
+
+  function releaseRequest(res: ServerResponse): void {
+    if (!activeRequests.delete(res)) return;
+    if (activeRequests.size !== 0) return;
+    for (const resolve of requestDrainWaiters) resolve();
+    requestDrainWaiters.clear();
+  }
 
   async function publish(missionId: string) {
     const latest = await controller.state(missionId);
@@ -39,6 +55,10 @@ export function createMissionApi(
   });
 
   const server = createServer(async (req, res) => {
+    if (draining) return json(res, 503, { error: "runtime_draining" });
+    activeRequests.add(res);
+    res.once("finish", () => releaseRequest(res));
+    res.once("close", () => releaseRequest(res));
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       const parts = url.pathname.split("/").filter(Boolean).map(part => decodeURIComponent(part));
@@ -181,6 +201,9 @@ export function createMissionApi(
           const set = subscribers.get(missionId) ?? new Set<ServerResponse>();
           set.add(res); subscribers.set(missionId, set);
           res.write(`event: mission.updated\ndata: ${JSON.stringify(await controller.state(missionId))}\n\n`);
+          // After the initial durable state read, SSE is a passive subscriber and
+          // must not keep the request-mutation drain barrier open indefinitely.
+          releaseRequest(res);
           req.on("close", () => {
             set.delete(res);
             if (set.size === 0) subscribers.delete(missionId);
@@ -194,8 +217,28 @@ export function createMissionApi(
     }
   });
 
+  const missionServer = server as MissionApiServer;
+  missionServer.beginDrain = () => {
+    if (draining) return;
+    draining = true;
+    for (const responses of subscribers.values()) {
+      for (const res of responses) {
+        if (!res.writableEnded) {
+          res.write("event: runtime.shutdown\ndata: {}\n\n");
+          res.end();
+        }
+      }
+    }
+    subscribers.clear();
+  };
+  missionServer.waitForRequestDrain = async () => {
+    if (activeRequests.size === 0) return;
+    await new Promise<void>(resolve => requestDrainWaiters.add(resolve));
+  };
+  missionServer.isDraining = () => draining;
+
   server.on("close", () => unsubscribeSupervisor?.());
-  return server;
+  return missionServer;
 }
 
 function json(res: ServerResponse, status: number, value: unknown) {
