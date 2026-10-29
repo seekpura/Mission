@@ -119,10 +119,11 @@ export class FilesystemMissionHistoryArchiveStore {
   }
 
   private async ensureRoots(): Promise<void> {
-    await mkdir(this.objectsDir, { recursive: true, mode: 0o700 });
-    await mkdir(this.stagingDir, { recursive: true, mode: 0o700 });
+    await mkdir(this.rootDir, { recursive: true, mode: 0o700 });
     await assertDirectoryNotSymlink(this.rootDir);
+    await mkdir(this.objectsDir, { recursive: true, mode: 0o700 });
     await assertDirectoryNotSymlink(this.objectsDir);
+    await mkdir(this.stagingDir, { recursive: true, mode: 0o700 });
     await assertDirectoryNotSymlink(this.stagingDir);
   }
 
@@ -345,6 +346,24 @@ function validateManifest(value: unknown, expectedObjectId: string): MissionHist
 }
 
 function validateReceipt(receipt: MissionHistoryArchiveReceipt, expectedObjectId: string): void {
+  const receiptObject = receipt as unknown as Record<string, unknown>;
+  const allowedReceiptFields = new Set([
+    "format",
+    "eventFormat",
+    "canonicalization",
+    "hashAlgorithm",
+    "missionId",
+    "fromSequence",
+    "throughSequence",
+    "eventCount",
+    "contentBytes",
+    "contentSha256",
+    "authorizesDeletion",
+    "receiptSha256"
+  ]);
+  if (Object.keys(receiptObject).some(key => !allowedReceiptFields.has(key))) {
+    throw new Error("Archive receipt contains unsupported fields");
+  }
   if (receipt.format !== "mission-history-archive-receipt/v1") throw new Error("Archive receipt format mismatch");
   if (receipt.eventFormat !== "mission-events/v1") throw new Error("Archive receipt event format mismatch");
   if (receipt.canonicalization !== "canonical-json-v1+lf") throw new Error("Archive receipt canonicalization mismatch");
