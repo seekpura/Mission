@@ -80,6 +80,25 @@ export interface SideEffectCompletion {
   completedAt: string;
 }
 
+export type SideEffectOperationStatus =
+  | "pending"
+  | Exclude<SideEffectAdmissionStatus, "replay_blocked">
+  | SideEffectCompletionStatus;
+
+/** Current operational state for one Mission-scoped idempotency operation key. */
+export interface SideEffectOperationView {
+  missionId: string;
+  operationKey: string;
+  intent: SideEffectIntent;
+  admission?: SideEffectAdmission;
+  lastReplayBlocked?: SideEffectAdmission;
+  replayBlockCount: number;
+  completion?: SideEffectCompletion;
+  status: SideEffectOperationStatus;
+  lastEventSequence: number;
+  updatedAt: string;
+}
+
 export interface ResourceRequest {
   cpu?: number;
   memoryMb?: number;
