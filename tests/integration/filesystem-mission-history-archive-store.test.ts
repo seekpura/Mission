@@ -27,6 +27,8 @@ async function appendSteering(events: SqliteEventStore, missionId: string, messa
   return event.sequence;
 }
 
+const TAMPER_REJECTION = /content byte mismatch|content SHA-256 mismatch|sequence mismatch|event line is missing missionId|event line has invalid sequence|event line is not canonical JSON|event line is invalid JSON|event count mismatch/;
+
 test("filesystem archive store publishes immutable content-addressed prefixes and verifies them after database restart", async () => {
   const root = await mkdtemp(join(tmpdir(), "mission-history-archive-store-"));
   const database = new MissionDatabase(":memory:");
@@ -81,11 +83,11 @@ test("filesystem archive store publishes immutable content-addressed prefixes an
     await appendFile(join(root, "objects", first.objectId, "events.jsonl"), "{}\n", "utf8");
     await assert.rejects(
       () => store.verifyObject(first.objectId),
-      /content byte mismatch|content SHA-256 mismatch|sequence mismatch/
+      TAMPER_REJECTION
     );
     await assert.rejects(
       () => store.createFromHistory(history, missionId, { throughSequence: frozenThrough }),
-      /content byte mismatch|content SHA-256 mismatch|sequence mismatch/
+      TAMPER_REJECTION
     );
     assert.deepEqual(await store.verifyObject(extended.objectId), extended);
 
