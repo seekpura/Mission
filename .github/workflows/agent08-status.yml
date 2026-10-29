@@ -1,0 +1,54 @@
+name: agent08-status
+on:
+  push:
+    branches: [feat/provider-evidence-bindings]
+permissions:
+  contents: write
+jobs:
+  checkpoint:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/provider-evidence-bindings
+      - name: Update status
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('CURRENT_STATUS.md')
+          text = path.read_text()
+          anchor = '- missing provider-specific render/browser/media/test/recency capability bindings never fabricate evidence; the corresponding profile checks remain inconclusive until a real host capability is explicitly bound\n'
+          addition = (
+            '- production structured provider Evidence routes use the Runtime-owned `mission-evidence/v1` contract for presentation render, browser runtime, accessibility, media probe/playback, executable test/build/integration and research-recency observations\n'
+            '- `MISSION_EVIDENCE_PROVIDER_ROUTES_JSON` pins an exact live capability id plus provider/protocol/native identity while Runtime fixes the semantic function, verification profile/artifact scope, Evidence type and durable claim for each Evidence kind\n'
+            '- structured provider responses must bind back to the exact Artifact id/content hash, use a bounded common verdict envelope and pass kind-specific observation schemas with verdict-consistency checks before any Runtime Evidence is registered\n'
+            '- provider configuration never synthesizes capabilities into the HostAdapter graph: absent, unavailable or incompatible capabilities are isolated as collector failures and required verifier checks remain inconclusive\n'
+            '- current DeepSeek ACP and Codex app-server adapters still reject arbitrary `invokeHostCapability` execution; provider Evidence becomes available only when a real host/provider adapter explicitly exposes the trusted read-only capability contract\n'
+          )
+          assert text.count(anchor) == 1
+          text = text.replace(anchor, anchor + addition, 1)
+          old = (
+            '1. concrete provider-specific read-only Evidence bindings/adapters for deployed presentation render, browser/accessibility, media probe/playback, executable test/build and research-recency capabilities as hosts expose them; the Runtime Evidence framework and fail-closed gates are implemented, but unavailable host capabilities remain inconclusive\n'
+            '2. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as HostAdapters expose them\n'
+            '3. external MCP discovery/acquisition plus provider-native MCP/Agent-Skill/CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles, including Codex-native delivery instead of reusing DeepSeek/ACP semantics\n'
+            '4. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction\n'
+          )
+          new = (
+            '1. extend provider-native capability graph coverage for model/reasoning options, subagents/team semantics and background/job execution as HostAdapters expose them\n'
+            '2. external MCP discovery/acquisition plus provider-native MCP/Agent-Skill/CLI/general-code delivery with explicit trust, isolation, approval and rollback profiles, including Codex-native delivery instead of reusing DeepSeek/ACP semantics\n'
+            '3. operational read-model/query APIs and observability for long-lived high-volume Missions, including dedicated side-effect query/projection paths beyond event-log reconstruction\n'
+          )
+          assert text.count(old) == 1
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Commit checkpoint and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/agent08-status.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add CURRENT_STATUS.md .github/workflows/agent08-status.yml
+          git commit -m "docs: checkpoint structured provider evidence routes"
+          git push origin HEAD:feat/provider-evidence-bindings
