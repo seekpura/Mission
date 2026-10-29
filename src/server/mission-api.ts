@@ -2,12 +2,22 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { SideEffectOperationStatus } from "../core/domain/execution.ts";
 import type { MissionController } from "../core/mission/controller.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 import type { SqliteMissionReader } from "../persistence/sqlite/sqlite-mission-reader.ts";
 import type { RuntimeApprovalManager } from "../runtime/approval-manager.ts";
 import type { RuntimeCapabilityLifecycleManager } from "../runtime/capability-ledger-runtime.ts";
 import type { MissionSupervisor } from "../runtime/mission-supervisor.ts";
+
+const SIDE_EFFECT_STATUSES = new Set<SideEffectOperationStatus>([
+  "pending",
+  "admitted",
+  "denied",
+  "succeeded",
+  "failed",
+  "unknown"
+]);
 
 export interface MissionApiRuntime {
   supervisor?: MissionSupervisor;
@@ -18,6 +28,7 @@ export interface MissionApiRuntime {
     "readCapabilityTrust" | "readCapabilityCosts" | "readCapabilityAudit"
   >;
   evidenceReader?: Pick<SqliteMissionReader, "readEvidence">;
+  sideEffectReader?: Pick<SqliteMissionReader, "readSideEffects">;
 }
 
 export interface MissionApiServer extends Server {
@@ -116,6 +127,25 @@ export function createMissionApi(
           if (!runtime.evidenceReader) return json(res, 503, { error: "evidence_reader_unavailable" });
           const subjectRef = url.searchParams.get("subjectRef")?.trim() || undefined;
           return json(res, 200, runtime.evidenceReader.readEvidence(missionId, subjectRef));
+        }
+        if (req.method === "GET" && parts[2] === "side-effects" && parts.length === 3) {
+          if (!runtime.sideEffectReader) return json(res, 503, { error: "side_effect_reader_unavailable" });
+          const statusValue = url.searchParams.get("status")?.trim() || undefined;
+          if (statusValue && !SIDE_EFFECT_STATUSES.has(statusValue as SideEffectOperationStatus)) {
+            return json(res, 400, { error: "invalid_side_effect_status" });
+          }
+          const afterSequence = parseOptionalInteger(url.searchParams.get("afterSequence"), 0, Number.MAX_SAFE_INTEGER);
+          if (afterSequence === "invalid") return json(res, 400, { error: "invalid_after_sequence" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 500);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_side_effect_limit" });
+          return json(res, 200, runtime.sideEffectReader.readSideEffects(missionId, {
+            operationKey: url.searchParams.get("operationKey")?.trim() || undefined,
+            executionId: url.searchParams.get("executionId")?.trim() || undefined,
+            workItemId: url.searchParams.get("workItemId")?.trim() || undefined,
+            ...(statusValue ? { status: statusValue as SideEffectOperationStatus } : {}),
+            ...(typeof afterSequence === "number" ? { afterSequence } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          }));
         }
         if (
           req.method === "GET" &&
@@ -244,6 +274,14 @@ export function createMissionApi(
 function json(res: ServerResponse, status: number, value: unknown) {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(value));
+}
+
+function parseOptionalInteger(raw: string | null, minimum: number, maximum: number): number | undefined | "invalid" {
+  if (raw === null || raw.trim() === "") return undefined;
+  if (!/^\d+$/.test(raw)) return "invalid";
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) return "invalid";
+  return value;
 }
 
 async function readJson(req: AsyncIterable<any>) {
