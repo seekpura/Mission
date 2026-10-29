@@ -1,0 +1,61 @@
+name: agent08-observation-wire
+on:
+  push:
+    branches: [feat/provider-evidence-bindings]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/provider-evidence-bindings
+      - name: Wire observation validator
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/runtime/provider-evidence-collector.ts')
+          text = path.read_text()
+          old = 'import type { HostAdapter } from "../hosts/host-adapter.ts";\n'
+          new = old + 'import { validateStructuredProviderObservation } from "./provider-evidence-observation.ts";\n'
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+          old = '  const summary = typeof object.summary === "string" ? object.summary.trim() : undefined;\n  if (summary && summary.length > 4_096) throw new Error(`Provider evidence output summary is too long: ${summary.length}`);\n  return {\n'
+          new = '  const summary = typeof object.summary === "string" ? object.summary.trim() : undefined;\n  if (summary && summary.length > 4_096) throw new Error(`Provider evidence output summary is too long: ${summary.length}`);\n  const observation = validateStructuredProviderObservation(\n    expectedKind,\n    result as Evidence["result"],\n    object.observation\n  );\n  return {\n'
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+          old = '    ...(object.observation === undefined ? {} : { observation: structuredClone(object.observation) })\n'
+          new = '    ...(observation === undefined ? {} : { observation })\n'
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+
+          path = Path('tests/unit/provider-evidence-collector.test.ts')
+          text = path.read_text()
+          text = text.replace('observation: { route: "/", loaded: true, consoleErrors: [] },', 'observation: { loaded: true, blockingErrorCount: 0, interactions: ["navigation"] },')
+          text = text.replace('evidence: { route: "/", loaded: true, consoleErrors: [] }', 'evidence: { loaded: true, blockingErrorCount: 0, interactions: ["navigation"] }')
+          path.write_text(text)
+
+          path = Path('tests/integration/provider-evidence-verifier.test.ts')
+          text = path.read_text()
+          old = '        observation: {\n          route: "/",\n          viewport: "1440x900",\n          interactions: ["primary-navigation", "keyboard-focus"],\n          blockingConsoleErrors: 0\n        },'
+          new = '        observation: {\n          loaded: true,\n          blockingErrorCount: 0,\n          interactions: ["primary-navigation", "keyboard-focus"]\n        },'
+          assert text.count(old) == 1
+          text = text.replace(old, new, 1)
+          text = text.replace('assert.equal(JSON.stringify(runtimeEvidence).includes("blockingConsoleErrors"), false);', 'assert.equal(JSON.stringify(runtimeEvidence).includes("blockingErrorCount"), false);')
+          text = text.replace('assert.equal(transientRuntime.inspectionPayload.evidence.blockingConsoleErrors, 0);', 'assert.equal(transientRuntime.inspectionPayload.evidence.blockingErrorCount, 0);')
+          path.write_text(text)
+          PY
+      - name: Commit patch and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/agent08-observation-wire.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/runtime/provider-evidence-collector.ts tests/unit/provider-evidence-collector.test.ts tests/integration/provider-evidence-verifier.test.ts .github/workflows/agent08-observation-wire.yml
+          git commit -m "feat: enforce kind-specific provider evidence observations"
+          git push origin HEAD:feat/provider-evidence-bindings
