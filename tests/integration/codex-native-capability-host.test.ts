@@ -150,7 +150,7 @@ test("Codex stable model/list becomes graph capabilities and selected reasoning 
     const workerArgv = rows
       .filter(row => row.type === "argv")
       .map(row => row.argv ?? [])
-      .find(argv => argv.some(arg => arg === "model_reasoning_effort=high"));
+      .find(argv => argv.some(arg => arg === 'model_reasoning_effort="high"'));
     assert(workerArgv, "selected reasoning capability must reach provider-native app-server configuration");
   } finally {
     await rm(root, { recursive: true, force: true });
