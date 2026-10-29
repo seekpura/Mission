@@ -5,6 +5,7 @@ import type { MissionDatabase } from "./database.ts";
 import { rowToMissionEvent, type SqliteMissionEventRow } from "./sqlite-event-row.ts";
 import { SqliteEvidenceProjector } from "./sqlite-evidence-projector.ts";
 import { SqliteReadModelProjector } from "./sqlite-read-model-projector.ts";
+import { SqliteSideEffectProjector } from "./sqlite-side-effect-projector.ts";
 
 export class ConcurrencyConflictError extends Error {
   constructor(message: string) {
@@ -17,13 +18,16 @@ export class SqliteEventStore implements EventStore {
   private readonly database: MissionDatabase;
   private readonly projector: SqliteReadModelProjector;
   private readonly evidenceProjector: SqliteEvidenceProjector;
+  private readonly sideEffectProjector: SqliteSideEffectProjector;
 
   constructor(database: MissionDatabase) {
     this.database = database;
     this.projector = new SqliteReadModelProjector(database);
     this.evidenceProjector = new SqliteEvidenceProjector(database);
+    this.sideEffectProjector = new SqliteSideEffectProjector(database);
     this.projector.catchUpAll();
     this.evidenceProjector.catchUpAll();
+    this.sideEffectProjector.catchUpAll();
   }
 
   async append<T>(event: Omit<MissionEvent<T>, "sequence">, expectedSequence: number): Promise<MissionEvent<T>> {
@@ -32,6 +36,7 @@ export class SqliteEventStore implements EventStore {
     try {
       this.projector.catchUpMission(event.missionId);
       this.evidenceProjector.catchUpMission(event.missionId);
+      this.sideEffectProjector.catchUpMission(event.missionId);
 
       if (event.idempotencyKey) {
         const existing = db.prepare(
@@ -60,6 +65,7 @@ export class SqliteEventStore implements EventStore {
         );
       this.projector.applyEvent(committed);
       this.evidenceProjector.applyEvent(committed);
+      this.sideEffectProjector.applyEvent(committed);
       db.exec("COMMIT");
       return committed;
     } catch (error) {

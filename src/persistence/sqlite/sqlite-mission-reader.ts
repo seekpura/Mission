@@ -5,6 +5,7 @@ import type {
   CapabilityCostRecord,
   CapabilityTrustRecord
 } from "../../core/domain/capability-ledger.ts";
+import type { SideEffectOperationStatus, SideEffectOperationView } from "../../core/domain/execution.ts";
 import type { MissionState } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
 import type { Evidence, Gap } from "../../core/domain/verification.ts";
@@ -13,6 +14,15 @@ import type { MissionJournalView } from "../../core/mission/journal-view.ts";
 import type { MissionReadModelReader } from "../../core/mission/mission-reader.ts";
 import type { StrategyProposal } from "../../core/planning/deliberation-provider.ts";
 import type { MissionDatabase } from "./database.ts";
+
+export interface SideEffectQuery {
+  operationKey?: string;
+  executionId?: string;
+  workItemId?: string;
+  status?: SideEffectOperationStatus;
+  afterSequence?: number;
+  limit?: number;
+}
 
 export class SqliteMissionReader implements MissionReadModelReader {
   private readonly database: MissionDatabase;
@@ -130,6 +140,75 @@ export class SqliteMissionReader implements MissionReadModelReader {
       ? this.database.db.prepare(sql).all(missionId, subjectRef)
       : this.database.db.prepare(sql).all(missionId)) as Array<{ data_json: string }>;
     return rows.map(row => JSON.parse(row.data_json) as Evidence);
+  }
+
+  readSideEffects(missionId: string, query: SideEffectQuery = {}): SideEffectOperationView[] {
+    const clauses = ["mission_id = ?"];
+    const params: Array<string | number> = [missionId];
+    if (query.operationKey) {
+      clauses.push("operation_key = ?");
+      params.push(query.operationKey);
+    }
+    if (query.executionId) {
+      clauses.push("execution_id = ?");
+      params.push(query.executionId);
+    }
+    if (query.workItemId) {
+      clauses.push("work_item_id = ?");
+      params.push(query.workItemId);
+    }
+    if (query.status) {
+      clauses.push("status = ?");
+      params.push(query.status);
+    }
+    if (query.afterSequence !== undefined) {
+      if (!Number.isSafeInteger(query.afterSequence) || query.afterSequence < 0) {
+        throw new Error("side-effect afterSequence must be a non-negative safe integer");
+      }
+      clauses.push("last_event_sequence > ?");
+      params.push(query.afterSequence);
+    }
+    const limit = query.limit ?? 100;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+      throw new Error("side-effect query limit must be an integer between 1 and 500");
+    }
+    params.push(limit);
+
+    const rows = this.database.db.prepare(`
+      SELECT intent_json, admission_json, replay_block_json, replay_block_count,
+             completion_json, status, last_event_sequence, updated_at
+      FROM rm_side_effects
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY last_event_sequence ASC, operation_key ASC
+      LIMIT ?
+    `).all(...params) as unknown as Array<{
+      intent_json: string;
+      admission_json: string | null;
+      replay_block_json: string | null;
+      replay_block_count: number;
+      completion_json: string | null;
+      status: SideEffectOperationStatus;
+      last_event_sequence: number;
+      updated_at: string;
+    }>;
+
+    return rows.map(row => {
+      const intent = JSON.parse(row.intent_json) as SideEffectOperationView["intent"];
+      return {
+        missionId,
+        operationKey: intent.operationKey,
+        intent,
+        ...(row.admission_json ? { admission: JSON.parse(row.admission_json) as SideEffectOperationView["admission"] } : {}),
+        ...(row.replay_block_json ? {
+          lastReplayBlocked: JSON.parse(row.replay_block_json) as SideEffectOperationView["lastReplayBlocked"]
+        } : {}),
+        replayBlockCount: row.replay_block_count,
+        ...(row.completion_json ? { completion: JSON.parse(row.completion_json) as SideEffectOperationView["completion"] } : {}),
+        status: row.status,
+        lastEventSequence: row.last_event_sequence,
+        updatedAt: row.updated_at
+      };
+    });
   }
 
   private ledgerRows(
