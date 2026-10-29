@@ -3,7 +3,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { MissionDatabase } from "../../src/persistence/sqlite/database.ts";
 import { SqliteEventStore } from "../../src/persistence/sqlite/sqlite-event-store.ts";
-import { SqliteMissionSummaryReader } from "../../src/persistence/sqlite/sqlite-mission-summary-reader.ts";
+import { SqliteOperationalSummaryReader } from "../../src/persistence/sqlite/sqlite-operational-summary-reader.ts";
 
 function schemaPath(): string {
   return join(process.cwd(), "src", "persistence", "sqlite", "schema.sql");
@@ -53,7 +53,7 @@ test("Mission operational summary returns aggregate health without materializing
   const database = new MissionDatabase(":memory:");
   database.migrate(schemaPath());
   const events = new SqliteEventStore(database);
-  const reader = new SqliteMissionSummaryReader(database);
+  const reader = new SqliteOperationalSummaryReader(database);
   const missionId = "mission-summary";
   const now = new Date("2026-10-29T12:00:00.000Z");
 
@@ -78,6 +78,11 @@ test("Mission operational summary returns aggregate health without materializing
       id: "execution-2",
       startedAt: "2026-10-29T11:10:00.000Z",
       endedAt: "2026-10-29T11:10:09.000Z"
+    });
+    insertLifecycle(database, "rm_executions", missionId, "execution-invalid", "completed", {
+      id: "execution-invalid",
+      startedAt: "2026-10-29T11:20:09.000Z",
+      endedAt: "2026-10-29T11:20:00.000Z"
     });
     insertLifecycle(database, "rm_executions", missionId, "execution-running", "running", {
       id: "execution-running",
@@ -122,31 +127,30 @@ test("Mission operational summary returns aggregate health without materializing
     assert.ok(summary);
     assert.equal(summary.status, "active");
     assert.equal(summary.eventSequence, 3);
-    assert.equal(summary.firstEventAt, "2026-10-29T10:00:00.000Z");
-    assert.equal(summary.lastEventAt, "2026-10-29T11:58:00.000Z");
+    assert.equal(summary.observedAt, now.toISOString());
     assert.equal(summary.missionAgeMs, 2 * 60 * 60_000);
     assert.equal(summary.idleMs, 2 * 60_000);
     assert.deepEqual(summary.eventThroughput, { last5Minutes: 1, last60Minutes: 1 });
-    assert.deepEqual(summary.counts.workItemsByStatus, { blocked: 1, ready: 1 });
-    assert.deepEqual(summary.counts.attemptsByStatus, { running: 1, succeeded: 1 });
-    assert.deepEqual(summary.counts.executionsByStatus, { completed: 2, running: 1 });
-    assert.deepEqual(summary.counts.artifactsByStatus, { candidate: 1 });
-    assert.deepEqual(summary.counts.gapsByStatus, { open: 1 });
-    assert.deepEqual(summary.counts.approvalsByStatus, { pending: 1 });
-    assert.deepEqual(summary.counts.sideEffectsByStatus, { succeeded: 1 });
-    assert.deepEqual(summary.counts.evidenceByResult, { inconclusive: 1, supports: 1 });
-    assert.equal(summary.counts.findings, 2);
-    assert.equal(summary.counts.activeCapabilities, 1);
-    assert.equal(summary.counts.sideEffectReplayBlocks, 2);
+    assert.deepEqual(summary.workItems, { blocked: 1, ready: 1 });
+    assert.deepEqual(summary.attempts, { running: 1, succeeded: 1 });
+    assert.deepEqual(summary.executions, { completed: 3, running: 1 });
+    assert.deepEqual(summary.artifacts, { candidate: 1 });
+    assert.deepEqual(summary.gaps, { open: 1 });
+    assert.deepEqual(summary.approvals, { pending: 1 });
+    assert.deepEqual(summary.sideEffects, { succeeded: 1 });
+    assert.deepEqual(summary.evidence, { inconclusive: 1, supports: 1 });
+    assert.equal(summary.findingCount, 2);
+    assert.equal(summary.activeCapabilityCount, 1);
+    assert.equal(summary.replayBlockCount, 2);
     assert.deepEqual(summary.completedExecutionLatencyMs, {
-      samples: 2,
-      average: 6000,
-      minimum: 3000,
-      maximum: 9000
+      sampleCount: 2,
+      averageMs: 6000,
+      minimumMs: 3000,
+      maximumMs: 9000
     });
 
     assert.equal(reader.readSummary("missing-mission", now), undefined);
-    assert.throws(() => reader.readSummary(missionId, new Date(Number.NaN)), /valid current time/);
+    assert.throws(() => reader.readSummary(missionId, new Date(Number.NaN)), /valid observation time/);
   } finally {
     database.close();
   }
