@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { MissionStatus } from "../../core/domain/mission.ts";
 import type { MissionDatabase } from "./database.ts";
 
 export interface ExecutionLatencySummary {
@@ -10,7 +11,7 @@ export interface ExecutionLatencySummary {
 
 export interface MissionOperationalSummary {
   missionId: string;
-  status: string;
+  status: MissionStatus | "unknown";
   eventSequence: number;
   observedAt: string;
   missionAgeMs?: number;
@@ -65,7 +66,7 @@ export class SqliteOperationalSummaryReader {
     const fiveMinutesAgo = new Date(nowMs - 5 * 60_000).toISOString();
     const sixtyMinutesAgo = new Date(nowMs - 60 * 60_000).toISOString();
     const state = JSON.parse(mission.state_json) as { status?: unknown };
-    const status = typeof state.status === "string" ? state.status : "unknown";
+    const status = typeof state.status === "string" ? state.status as MissionStatus : "unknown";
 
     const throughput = this.db.prepare(`
       SELECT
@@ -97,8 +98,11 @@ export class SqliteOperationalSummaryReader {
       FROM rm_executions
       WHERE mission_id = ?
         AND status = 'completed'
-        AND json_extract(data_json, '$.startedAt') IS NOT NULL
-        AND json_extract(data_json, '$.endedAt') IS NOT NULL
+        AND json_type(data_json, '$.startedAt') = 'text'
+        AND json_type(data_json, '$.endedAt') = 'text'
+        AND julianday(json_extract(data_json, '$.startedAt')) IS NOT NULL
+        AND julianday(json_extract(data_json, '$.endedAt')) IS NOT NULL
+        AND julianday(json_extract(data_json, '$.endedAt')) >= julianday(json_extract(data_json, '$.startedAt'))
     `).get(missionId) as {
       sample_count: number;
       average_ms: number | null;
@@ -188,5 +192,5 @@ function latencySummary(row: {
 
 function roundedDuration(value: number | null): number {
   if (value === null || !Number.isFinite(value)) throw new Error("Invalid completed execution latency aggregate");
-  return Math.max(0, Math.round(value));
+  return Math.round(value);
 }
