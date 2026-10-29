@@ -303,6 +303,8 @@ CREATE TABLE IF NOT EXISTS rm_capability_trust (
   PRIMARY KEY(mission_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_rm_capability_trust_capability ON rm_capability_trust(mission_id, capability_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_trust_page ON rm_capability_trust(mission_id);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_trust_capability_page ON rm_capability_trust(mission_id, capability_id);
 
 CREATE TABLE IF NOT EXISTS rm_capability_cost (
   mission_id TEXT NOT NULL,
@@ -314,6 +316,10 @@ CREATE TABLE IF NOT EXISTS rm_capability_cost (
   PRIMARY KEY(mission_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_rm_capability_cost_capability ON rm_capability_cost(mission_id, capability_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_cost_page ON rm_capability_cost(mission_id);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_cost_capability_page ON rm_capability_cost(mission_id, capability_id);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_cost_phase_page ON rm_capability_cost(mission_id, phase);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_cost_capability_phase_page ON rm_capability_cost(mission_id, capability_id, phase);
 
 CREATE TABLE IF NOT EXISTS rm_capability_audit (
   mission_id TEXT NOT NULL,
@@ -326,6 +332,10 @@ CREATE TABLE IF NOT EXISTS rm_capability_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_rm_capability_audit_capability ON rm_capability_audit(mission_id, capability_id, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_rm_capability_audit_decision ON rm_capability_audit(mission_id, decision, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_audit_page ON rm_capability_audit(mission_id);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_audit_capability_page ON rm_capability_audit(mission_id, capability_id);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_audit_decision_page ON rm_capability_audit(mission_id, decision);
+CREATE INDEX IF NOT EXISTS idx_rm_capability_audit_capability_decision_page ON rm_capability_audit(mission_id, capability_id, decision);
 
 CREATE TABLE IF NOT EXISTS rm_evidence (
   mission_id TEXT NOT NULL,
@@ -340,6 +350,11 @@ CREATE TABLE IF NOT EXISTS rm_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_rm_evidence_subject ON rm_evidence(mission_id, subject_ref, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_rm_evidence_kind ON rm_evidence(mission_id, evidence_kind, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_rm_evidence_page ON rm_evidence(mission_id);
+CREATE INDEX IF NOT EXISTS idx_rm_evidence_subject_page ON rm_evidence(mission_id, subject_ref);
+CREATE INDEX IF NOT EXISTS idx_rm_evidence_kind_page ON rm_evidence(mission_id, evidence_kind);
+CREATE INDEX IF NOT EXISTS idx_rm_evidence_collector_page ON rm_evidence(mission_id, collector_id);
+CREATE INDEX IF NOT EXISTS idx_rm_evidence_result_page ON rm_evidence(mission_id, result);
 
 CREATE TABLE IF NOT EXISTS rm_side_effects (
   mission_id TEXT NOT NULL,

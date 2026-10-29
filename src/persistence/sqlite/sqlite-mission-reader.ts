@@ -1,6 +1,7 @@
 import type { Artifact } from "../../core/domain/artifact.ts";
 import type { CapabilityDescriptor, CapabilityNeed } from "../../core/domain/capability.ts";
 import type {
+  CapabilityAuditDecision,
   CapabilityAuditRecord,
   CapabilityCostRecord,
   CapabilityTrustRecord
@@ -9,13 +10,48 @@ import type { SideEffectOperationStatus, SideEffectOperationView } from "../../c
 import type { MissionEvent, MissionEventType } from "../../core/domain/event.ts";
 import type { MissionState } from "../../core/domain/mission.ts";
 import type { WorkItem } from "../../core/domain/work-item.ts";
-import type { Evidence, Gap } from "../../core/domain/verification.ts";
+import type { Evidence, Finding, Gap } from "../../core/domain/verification.ts";
 import { initialMissionState } from "../../core/events/state-projector.ts";
 import type { MissionJournalView } from "../../core/mission/journal-view.ts";
 import type { MissionReadModelReader } from "../../core/mission/mission-reader.ts";
 import type { StrategyProposal } from "../../core/planning/deliberation-provider.ts";
 import type { MissionDatabase } from "./database.ts";
 import { rowToMissionEvent, type SqliteMissionEventRow } from "./sqlite-event-row.ts";
+
+export interface ProjectionPage<T> {
+  items: T[];
+  /**
+   * Projection-local cursor. It is intentionally not an Event sequence and may
+   * be invalidated when a read model is rebuilt from the durable event stream.
+   */
+  nextCursor?: number;
+}
+
+export interface ProjectionPageQuery {
+  afterCursor?: number;
+  limit?: number;
+}
+
+export interface EvidencePageQuery extends ProjectionPageQuery {
+  subjectRef?: string;
+  kind?: Evidence["kind"];
+  collectorId?: string;
+  result?: Evidence["result"];
+}
+
+export interface CapabilityTrustPageQuery extends ProjectionPageQuery {
+  capabilityId?: string;
+}
+
+export interface CapabilityCostPageQuery extends ProjectionPageQuery {
+  capabilityId?: string;
+  phase?: CapabilityCostRecord["phase"];
+}
+
+export interface CapabilityAuditPageQuery extends ProjectionPageQuery {
+  capabilityId?: string;
+  decision?: CapabilityAuditDecision;
+}
 
 export interface SideEffectQuery {
   operationKey?: string;
@@ -40,6 +76,17 @@ export interface ExecutionQuery extends AttemptQuery {
 export interface ActivityQuery {
   afterSequence?: number;
   type?: MissionEventType | string;
+  limit?: number;
+}
+
+export interface FindingQuery {
+  afterId?: string;
+  limit?: number;
+}
+
+export interface ApprovalQuery {
+  status?: "pending" | "approved" | "rejected";
+  afterId?: string;
   limit?: number;
 }
 
@@ -181,12 +228,44 @@ export class SqliteMissionReader implements MissionReadModelReader {
     return rows.map(rowToMissionEvent);
   }
 
-  readFindings(missionId: string): Array<Record<string, unknown>> {
-    return this.rows("rm_findings", missionId).map(row => JSON.parse(row.data_json) as Record<string, unknown>);
+  readFindings(missionId: string, query: FindingQuery = {}): Finding[] {
+    const clauses = ["mission_id = ?"];
+    const params: Array<string | number> = [missionId];
+    if (query.afterId !== undefined) {
+      clauses.push("id > ?");
+      params.push(boundedIdentifier(query.afterId, "finding afterId"));
+    }
+    params.push(boundedLimit(query.limit, "finding"));
+    const rows = this.database.db.prepare(`
+      SELECT data_json
+      FROM rm_findings
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY id ASC
+      LIMIT ?
+    `).all(...params) as unknown as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as Finding);
   }
 
-  readApprovals(missionId: string): Array<Record<string, unknown>> {
-    return this.rows("rm_approvals", missionId).map(row => JSON.parse(row.data_json) as Record<string, unknown>);
+  readApprovals(missionId: string, query: ApprovalQuery = {}): Array<Record<string, unknown>> {
+    const clauses = ["mission_id = ?"];
+    const params: Array<string | number> = [missionId];
+    if (query.status !== undefined) {
+      clauses.push("status = ?");
+      params.push(query.status);
+    }
+    if (query.afterId !== undefined) {
+      clauses.push("id > ?");
+      params.push(boundedIdentifier(query.afterId, "approval afterId"));
+    }
+    params.push(boundedLimit(query.limit, "approval"));
+    const rows = this.database.db.prepare(`
+      SELECT data_json
+      FROM rm_approvals
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY id ASC
+      LIMIT ?
+    `).all(...params) as unknown as Array<{ data_json: string }>;
+    return rows.map(row => JSON.parse(row.data_json) as Record<string, unknown>);
   }
 
   readCapabilityTrust(missionId: string): CapabilityTrustRecord[] {
@@ -204,6 +283,52 @@ export class SqliteMissionReader implements MissionReadModelReader {
       .map(row => JSON.parse(row.data_json) as CapabilityAuditRecord);
   }
 
+  readCapabilityTrustPage(
+    missionId: string,
+    query: CapabilityTrustPageQuery = {}
+  ): ProjectionPage<CapabilityTrustRecord> {
+    return this.ledgerPage(
+      "rm_capability_trust",
+      missionId,
+      query,
+      query.capabilityId === undefined ? [] : [["capability_id", boundedIdentifier(query.capabilityId, "capabilityId")]],
+      value => JSON.parse(value) as CapabilityTrustRecord
+    );
+  }
+
+  readCapabilityCostsPage(
+    missionId: string,
+    query: CapabilityCostPageQuery = {}
+  ): ProjectionPage<CapabilityCostRecord> {
+    const filters: Array<[string, string]> = [];
+    if (query.capabilityId !== undefined) filters.push(["capability_id", boundedIdentifier(query.capabilityId, "capabilityId")]);
+    if (query.phase !== undefined) filters.push(["phase", boundedToken(query.phase, "capability cost phase")]);
+    return this.ledgerPage(
+      "rm_capability_cost",
+      missionId,
+      query,
+      filters,
+      value => JSON.parse(value) as CapabilityCostRecord
+    );
+  }
+
+  readCapabilityAuditPage(
+    missionId: string,
+    query: CapabilityAuditPageQuery = {}
+  ): ProjectionPage<CapabilityAuditRecord> {
+    const filters: Array<[string, string]> = [];
+    if (query.capabilityId !== undefined) filters.push(["capability_id", boundedIdentifier(query.capabilityId, "capabilityId")]);
+    if (query.decision !== undefined) filters.push(["decision", boundedToken(query.decision, "capability audit decision")]);
+    return this.ledgerPage(
+      "rm_capability_audit",
+      missionId,
+      query,
+      filters,
+      value => JSON.parse(value) as CapabilityAuditRecord
+    );
+  }
+
+  /** Internal verification path: preserves complete subject history semantics. */
   readEvidence(missionId: string, subjectRef?: string): Evidence[] {
     const sql = subjectRef
       ? "SELECT data_json FROM rm_evidence WHERE mission_id = ? AND subject_ref = ? ORDER BY rowid"
@@ -212,6 +337,38 @@ export class SqliteMissionReader implements MissionReadModelReader {
       ? this.database.db.prepare(sql).all(missionId, subjectRef)
       : this.database.db.prepare(sql).all(missionId)) as Array<{ data_json: string }>;
     return rows.map(row => JSON.parse(row.data_json) as Evidence);
+  }
+
+  readEvidencePage(missionId: string, query: EvidencePageQuery = {}): ProjectionPage<Evidence> {
+    const clauses = ["mission_id = ?", "rowid > ?"];
+    const cursor = boundedCursor(query.afterCursor, "evidence");
+    const params: Array<string | number> = [missionId, cursor];
+    if (query.subjectRef !== undefined) {
+      clauses.push("subject_ref = ?");
+      params.push(boundedIdentifier(query.subjectRef, "evidence subjectRef"));
+    }
+    if (query.kind !== undefined) {
+      clauses.push("evidence_kind = ?");
+      params.push(boundedToken(query.kind, "evidence kind"));
+    }
+    if (query.collectorId !== undefined) {
+      clauses.push("collector_id = ?");
+      params.push(boundedIdentifier(query.collectorId, "evidence collectorId"));
+    }
+    if (query.result !== undefined) {
+      clauses.push("result = ?");
+      params.push(boundedToken(query.result, "evidence result"));
+    }
+    const limit = boundedLimit(query.limit, "evidence");
+    params.push(limit + 1);
+    const rows = this.database.db.prepare(`
+      SELECT rowid AS cursor, data_json
+      FROM rm_evidence
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY rowid ASC
+      LIMIT ?
+    `).all(...params) as unknown as Array<{ cursor: number; data_json: string }>;
+    return projectionPage(rows, limit, value => JSON.parse(value) as Evidence);
   }
 
   readSideEffects(missionId: string, query: SideEffectQuery = {}): SideEffectOperationView[] {
@@ -283,6 +440,31 @@ export class SqliteMissionReader implements MissionReadModelReader {
     });
   }
 
+  private ledgerPage<T>(
+    table: "rm_capability_trust" | "rm_capability_cost" | "rm_capability_audit",
+    missionId: string,
+    query: ProjectionPageQuery,
+    filters: Array<[string, string]>,
+    parse: (value: string) => T
+  ): ProjectionPage<T> {
+    const clauses = ["mission_id = ?", "rowid > ?"];
+    const params: Array<string | number> = [missionId, boundedCursor(query.afterCursor, "capability ledger")];
+    for (const [column, value] of filters) {
+      clauses.push(`${column} = ?`);
+      params.push(value);
+    }
+    const limit = boundedLimit(query.limit, "capability ledger");
+    params.push(limit + 1);
+    const rows = this.database.db.prepare(`
+      SELECT rowid AS cursor, data_json
+      FROM ${table}
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY rowid ASC
+      LIMIT ?
+    `).all(...params) as unknown as Array<{ cursor: number; data_json: string }>;
+    return projectionPage(rows, limit, parse);
+  }
+
   private ledgerRows(
     table: "rm_capability_trust" | "rm_capability_cost" | "rm_capability_audit",
     missionId: string
@@ -299,10 +481,8 @@ export class SqliteMissionReader implements MissionReadModelReader {
   private rows(
     table:
       | "rm_work_items"
-      | "rm_findings"
       | "rm_gaps"
       | "rm_decisions"
-      | "rm_approvals"
       | "rm_capability_needs"
       | "rm_capabilities",
     missionId: string
@@ -330,6 +510,29 @@ function appendLifecycleFilters(
     clauses.push("id > ?");
     params.push(boundedIdentifier(query.afterId, "afterId"));
   }
+}
+
+function projectionPage<T>(
+  rows: Array<{ cursor: number; data_json: string }>,
+  limit: number,
+  parse: (value: string) => T
+): ProjectionPage<T> {
+  const hasMore = rows.length > limit;
+  const visible = hasMore ? rows.slice(0, limit) : rows;
+  const items = visible.map(row => parse(row.data_json));
+  const last = visible.at(-1);
+  return {
+    items,
+    ...(hasMore && last ? { nextCursor: last.cursor } : {})
+  };
+}
+
+function boundedCursor(value: number | undefined, label: string): number {
+  const cursor = value ?? 0;
+  if (!Number.isSafeInteger(cursor) || cursor < 0) {
+    throw new Error(`${label} afterCursor must be a non-negative safe integer`);
+  }
+  return cursor;
 }
 
 function boundedLimit(value: number | undefined, label: string): number {

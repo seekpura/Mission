@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { MissionDatabase } from "../../src/persistence/sqlite/database.ts";
 import { SqliteEventStore } from "../../src/persistence/sqlite/sqlite-event-store.ts";
+import { SqliteMissionReader } from "../../src/persistence/sqlite/sqlite-mission-reader.ts";
 import { MissionController } from "../../src/core/mission/controller.ts";
 import { RuntimeApprovalManager } from "../../src/runtime/approval-manager.ts";
 import { createMissionApi } from "../../src/server/mission-api.ts";
@@ -28,14 +29,15 @@ async function closeServer(server: ReturnType<typeof createMissionApi>): Promise
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }
 
-test("approval request is durable before HTTP decision releases the waiting host request", async () => {
+test("approval request is durable before HTTP decision releases the waiting host request and GET history is bounded", async () => {
   const root = await mkdtemp(join(tmpdir(), "mission-approval-api-"));
   const database = new MissionDatabase(":memory:");
   database.migrate(schemaPath());
   const events = new SqliteEventStore(database);
+  const reader = new SqliteMissionReader(database);
   const controller = new MissionController(events);
   const approvals = new RuntimeApprovalManager(events, { timeoutMs: 10_000 });
-  const server = createMissionApi(controller, events, { approvals });
+  const server = createMissionApi(controller, events, { approvals, approvalReader: reader });
 
   try {
     await controller.createMission("mission-approval-api", "exercise durable approval");
@@ -54,6 +56,13 @@ test("approval request is durable before HTTP decision releases the waiting host
     }
     assert.equal(pending.length, 1);
 
+    const pendingResponse = await fetch(`${base}/missions/mission-approval-api/approvals?status=pending&limit=1`);
+    assert.equal(pendingResponse.status, 200);
+    const pendingBody = await pendingResponse.json() as Array<{ id: string; status: string }>;
+    assert.deepEqual(pendingBody.map(value => [value.id, value.status]), [[pending[0]!.id, "pending"]]);
+    assert.equal((await fetch(`${base}/missions/mission-approval-api/approvals?limit=501`)).status, 400);
+    assert.equal((await fetch(`${base}/missions/mission-approval-api/approvals?status=expired`)).status, 400);
+
     const beforeDecision = await events.list("mission-approval-api");
     assert.equal(beforeDecision.at(-1)?.type, "approval.requested");
 
@@ -67,6 +76,11 @@ test("approval request is durable before HTTP decision releases the waiting host
     const result = await waiting;
     assert.deepEqual(result, { approved: true, scope: "once" });
     assert.deepEqual(await approvals.listPending("mission-approval-api"), []);
+
+    const approvedResponse = await fetch(`${base}/missions/mission-approval-api/approvals?status=approved`);
+    assert.equal(approvedResponse.status, 200);
+    const approvedBody = await approvedResponse.json() as Array<{ id: string; status: string }>;
+    assert.deepEqual(approvedBody.map(value => [value.id, value.status]), [[pending[0]!.id, "approved"]]);
 
     const afterDecision = await events.list("mission-approval-api");
     assert.equal(afterDecision.at(-1)?.type, "approval.decided");

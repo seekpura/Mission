@@ -128,7 +128,7 @@ function resolutionEnvelope(missionId: string, capabilityId: string) {
   };
 }
 
-test("Mission API exposes capability ledger and applies durable capability/cache revocation lifecycle", async () => {
+test("Mission API exposes bounded capability ledger history and applies durable capability/cache revocation lifecycle", async () => {
   const database = new MissionDatabase(":memory:");
   database.migrate(schemaPath());
   const events = new SqliteEventStore(database);
@@ -157,6 +157,7 @@ test("Mission API exposes capability ledger and applies durable capability/cache
     assert.equal(ledger.costs.length, 1);
     assert.equal(ledger.audit.length, 1);
     assert.equal(ledger.audit[0].decision, "trusted-cache-reused");
+    assert.deepEqual(ledger.next, {});
 
     const missingReason = await fetch(`${base}/missions/${missionId}/capabilities/${encodeURIComponent(fixture.id)}/deactivate`, {
       method: "POST",
@@ -226,6 +227,42 @@ test("Mission API exposes capability ledger and applies durable capability/cache
     const latestAudit = reader.readCapabilityAudit(missionId).at(-1);
     assert.equal(latestAudit?.decision, "revoked");
     assert.equal(latestAudit?.cacheKey, cacheKey);
+
+    const firstPageResponse = await fetch(`${base}/missions/${missionId}/capabilities/ledger?limit=1`);
+    assert.equal(firstPageResponse.status, 200);
+    const firstPage = await firstPageResponse.json() as any;
+    assert.equal(firstPage.trust.length, 1);
+    assert.equal(firstPage.trust[0].trustLevel, "trusted-cache");
+    assert.equal(firstPage.costs.length, 1);
+    assert.equal(firstPage.audit.length, 1);
+    assert.equal(firstPage.audit[0].decision, "trusted-cache-reused");
+    assert.equal(typeof firstPage.next.trust, "number");
+    assert.equal(typeof firstPage.next.audit, "number");
+    assert.equal(firstPage.next.costs, undefined);
+
+    const secondPageResponse = await fetch(
+      `${base}/missions/${missionId}/capabilities/ledger?limit=1&trustAfter=${firstPage.next.trust}&auditAfter=${firstPage.next.audit}`
+    );
+    assert.equal(secondPageResponse.status, 200);
+    const secondPage = await secondPageResponse.json() as any;
+    assert.equal(secondPage.trust[0].trustLevel, "revoked");
+    assert.equal(secondPage.audit[0].decision, "deactivated");
+
+    const filteredLedger = await fetch(
+      `${base}/missions/${missionId}/capabilities/ledger?capabilityId=${encodeURIComponent(fixture.id)}&phase=acquisition&decision=revoked`
+    );
+    assert.equal(filteredLedger.status, 200);
+    const filtered = await filteredLedger.json() as any;
+    assert.equal(filtered.trust.length, 2);
+    assert.equal(filtered.costs.length, 1);
+    assert.equal(filtered.costs[0].phase, "acquisition");
+    assert.equal(filtered.audit.length, 1);
+    assert.equal(filtered.audit[0].decision, "revoked");
+    assert.equal(filtered.audit[0].capabilityId, fixture.id);
+
+    assert.equal((await fetch(`${base}/missions/${missionId}/capabilities/ledger?limit=501`)).status, 400);
+    assert.equal((await fetch(`${base}/missions/${missionId}/capabilities/ledger?phase=unknown-phase`)).status, 400);
+    assert.equal((await fetch(`${base}/missions/${missionId}/capabilities/ledger?auditAfter=-1`)).status, 400);
   } finally {
     await closeServer(server);
     database.close();

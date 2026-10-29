@@ -40,7 +40,7 @@ async function appendEvidence(events: SqliteEventStore, value: Evidence): Promis
   }, expected);
 }
 
-test("Mission API lists durable verification Evidence and filters by subjectRef", async () => {
+test("Mission API preserves legacy Evidence arrays and exposes bounded cursor pages with filters", async () => {
   const database = new MissionDatabase(":memory:");
   database.migrate(schemaPath());
   const events = new SqliteEventStore(database);
@@ -84,6 +84,28 @@ test("Mission API lists durable verification Evidence and filters by subjectRef"
     const filtered = await fetch(`${base}/missions/${missionId}/evidence?subjectRef=${encodeURIComponent("deck@1")}`);
     assert.equal(filtered.status, 200);
     assert.deepEqual(await filtered.json(), [first]);
+
+    const firstPageResponse = await fetch(`${base}/missions/${missionId}/evidence/page?limit=1`);
+    assert.equal(firstPageResponse.status, 200);
+    const firstPage = await firstPageResponse.json() as { items: Evidence[]; nextCursor?: number };
+    assert.deepEqual(firstPage.items, [first]);
+    assert.equal(typeof firstPage.nextCursor, "number");
+
+    const secondPageResponse = await fetch(
+      `${base}/missions/${missionId}/evidence/page?afterCursor=${firstPage.nextCursor}&limit=1`
+    );
+    assert.equal(secondPageResponse.status, 200);
+    assert.deepEqual(await secondPageResponse.json(), { items: [second] });
+
+    const kindFilter = await fetch(
+      `${base}/missions/${missionId}/evidence/page?kind=browser-runtime&collectorId=browser-fixture&result=supports`
+    );
+    assert.equal(kindFilter.status, 200);
+    assert.deepEqual(await kindFilter.json(), { items: [second] });
+
+    assert.equal((await fetch(`${base}/missions/${missionId}/evidence?limit=501`)).status, 400);
+    assert.equal((await fetch(`${base}/missions/${missionId}/evidence/page?kind=not-a-kind`)).status, 400);
+    assert.equal((await fetch(`${base}/missions/${missionId}/evidence/page?afterCursor=-1`)).status, 400);
   } finally {
     await closeServer(server);
     database.close();

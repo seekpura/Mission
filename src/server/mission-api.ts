@@ -2,7 +2,9 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { CapabilityAuditDecision, CapabilityCostRecord } from "../core/domain/capability-ledger.ts";
 import type { SideEffectOperationStatus } from "../core/domain/execution.ts";
+import type { Evidence } from "../core/domain/verification.ts";
 import type { MissionController } from "../core/mission/controller.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 import type { SqliteMissionReader } from "../persistence/sqlite/sqlite-mission-reader.ts";
@@ -18,16 +20,47 @@ const SIDE_EFFECT_STATUSES = new Set<SideEffectOperationStatus>([
   "failed",
   "unknown"
 ]);
+const APPROVAL_STATUSES = new Set(["pending", "approved", "rejected"] as const);
+const EVIDENCE_KINDS = new Set<Evidence["kind"]>([
+  "file-integrity",
+  "text-content",
+  "presentation-package",
+  "presentation-render",
+  "website-source",
+  "browser-runtime",
+  "accessibility-check",
+  "media-probe",
+  "media-playback",
+  "code-source",
+  "executable-test",
+  "build-check",
+  "integration-test",
+  "static-analysis",
+  "source-traceability",
+  "source-recency"
+]);
+const EVIDENCE_RESULTS = new Set<Evidence["result"]>(["supports", "contradicts", "inconclusive"]);
+const CAPABILITY_COST_PHASES = new Set<CapabilityCostRecord["phase"]>(["resolution", "acquisition", "activation"]);
+const CAPABILITY_AUDIT_DECISIONS = new Set<CapabilityAuditDecision>([
+  "existing-resolved",
+  "acquired",
+  "trusted-cache-reused",
+  "deactivated",
+  "revoked",
+  "rejected"
+]);
 
 export interface MissionApiRuntime {
   supervisor?: MissionSupervisor;
   approvals?: RuntimeApprovalManager;
+  approvalReader?: Pick<SqliteMissionReader, "readApprovals">;
+  findingReader?: Pick<SqliteMissionReader, "readFindings">;
   capabilityLifecycle?: RuntimeCapabilityLifecycleManager;
   capabilityLedgerReader?: Pick<
     SqliteMissionReader,
-    "readCapabilityTrust" | "readCapabilityCosts" | "readCapabilityAudit"
+    "readCapabilityTrustPage" | "readCapabilityCostsPage" | "readCapabilityAuditPage"
   >;
-  evidenceReader?: Pick<SqliteMissionReader, "readEvidence">;
+  evidenceReader?: Pick<SqliteMissionReader, "readEvidencePage">;
   sideEffectReader?: Pick<SqliteMissionReader, "readSideEffects">;
   operationalReader?: Pick<SqliteMissionReader, "readActivity" | "readAttempts" | "readExecutions">;
 }
@@ -104,8 +137,20 @@ export function createMissionApi(
           return json(res, 202, await controller.state(missionId));
         }
         if (req.method === "GET" && parts[2] === "approvals" && parts.length === 3) {
-          if (!runtime.approvals) return json(res, 503, { error: "approval_manager_unavailable" });
-          return json(res, 200, await runtime.approvals.list(missionId));
+          if (!runtime.approvalReader) return json(res, 503, { error: "approval_reader_unavailable" });
+          const statusValue = parseOptionalToken(url.searchParams.get("status"));
+          if (statusValue === "invalid" || (statusValue && !APPROVAL_STATUSES.has(statusValue as "pending" | "approved" | "rejected"))) {
+            return json(res, 400, { error: "invalid_approval_status" });
+          }
+          const afterId = parseOptionalIdentifier(url.searchParams.get("afterId"));
+          if (afterId === "invalid") return json(res, 400, { error: "invalid_after_id" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 500);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_approval_limit" });
+          return json(res, 200, runtime.approvalReader.readApprovals(missionId, {
+            ...(typeof statusValue === "string" ? { status: statusValue as "pending" | "approved" | "rejected" } : {}),
+            ...(typeof afterId === "string" ? { afterId } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          }));
         }
         if (req.method === "POST" && parts[2] === "approvals" && parts[3] && parts.length === 4) {
           if (!runtime.approvals) return json(res, 503, { error: "approval_manager_unavailable" });
@@ -124,10 +169,44 @@ export function createMissionApi(
           void runtime.supervisor?.wake(missionId, "approval_event");
           return json(res, 200, record);
         }
-        if (req.method === "GET" && parts[2] === "evidence" && parts.length === 3) {
+        if (req.method === "GET" && parts[2] === "findings" && parts.length === 3) {
+          if (!runtime.findingReader) return json(res, 503, { error: "finding_reader_unavailable" });
+          const afterId = parseOptionalIdentifier(url.searchParams.get("afterId"));
+          if (afterId === "invalid") return json(res, 400, { error: "invalid_after_id" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 500);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_finding_limit" });
+          return json(res, 200, runtime.findingReader.readFindings(missionId, {
+            ...(typeof afterId === "string" ? { afterId } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          }));
+        }
+        if (req.method === "GET" && parts[2] === "evidence" && (parts.length === 3 || (parts[3] === "page" && parts.length === 4))) {
           if (!runtime.evidenceReader) return json(res, 503, { error: "evidence_reader_unavailable" });
-          const subjectRef = url.searchParams.get("subjectRef")?.trim() || undefined;
-          return json(res, 200, runtime.evidenceReader.readEvidence(missionId, subjectRef));
+          const subjectRef = parseOptionalIdentifier(url.searchParams.get("subjectRef"));
+          if (subjectRef === "invalid") return json(res, 400, { error: "invalid_evidence_subject_ref" });
+          const collectorId = parseOptionalIdentifier(url.searchParams.get("collectorId"));
+          if (collectorId === "invalid") return json(res, 400, { error: "invalid_evidence_collector_id" });
+          const kindValue = parseOptionalToken(url.searchParams.get("kind"));
+          if (kindValue === "invalid" || (kindValue && !EVIDENCE_KINDS.has(kindValue as Evidence["kind"]))) {
+            return json(res, 400, { error: "invalid_evidence_kind" });
+          }
+          const resultValue = parseOptionalToken(url.searchParams.get("result"));
+          if (resultValue === "invalid" || (resultValue && !EVIDENCE_RESULTS.has(resultValue as Evidence["result"]))) {
+            return json(res, 400, { error: "invalid_evidence_result" });
+          }
+          const afterCursor = parseOptionalInteger(url.searchParams.get("afterCursor"), 0, Number.MAX_SAFE_INTEGER);
+          if (afterCursor === "invalid") return json(res, 400, { error: "invalid_evidence_cursor" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 500);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_evidence_limit" });
+          const page = runtime.evidenceReader.readEvidencePage(missionId, {
+            ...(typeof subjectRef === "string" ? { subjectRef } : {}),
+            ...(typeof collectorId === "string" ? { collectorId } : {}),
+            ...(typeof kindValue === "string" ? { kind: kindValue as Evidence["kind"] } : {}),
+            ...(typeof resultValue === "string" ? { result: resultValue as Evidence["result"] } : {}),
+            ...(typeof afterCursor === "number" ? { afterCursor } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          });
+          return json(res, 200, parts[3] === "page" ? page : page.items);
         }
         if (req.method === "GET" && parts[2] === "side-effects" && parts.length === 3) {
           if (!runtime.sideEffectReader) return json(res, 503, { error: "side_effect_reader_unavailable" });
@@ -208,10 +287,51 @@ export function createMissionApi(
           if (!runtime.capabilityLedgerReader) {
             return json(res, 503, { error: "capability_ledger_reader_unavailable" });
           }
+          const capabilityId = parseOptionalIdentifier(url.searchParams.get("capabilityId"));
+          if (capabilityId === "invalid") return json(res, 400, { error: "invalid_capability_id" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 500);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_capability_ledger_limit" });
+          const trustAfter = parseOptionalInteger(url.searchParams.get("trustAfter"), 0, Number.MAX_SAFE_INTEGER);
+          if (trustAfter === "invalid") return json(res, 400, { error: "invalid_capability_trust_cursor" });
+          const costsAfter = parseOptionalInteger(url.searchParams.get("costsAfter"), 0, Number.MAX_SAFE_INTEGER);
+          if (costsAfter === "invalid") return json(res, 400, { error: "invalid_capability_cost_cursor" });
+          const auditAfter = parseOptionalInteger(url.searchParams.get("auditAfter"), 0, Number.MAX_SAFE_INTEGER);
+          if (auditAfter === "invalid") return json(res, 400, { error: "invalid_capability_audit_cursor" });
+          const phaseValue = parseOptionalToken(url.searchParams.get("phase"));
+          if (phaseValue === "invalid" || (phaseValue && !CAPABILITY_COST_PHASES.has(phaseValue as CapabilityCostRecord["phase"]))) {
+            return json(res, 400, { error: "invalid_capability_cost_phase" });
+          }
+          const decisionValue = parseOptionalToken(url.searchParams.get("decision"));
+          if (decisionValue === "invalid" || (decisionValue && !CAPABILITY_AUDIT_DECISIONS.has(decisionValue as CapabilityAuditDecision))) {
+            return json(res, 400, { error: "invalid_capability_audit_decision" });
+          }
+          const common = {
+            ...(typeof capabilityId === "string" ? { capabilityId } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          };
+          const trust = runtime.capabilityLedgerReader.readCapabilityTrustPage(missionId, {
+            ...common,
+            ...(typeof trustAfter === "number" ? { afterCursor: trustAfter } : {})
+          });
+          const costs = runtime.capabilityLedgerReader.readCapabilityCostsPage(missionId, {
+            ...common,
+            ...(typeof costsAfter === "number" ? { afterCursor: costsAfter } : {}),
+            ...(typeof phaseValue === "string" ? { phase: phaseValue as CapabilityCostRecord["phase"] } : {})
+          });
+          const audit = runtime.capabilityLedgerReader.readCapabilityAuditPage(missionId, {
+            ...common,
+            ...(typeof auditAfter === "number" ? { afterCursor: auditAfter } : {}),
+            ...(typeof decisionValue === "string" ? { decision: decisionValue as CapabilityAuditDecision } : {})
+          });
           return json(res, 200, {
-            trust: runtime.capabilityLedgerReader.readCapabilityTrust(missionId),
-            costs: runtime.capabilityLedgerReader.readCapabilityCosts(missionId),
-            audit: runtime.capabilityLedgerReader.readCapabilityAudit(missionId)
+            trust: trust.items,
+            costs: costs.items,
+            audit: audit.items,
+            next: {
+              ...(trust.nextCursor !== undefined ? { trust: trust.nextCursor } : {}),
+              ...(costs.nextCursor !== undefined ? { costs: costs.nextCursor } : {}),
+              ...(audit.nextCursor !== undefined ? { audit: audit.nextCursor } : {})
+            }
           });
         }
         if (
