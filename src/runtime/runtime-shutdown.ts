@@ -49,12 +49,7 @@ export async function shutdownMissionRuntime(input: {
     input.host.beginDrain();
     const hostIdle = await settleWithin(input.host.waitForIdle(), forcedTimeoutMs);
     if (!hostIdle) {
-      const cancellation = await input.host.cancelActive();
-      const settled = await settleWithin(
-        Promise.all([input.supervisor.waitForAllIdle(), input.host.waitForIdle()]).then(() => undefined),
-        forcedTimeoutMs
-      );
-      if (!settled) throw timeoutError(input);
+      const cancellation = await forceSettle(input, forcedTimeoutMs);
       disposeRuntime(input.approvals, input.database);
       return {
         forced: true,
@@ -67,13 +62,7 @@ export async function shutdownMissionRuntime(input: {
     return { forced: false, cancelledHandleIds: [], cancellationFailures: [] };
   }
 
-  const cancellation = await input.host.cancelActive();
-  const forced = await settleWithin(
-    Promise.all([input.supervisor.waitForAllIdle(), input.host.waitForIdle()]).then(() => undefined),
-    forcedTimeoutMs
-  );
-  if (!forced) throw timeoutError(input);
-
+  const cancellation = await forceSettle(input, forcedTimeoutMs);
   disposeRuntime(input.approvals, input.database);
   return {
     forced: true,
@@ -102,6 +91,26 @@ export function closeMissionRuntimeIfIdle(input: {
   input.supervisor.beginDrain();
   input.host.closeIfIdle();
   disposeRuntime(input.approvals, input.database);
+}
+
+async function forceSettle(
+  input: {
+    supervisor: MissionSupervisor;
+    host: DrainableHostAdapter;
+  },
+  timeoutMs: number
+): Promise<{ attempted: string[]; failures: Array<{ handleId: string; error: string }> }> {
+  const cancellation = input.host.cancelActive();
+  const settled = await settleWithin(
+    Promise.all([
+      cancellation.then(() => undefined),
+      input.supervisor.waitForAllIdle(),
+      input.host.waitForIdle()
+    ]).then(() => undefined),
+    timeoutMs
+  );
+  if (!settled) throw timeoutError(input);
+  return cancellation;
 }
 
 async function settleWithin(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
