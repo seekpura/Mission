@@ -334,3 +334,31 @@ CREATE TABLE IF NOT EXISTS rm_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_rm_evidence_subject ON rm_evidence(mission_id, subject_ref, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_rm_evidence_kind ON rm_evidence(mission_id, evidence_kind, created_at, id);
+
+CREATE TABLE IF NOT EXISTS rm_side_effects (
+  mission_id TEXT NOT NULL,
+  operation_key TEXT NOT NULL,
+  intent_id TEXT NOT NULL,
+  work_item_id TEXT,
+  attempt_id TEXT,
+  execution_id TEXT,
+  source TEXT NOT NULL,
+  effect_class TEXT NOT NULL,
+  effect_type TEXT NOT NULL,
+  target TEXT NOT NULL,
+  status TEXT NOT NULL,
+  admission_status TEXT,
+  completion_status TEXT,
+  intent_json TEXT NOT NULL,
+  admission_json TEXT,
+  replay_block_json TEXT,
+  replay_block_count INTEGER NOT NULL DEFAULT 0,
+  completion_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_event_sequence INTEGER NOT NULL,
+  PRIMARY KEY(mission_id, operation_key)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_side_effect_execution ON rm_side_effects(mission_id, execution_id, last_event_sequence);
+CREATE INDEX IF NOT EXISTS idx_rm_side_effect_work ON rm_side_effects(mission_id, work_item_id, last_event_sequence);
+CREATE INDEX IF NOT EXISTS idx_rm_side_effect_status ON rm_side_effects(mission_id, status, last_event_sequence);
