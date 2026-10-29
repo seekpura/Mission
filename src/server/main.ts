@@ -23,6 +23,8 @@ runtime.supervisor.onError((missionId, error) => {
 const server = createMissionApi(runtime.controller, runtime.events, {
   supervisor: runtime.supervisor,
   approvals: runtime.approvals,
+  approvalReader: runtime.reader,
+  findingReader: runtime.reader,
   capabilityLifecycle: runtime.capabilityLifecycle,
   capabilityLedgerReader: runtime.reader,
   evidenceReader: runtime.reader,
