@@ -32,6 +32,7 @@ import {
 } from "./external-mcp-admission.ts";
 import {
   ExternalMcpCatalogDiscoveryProvider,
+  parseExternalMcpCatalogJson,
   type ExternalMcpCatalogEntry
 } from "./external-mcp-catalog.ts";
 import {
@@ -342,6 +343,7 @@ export function createProductionMissionRuntimeFromEnv(
   const hostKind = parseProductionHostKind(env.MISSION_HOST_KIND);
   const dshArgsPrefix = parseStringArrayEnv(env.MISSION_DSH_ARGS_PREFIX_JSON, "MISSION_DSH_ARGS_PREFIX_JSON");
   const codexArgsPrefix = parseStringArrayEnv(env.MISSION_CODEX_ARGS_PREFIX_JSON, "MISSION_CODEX_ARGS_PREFIX_JSON");
+  const externalMcpCatalog = parseExternalMcpCatalogJson(env.MISSION_EXTERNAL_MCP_CATALOG_JSON);
   const allowInsecureTrustedMcpHttp = env.MISSION_TRUSTED_MCP_ALLOW_HTTP === "1";
   const trustedMcpServers = parseTrustedMcpServersJson(env.MISSION_TRUSTED_MCP_SERVERS_JSON, {
     allowInsecureHttp: allowInsecureTrustedMcpHttp
@@ -374,6 +376,7 @@ export function createProductionMissionRuntimeFromEnv(
     maxSupervisorCycles: positiveNumber(env.MISSION_MAX_CYCLES_PER_WAKE),
     retainControlWorkspaces: env.MISSION_RETAIN_CONTROL_WORKSPACES === "1",
     capabilityAcquisition: capabilityAcquisitionFromEnv(env),
+    externalMcpCatalog,
     trustedMcpServers,
     allowInsecureTrustedMcpHttp,
     providerEvidenceRoutes,
