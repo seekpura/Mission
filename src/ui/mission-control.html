@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Mission Control</title>
 <style>
-:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}body{margin:0}.shell{max-width:1180px;margin:0 auto;padding:40px 24px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#666}.title{font-size:42px;line-height:1;margin:8px 0}.muted{color:#666}.grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-top:28px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.03)}.metric{font-size:28px;font-weight:650}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:12px}.wide{grid-column:1/-1}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.title{font-size:32px}}
+:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}body{margin:0}.shell{max-width:1180px;margin:0 auto;padding:40px 24px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#666}.title{font-size:42px;line-height:1;margin:8px 0}.muted{color:#666}.grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-top:28px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.03)}.metric{font-size:28px;font-weight:650}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:12px}.wide{grid-column:1/-1}.section-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:8px}.approval{padding:16px 0;border-bottom:1px solid #eee}.approval:last-child{border-bottom:0}.approval-title{font-weight:650;margin:4px 0}.approval-reason{margin:4px 0 10px;color:#444}.approval-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#666}.actions{display:flex;gap:8px;margin-top:12px}.action{appearance:none;border:1px solid #ccc;border-radius:10px;background:#fff;color:#111;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}.action:hover{background:#f5f5f3}.action:focus-visible{outline:3px solid #bbb;outline-offset:2px}.action[data-decision="approve"]{background:#111;color:#fff;border-color:#111}.action:disabled{opacity:.5;cursor:wait}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.title{font-size:32px}.top{align-items:start;flex-direction:column}.section-head{align-items:start}}
 </style>
 </head>
 <body>
@@ -16,13 +16,120 @@
     <section class="card"><div class="eyebrow">Blocking gaps</div><div class="metric" id="gaps">0</div></section>
     <section class="card"><div class="eyebrow">Active work</div><div id="work"></div></section>
     <section class="card"><div class="eyebrow">Artifacts</div><div id="artifacts"></div></section>
+    <section class="card wide" data-surface="pending-approvals">
+      <div class="section-head"><div><div class="eyebrow">Pending approvals</div><div class="muted">Explicit one-shot decisions required by the Runtime.</div></div><div class="pill" id="approval-count">0</div></div>
+      <div id="approval-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
+      <div id="approvals"></div>
+    </section>
     <section class="card wide"><div class="eyebrow">Current state</div><pre id="raw">Waiting for mission id…</pre></section>
   </div>
 </div>
+<template id="approval-actions-template"><div class="actions"><button class="action" type="button" data-decision="approve">Approve</button><button class="action" type="button" data-decision="reject">Reject</button></div></template>
 <script>
 const missionId=new URLSearchParams(location.search).get('mission');
-if(missionId){document.getElementById('mission').textContent=missionId;const es=new EventSource('/missions/'+encodeURIComponent(missionId)+'/events');es.onopen=()=>connection.textContent='live';es.onerror=()=>connection.textContent='reconnecting';es.addEventListener('mission.updated',e=>render(JSON.parse(e.data)));fetch('/missions/'+encodeURIComponent(missionId)).then(r=>r.json()).then(render)}
-function render(s){status.textContent=s.status;gaps.textContent=s.blockingGapIds.length;work.innerHTML=[...s.activeWorkItemIds,...s.readyWorkItemIds].map(x=>'<div class="row"><span>'+esc(x)+'</span><span class="pill">work</span></div>').join('')||'<div class="muted">No active work</div>';artifacts.innerHTML=s.finalArtifactRefs.map(x=>'<div class="row"><span>'+esc(x)+'</span><span class="pill">final</span></div>').join('')||'<div class="muted">No final artifacts</div>';raw.textContent=JSON.stringify(s,null,2)}
+const connectionEl=document.getElementById('connection');
+const statusEl=document.getElementById('status');
+const missionEl=document.getElementById('mission');
+const gapsEl=document.getElementById('gaps');
+const workEl=document.getElementById('work');
+const artifactsEl=document.getElementById('artifacts');
+const rawEl=document.getElementById('raw');
+const approvalsEl=document.getElementById('approvals');
+const approvalStatusEl=document.getElementById('approval-status');
+const approvalCountEl=document.getElementById('approval-count');
+const approvalActionsTemplate=document.getElementById('approval-actions-template');
+let approvalLoadGeneration=0;
+
+if(missionId){
+  missionEl.textContent=missionId;
+  const es=new EventSource('/missions/'+encodeURIComponent(missionId)+'/events');
+  es.onopen=()=>connectionEl.textContent='live';
+  es.onerror=()=>connectionEl.textContent='reconnecting';
+  es.addEventListener('mission.updated',e=>{render(JSON.parse(e.data));void loadApprovals()});
+  fetch('/missions/'+encodeURIComponent(missionId)).then(r=>r.json()).then(render);
+  void loadApprovals();
+}else{
+  approvalStatusEl.textContent='Open a Mission to review pending approvals.';
+}
+
+function render(s){
+  statusEl.textContent=s.status;
+  gapsEl.textContent=s.blockingGapIds.length;
+  workEl.innerHTML=[...s.activeWorkItemIds,...s.readyWorkItemIds].map(x=>'<div class="row"><span>'+esc(x)+'</span><span class="pill">work</span></div>').join('')||'<div class="muted">No active work</div>';
+  artifactsEl.innerHTML=s.finalArtifactRefs.map(x=>'<div class="row"><span>'+esc(x)+'</span><span class="pill">final</span></div>').join('')||'<div class="muted">No final artifacts</div>';
+  rawEl.textContent=JSON.stringify(s,null,2);
+}
+
+async function loadApprovals(){
+  if(!missionId)return;
+  const generation=++approvalLoadGeneration;
+  approvalStatusEl.textContent='Refreshing pending approvals…';
+  try{
+    const response=await fetch('/missions/'+encodeURIComponent(missionId)+'/approvals?status=pending&limit=50');
+    if(!response.ok)throw new Error('Pending approvals unavailable ('+response.status+')');
+    const items=await response.json();
+    if(!Array.isArray(items))throw new Error('Pending approvals response was not a list');
+    if(generation!==approvalLoadGeneration)return;
+    renderApprovals(items);
+    approvalStatusEl.textContent=items.length===50?'Showing up to 50 pending approvals.':items.length?items.length+' approval'+(items.length===1?'':'s')+' waiting for a decision.':'No pending approvals.';
+  }catch(error){
+    if(generation!==approvalLoadGeneration)return;
+    approvalStatusEl.textContent=error instanceof Error?error.message:String(error);
+  }
+}
+
+function renderApprovals(items){
+  approvalCountEl.textContent=items.length===50?'50 shown':String(items.length);
+  const fragment=document.createDocumentFragment();
+  for(const approval of items){
+    const article=document.createElement('article');
+    article.className='approval';
+
+    const meta=document.createElement('div');
+    meta.className='approval-meta';
+    const kind=document.createElement('span');
+    kind.className='pill';
+    kind.textContent=String(approval.kind||'approval');
+    const requested=document.createElement('span');
+    requested.textContent=String(approval.requestedAt||'');
+    meta.append(kind,requested);
+
+    const title=document.createElement('div');
+    title.className='approval-title';
+    title.textContent=String(approval.title||approval.id||'Approval');
+    const reason=document.createElement('p');
+    reason.className='approval-reason';
+    reason.textContent=String(approval.reason||'No reason supplied.');
+
+    const actions=approvalActionsTemplate.content.cloneNode(true);
+    for(const button of actions.querySelectorAll('button')){
+      const approved=button.dataset.decision==='approve';
+      button.addEventListener('click',()=>{void decideApproval(String(approval.id),approved,article)});
+    }
+    article.append(meta,title,reason,actions);
+    fragment.append(article);
+  }
+  approvalsEl.replaceChildren(fragment);
+}
+
+async function decideApproval(approvalId,approved,article){
+  const buttons=[...article.querySelectorAll('button')];
+  for(const button of buttons)button.disabled=true;
+  approvalStatusEl.textContent=approved?'Approving request…':'Rejecting request…';
+  try{
+    const response=await fetch('/missions/'+encodeURIComponent(missionId)+'/approvals/'+encodeURIComponent(approvalId),{
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({approved:approved,scope:'once',actor:'user:mission-control'})
+    });
+    if(!response.ok)throw new Error('Approval decision failed ('+response.status+')');
+    await loadApprovals();
+  }catch(error){
+    approvalStatusEl.textContent=error instanceof Error?error.message:String(error);
+    for(const button of buttons)button.disabled=false;
+  }
+}
+
 function esc(x){return String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 </script>
 </body>
