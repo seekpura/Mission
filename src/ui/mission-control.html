@@ -33,6 +33,17 @@
       <div id="archive-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
       <div id="history-archives"></div>
     </section>
+    <section class="card wide" data-surface="history-retention">
+      <div class="section-head"><div><div class="eyebrow">History retention</div><div class="muted">Recovery safety state for the append-only Mission Event Store.</div></div></div>
+      <div id="retention-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
+      <div class="summary-grid">
+        <div class="summary-stat"><div class="eyebrow">Mode</div><div class="summary-value" id="retention-mode">—</div></div>
+        <div class="summary-stat"><div class="eyebrow">Latest event</div><div class="summary-value" id="retention-latest-sequence">—</div></div>
+        <div class="summary-stat"><div class="eyebrow">Latest snapshot</div><div class="summary-value" id="retention-snapshot-sequence">—</div></div>
+        <div class="summary-stat"><div class="eyebrow">Deletion eligible through</div><div class="summary-value" id="retention-deletion-eligible">—</div></div>
+      </div>
+      <p id="retention-reason" class="muted">Retention authority not loaded.</p>
+    </section>
     <section class="card wide" data-surface="pending-approvals">
       <div class="section-head"><div><div class="eyebrow">Pending approvals</div><div class="muted">Explicit one-shot decisions required by the Runtime.</div></div><div class="pill" id="approval-count">0</div></div>
       <div id="approval-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
@@ -66,6 +77,12 @@ const summaryLatencyEl=document.getElementById('summary-latency');
 const historyArchivesEl=document.getElementById('history-archives');
 const archiveStatusEl=document.getElementById('archive-status');
 const archiveCountEl=document.getElementById('archive-count');
+const retentionStatusEl=document.getElementById('retention-status');
+const retentionModeEl=document.getElementById('retention-mode');
+const retentionLatestSequenceEl=document.getElementById('retention-latest-sequence');
+const retentionSnapshotSequenceEl=document.getElementById('retention-snapshot-sequence');
+const retentionDeletionEligibleEl=document.getElementById('retention-deletion-eligible');
+const retentionReasonEl=document.getElementById('retention-reason');
 const approvalsEl=document.getElementById('approvals');
 const approvalStatusEl=document.getElementById('approval-status');
 const approvalCountEl=document.getElementById('approval-count');
@@ -75,6 +92,7 @@ const findingStatusEl=document.getElementById('finding-status');
 const findingCountEl=document.getElementById('finding-count');
 let summaryLoadGeneration=0;
 let archiveLoadGeneration=0;
+let retentionLoadGeneration=0;
 let approvalLoadGeneration=0;
 let findingLoadGeneration=0;
 
@@ -83,15 +101,17 @@ if(missionId){
   const es=new EventSource('/missions/'+encodeURIComponent(missionId)+'/events');
   es.onopen=()=>connectionEl.textContent='live';
   es.onerror=()=>connectionEl.textContent='reconnecting';
-  es.addEventListener('mission.updated',e=>{render(JSON.parse(e.data));void loadOperationalSummary();void loadHistoryArchives();void loadApprovals();void loadFindings()});
+  es.addEventListener('mission.updated',e=>{render(JSON.parse(e.data));void loadOperationalSummary();void loadHistoryArchives();void loadHistoryRetention();void loadApprovals();void loadFindings()});
   fetch('/missions/'+encodeURIComponent(missionId)).then(r=>r.json()).then(render);
   void loadOperationalSummary();
   void loadHistoryArchives();
+  void loadHistoryRetention();
   void loadApprovals();
   void loadFindings();
 }else{
   summaryStatusEl.textContent='Open a Mission to review runtime health.';
   archiveStatusEl.textContent='Open a Mission to review registered history archives.';
+  retentionStatusEl.textContent='Open a Mission to review history retention safety.';
   approvalStatusEl.textContent='Open a Mission to review pending approvals.';
   findingStatusEl.textContent='Open a Mission to review verification findings.';
 }
@@ -196,6 +216,35 @@ function renderHistoryArchives(page){
     fragment.append(archive);
   }
   historyArchivesEl.replaceChildren(fragment);
+}
+
+async function loadHistoryRetention(){
+  if(!missionId)return;
+  const generation=++retentionLoadGeneration;
+  retentionStatusEl.textContent='Refreshing history retention safety…';
+  try{
+    const response=await fetch('/missions/'+encodeURIComponent(missionId)+'/history/retention');
+    if(!response.ok)throw new Error('History retention unavailable ('+response.status+')');
+    const state=await response.json();
+    if(!state||typeof state!=='object'||Array.isArray(state))throw new Error('History retention response was not an object');
+    if(generation!==retentionLoadGeneration)return;
+    renderHistoryRetention(state);
+  }catch(error){
+    if(generation!==retentionLoadGeneration)return;
+    retentionStatusEl.textContent=error instanceof Error?error.message:String(error);
+  }
+}
+
+function renderHistoryRetention(state){
+  retentionModeEl.textContent=String(state.mode||'—');
+  retentionLatestSequenceEl.textContent=finiteCount(state.latestSequence);
+  retentionSnapshotSequenceEl.textContent=finiteCount(state.latestSnapshotSequence);
+  const deletionEligible=Number(state.deletionEligibleThroughSequence);
+  retentionDeletionEligibleEl.textContent=Number.isSafeInteger(deletionEligible)&&deletionEligible===0?'None':finiteCount(deletionEligible);
+  retentionReasonEl.textContent=String(state.deletionReason||'No retention rationale supplied.');
+  retentionStatusEl.textContent=state.mode==='full-history'&&deletionEligible===0
+    ?'Full history required; no Mission events are eligible for deletion.'
+    :'Retention state requires review.';
 }
 
 async function loadApprovals(){
