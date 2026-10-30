@@ -38,6 +38,7 @@ const approvalsEl=document.getElementById('approvals');
 const approvalStatusEl=document.getElementById('approval-status');
 const approvalCountEl=document.getElementById('approval-count');
 const approvalActionsTemplate=document.getElementById('approval-actions-template');
+let approvalLoadGeneration=0;
 
 if(missionId){
   missionEl.textContent=missionId;
@@ -61,21 +62,24 @@ function render(s){
 
 async function loadApprovals(){
   if(!missionId)return;
+  const generation=++approvalLoadGeneration;
   approvalStatusEl.textContent='Refreshing pending approvals…';
   try{
     const response=await fetch('/missions/'+encodeURIComponent(missionId)+'/approvals?status=pending&limit=50');
     if(!response.ok)throw new Error('Pending approvals unavailable ('+response.status+')');
     const items=await response.json();
     if(!Array.isArray(items))throw new Error('Pending approvals response was not a list');
+    if(generation!==approvalLoadGeneration)return;
     renderApprovals(items);
-    approvalStatusEl.textContent=items.length?items.length+' approval'+(items.length===1?'':'s')+' waiting for a decision.':'No pending approvals.';
+    approvalStatusEl.textContent=items.length===50?'Showing up to 50 pending approvals.':items.length?items.length+' approval'+(items.length===1?'':'s')+' waiting for a decision.':'No pending approvals.';
   }catch(error){
+    if(generation!==approvalLoadGeneration)return;
     approvalStatusEl.textContent=error instanceof Error?error.message:String(error);
   }
 }
 
 function renderApprovals(items){
-  approvalCountEl.textContent=String(items.length);
+  approvalCountEl.textContent=items.length===50?'50 shown':String(items.length);
   const fragment=document.createDocumentFragment();
   for(const approval of items){
     const article=document.createElement('article');
