@@ -7,9 +7,8 @@ import { MissionController } from "../../src/core/mission/controller.ts";
 import { FileMissionHistoryArchiveStore } from "../../src/persistence/archive/file-mission-history-archive-store.ts";
 import { MissionDatabase } from "../../src/persistence/sqlite/database.ts";
 import { SqliteEventStore } from "../../src/persistence/sqlite/sqlite-event-store.ts";
+import { SqliteHistoryArchiveRegistry } from "../../src/persistence/sqlite/sqlite-history-archive-registry.ts";
 import { SqliteHistoryReader } from "../../src/persistence/sqlite/sqlite-history-reader.ts";
-import { SqliteMissionReader } from "../../src/persistence/sqlite/sqlite-mission-reader.ts";
-import { SqliteReadModelProjector } from "../../src/persistence/sqlite/sqlite-read-model-projector.ts";
 import { RuntimeMissionHistoryArchiveOperator } from "../../src/runtime/mission-history-archive-operator.ts";
 import { createMissionApi } from "../../src/server/mission-api.ts";
 
@@ -52,7 +51,7 @@ test("durable archive registry is bounded, event-sequence paged and rebuildable 
   const events = new SqliteEventStore(database);
   const controller = new MissionController(events);
   const history = new SqliteHistoryReader(database);
-  const reader = new SqliteMissionReader(database);
+  const registry = new SqliteHistoryArchiveRegistry(database);
   const operator = new RuntimeMissionHistoryArchiveOperator(
     history,
     new FileMissionHistoryArchiveStore(root),
@@ -77,7 +76,7 @@ test("durable archive registry is bounded, event-sequence paged and rebuildable 
     assert.ok(second);
     const secondRegistrationSequence = await events.lastSequence(missionId);
 
-    const firstPage = reader.readHistoryArchives(missionId, { limit: 1 });
+    const firstPage = registry.readHistoryArchives(missionId, { limit: 1 });
     assert.ok(firstPage);
     assert.equal(firstPage.items.length, 1);
     assert.equal(firstPage.items[0]?.objectId, first.objectId);
@@ -85,7 +84,7 @@ test("durable archive registry is bounded, event-sequence paged and rebuildable 
     assert.equal(firstPage.items[0]?.receipt.authorizesDeletion, false);
     assert.equal(firstPage.nextAfterSequence, firstRegistrationSequence);
 
-    const secondPage = reader.readHistoryArchives(missionId, {
+    const secondPage = registry.readHistoryArchives(missionId, {
       afterSequence: firstPage.nextAfterSequence,
       limit: 1
     });
@@ -95,16 +94,16 @@ test("durable archive registry is bounded, event-sequence paged and rebuildable 
     assert.equal(secondPage.items[0]?.eventSequence, secondRegistrationSequence);
     assert.equal(secondPage.nextAfterSequence, undefined);
 
-    assert.throws(() => reader.readHistoryArchives(missionId, { afterSequence: -1 }), /afterSequence/);
-    assert.throws(() => reader.readHistoryArchives(missionId, { limit: 501 }), /limit/);
-    assert.equal(reader.readHistoryArchives("missing-mission"), undefined);
+    assert.throws(() => registry.readHistoryArchives(missionId, { afterSequence: -1 }), /afterSequence/);
+    assert.throws(() => registry.readHistoryArchives(missionId, { limit: 501 }), /limit/);
+    assert.equal(registry.readHistoryArchives("missing-mission"), undefined);
 
     database.db.exec(`
       DELETE FROM rm_history_archives;
-      DELETE FROM rm_projection_checkpoints WHERE projection_name = 'mission-read-model-v1';
+      DELETE FROM rm_projection_checkpoints WHERE projection_name = 'mission-history-archive-registry-v1';
     `);
-    new SqliteReadModelProjector(database).catchUpAll();
-    const rebuilt = reader.readHistoryArchives(missionId, { limit: 10 });
+    new SqliteHistoryArchiveRegistry(database).catchUpAll();
+    const rebuilt = registry.readHistoryArchives(missionId, { limit: 10 });
     assert.ok(rebuilt);
     assert.deepEqual(
       rebuilt.items.map(item => ({ objectId: item.objectId, eventSequence: item.eventSequence })),
@@ -126,7 +125,7 @@ test("Mission API exposes bounded registered archive history and fails closed wi
   const events = new SqliteEventStore(database);
   const controller = new MissionController(events);
   const historyReader = new SqliteHistoryReader(database);
-  const missionReader = new SqliteMissionReader(database);
+  const historyArchiveReader = new SqliteHistoryArchiveRegistry(database);
   const historyArchive = new RuntimeMissionHistoryArchiveOperator(
     historyReader,
     new FileMissionHistoryArchiveStore(root),
@@ -136,7 +135,7 @@ test("Mission API exposes bounded registered archive history and fails closed wi
   const server = createMissionApi(controller, events, {
     historyReader,
     historyArchive,
-    historyArchiveReader: missionReader
+    historyArchiveReader
   });
 
   try {
