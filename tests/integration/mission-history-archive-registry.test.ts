@@ -155,9 +155,9 @@ test("Mission API exposes bounded registered archive history and fails closed wi
       items: Array<{ objectId: string; eventSequence: number }>;
       nextAfterSequence?: number;
     };
-    assert.deepEqual(firstPage.items, [{ objectId: first.objectId, eventSequence: firstRegistrationSequence }], {
-      partial: true
-    } as never);
+    assert.equal(firstPage.items.length, 1);
+    assert.equal(firstPage.items[0]?.objectId, first.objectId);
+    assert.equal(firstPage.items[0]?.eventSequence, firstRegistrationSequence);
     assert.equal(firstPage.nextAfterSequence, firstRegistrationSequence);
 
     const secondPageResponse = await fetch(
