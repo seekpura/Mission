@@ -1,10 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ApprovalRequest, ApprovalResult } from "../hosts/host-adapter.ts";
 import type { AcquisitionApprovalBroker, AcquisitionApprovalRequest } from "../core/capabilities/acquisition-transaction.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 import type { SideEffectApprovalRequest } from "./side-effect-manager.ts";
 
 export type RuntimeApprovalKind = "host" | "acquisition" | "side-effect";
+
+type IdempotentAcquisitionApprovalRequest = AcquisitionApprovalRequest & {
+  idempotencyKey?: string;
+};
 
 export interface RuntimeApprovalRecord {
   id: string;
@@ -15,6 +19,7 @@ export interface RuntimeApprovalRecord {
   details: Record<string, unknown>;
   status: "pending" | "approved" | "rejected";
   scope: "once" | "mission" | "revision" | "host";
+  requestFingerprint?: string;
   actor?: string;
   requestedAt: string;
   decidedAt?: string;
@@ -22,7 +27,9 @@ export interface RuntimeApprovalRecord {
 
 interface PendingApproval {
   record: RuntimeApprovalRecord;
+  decision: Promise<ApprovalResult>;
   resolve: (result: ApprovalResult) => void;
+  reject: (error: unknown) => void;
   timer?: NodeJS.Timeout;
 }
 
@@ -52,18 +59,19 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
     });
   }
 
-  async requestApproval(request: AcquisitionApprovalRequest): Promise<{ approved: boolean; actor?: string }> {
+  async requestApproval(request: IdempotentAcquisitionApprovalRequest): Promise<{ approved: boolean; actor?: string }> {
     const result = await this.createAndWait({
       missionId: request.missionId,
       kind: "acquisition",
       title: request.title,
       reason: request.reason,
       details: {
+        ...request.details,
         candidateId: request.candidateId,
-        capabilityNeedId: request.capabilityNeedId,
-        ...request.details
+        capabilityNeedId: request.capabilityNeedId
       },
-      timeoutReason: "Capability approval request timed out"
+      timeoutReason: "Capability approval request timed out",
+      ...(request.idempotencyKey !== undefined ? { idempotencyKey: request.idempotencyKey } : {})
     });
     return {
       approved: result.approved,
@@ -159,6 +167,9 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
           details: { ...(payload.details ?? {}) },
           status: "pending",
           scope: payload.scope ?? "once",
+          ...(typeof payload.requestFingerprint === "string"
+            ? { requestFingerprint: payload.requestFingerprint }
+            : {}),
           requestedAt: payload.requestedAt ?? event.createdAt
         });
       }
@@ -220,9 +231,53 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
     reason: string;
     details: Record<string, unknown>;
     timeoutReason: string;
+    idempotencyKey?: string;
   }): Promise<ApprovalResult> {
     if (this.disposed) return { approved: false, scope: "once" };
-    const id = `approval:${randomUUID()}`;
+
+    const stableKey = input.idempotencyKey;
+    if (stableKey !== undefined) validateIdempotencyKey(stableKey);
+    const id = stableKey === undefined
+      ? `approval:${randomUUID()}`
+      : `approval:${input.kind}:${sha256(stableKey)}`;
+    const requestFingerprint = stableKey === undefined
+      ? undefined
+      : `sha256:${sha256(stableJson({
+          missionId: input.missionId,
+          kind: input.kind,
+          title: input.title,
+          reason: input.reason,
+          details: input.details
+        }))}`;
+
+    const active = this.pending.get(id);
+    if (active) {
+      assertIdempotentApprovalIdentity(active.record, requestFingerprint, id);
+      return active.decision;
+    }
+
+    if (stableKey !== undefined) {
+      const durable = (await this.list(input.missionId)).find(record => record.id === id);
+      if (durable) {
+        assertIdempotentApprovalIdentity(durable, requestFingerprint, id);
+        if (durable.status !== "pending") {
+          return { approved: durable.status === "approved", scope: "once" };
+        }
+        const liveAfterRead = this.pending.get(id);
+        if (liveAfterRead) {
+          assertIdempotentApprovalIdentity(liveAfterRead.record, requestFingerprint, id);
+          return liveAfterRead.decision;
+        }
+        throw new Error(`Idempotent approval ${id} is pending without a live waiter`);
+      }
+
+      const liveAfterRead = this.pending.get(id);
+      if (liveAfterRead) {
+        assertIdempotentApprovalIdentity(liveAfterRead.record, requestFingerprint, id);
+        return liveAfterRead.decision;
+      }
+    }
+
     const requestedAt = new Date().toISOString();
     const record: RuntimeApprovalRecord = {
       id,
@@ -233,22 +288,35 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
       details: { ...input.details },
       status: "pending",
       scope: "once",
+      ...(requestFingerprint ? { requestFingerprint } : {}),
       requestedAt
     };
 
     let resolveDecision!: (result: ApprovalResult) => void;
-    const decision = new Promise<ApprovalResult>(resolve => { resolveDecision = resolve; });
-    const pending: PendingApproval = { record, resolve: resolveDecision };
+    let rejectDecision!: (error: unknown) => void;
+    const decision = new Promise<ApprovalResult>((resolve, reject) => {
+      resolveDecision = resolve;
+      rejectDecision = reject;
+    });
+    void decision.catch(() => undefined);
+    const pending: PendingApproval = {
+      record,
+      decision,
+      resolve: resolveDecision,
+      reject: rejectDecision
+    };
     this.pending.set(id, pending);
 
     try {
       await this.append(input.missionId, "approval.requested", record, `approval-requested:${id}`);
     } catch (error) {
-      this.pending.delete(id);
+      const current = this.pending.get(id);
+      if (current === pending) this.pending.delete(id);
+      pending.reject(error);
       throw error;
     }
 
-    if (this.pending.has(id) && !this.disposed) {
+    if (this.pending.get(id) === pending && !this.disposed) {
       pending.timer = setTimeout(() => {
         void this.decide(record.missionId, record.id, {
           approved: false,
@@ -288,6 +356,41 @@ export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
       }
     }
   }
+}
+
+function validateIdempotencyKey(value: string): void {
+  if (!value.trim()) throw new Error("Acquisition approval idempotency key must be non-empty");
+  if (value.length > 4_096) throw new Error("Acquisition approval idempotency key exceeds 4096 characters");
+}
+
+function assertIdempotentApprovalIdentity(
+  record: RuntimeApprovalRecord,
+  requestFingerprint: string | undefined,
+  id: string
+): void {
+  if (!requestFingerprint || record.requestFingerprint !== requestFingerprint) {
+    throw new Error(`Idempotent approval request identity mismatch: ${id}`);
+  }
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function stableJson(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) {
+    return `[${value.map(item => item === undefined ? "null" : stableJson(item)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, nested]) => nested !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`).join(",")}}`;
+  }
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) return "null";
+  return encoded;
 }
 
 function isConcurrencyConflict(error: Error): boolean {
