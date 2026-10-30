@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Mission Control</title>
 <style>
-:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}body{margin:0}.shell{max-width:1180px;margin:0 auto;padding:40px 24px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#666}.title{font-size:42px;line-height:1;margin:8px 0}.muted{color:#666}.grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-top:28px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.03)}.metric{font-size:28px;font-weight:650}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:12px}.wide{grid-column:1/-1}.section-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:8px}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px}.summary-stat{border:1px solid #eee;border-radius:12px;padding:12px}.summary-value{font-size:20px;font-weight:650;margin-top:5px}.archive,.approval,.finding{padding:16px 0;border-bottom:1px solid #eee}.archive:last-child,.approval:last-child,.finding:last-child{border-bottom:0}.archive-title,.approval-title,.finding-title{font-weight:650;margin:4px 0;word-break:break-all}.approval-reason,.finding-expected{margin:4px 0 10px;color:#444}.archive-meta,.approval-meta,.finding-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#666}.actions{display:flex;gap:8px;margin-top:12px}.action{appearance:none;border:1px solid #ccc;border-radius:10px;background:#fff;color:#111;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}.action:hover{background:#f5f5f3}.action:focus-visible{outline:3px solid #bbb;outline-offset:2px}.action[data-decision="approve"]{background:#111;color:#fff;border-color:#111}.action:disabled{opacity:.5;cursor:wait}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.title{font-size:32px}.top{align-items:start;flex-direction:column}.section-head{align-items:start}}
+:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}body{margin:0}.shell{max-width:1180px;margin:0 auto;padding:40px 24px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#666}.title{font-size:42px;line-height:1;margin:8px 0}.muted{color:#666}.grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-top:28px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.03)}.metric{font-size:28px;font-weight:650}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:12px}.wide{grid-column:1/-1}.section-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:8px}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px}.summary-stat{border:1px solid #eee;border-radius:12px;padding:12px}.summary-value{font-size:20px;font-weight:650;margin-top:5px}.archive,.evidence,.approval,.finding{padding:16px 0;border-bottom:1px solid #eee}.archive:last-child,.evidence:last-child,.approval:last-child,.finding:last-child{border-bottom:0}.archive-title,.evidence-title,.approval-title,.finding-title{font-weight:650;margin:4px 0;word-break:break-all}.approval-reason,.finding-expected{margin:4px 0 10px;color:#444}.archive-meta,.evidence-meta,.approval-meta,.finding-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#666}.actions{display:flex;gap:8px;margin-top:12px}.action{appearance:none;border:1px solid #ccc;border-radius:10px;background:#fff;color:#111;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}.action:hover{background:#f5f5f3}.action:focus-visible{outline:3px solid #bbb;outline-offset:2px}.action[data-decision="approve"]{background:#111;color:#fff;border-color:#111}.action:disabled{opacity:.5;cursor:wait}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.title{font-size:32px}.top{align-items:start;flex-direction:column}.section-head{align-items:start}}
 </style>
 </head>
 <body>
@@ -49,6 +49,11 @@
       <div id="approval-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
       <div id="approvals"></div>
     </section>
+    <section class="card wide" data-surface="evidence">
+      <div class="section-head"><div><div class="eyebrow">Verification Evidence</div><div class="muted">Durable Runtime-collected evidence supporting independent verification.</div></div><div class="pill" id="evidence-count">0</div></div>
+      <div id="evidence-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
+      <div id="evidence"></div>
+    </section>
     <section class="card wide" data-surface="findings">
       <div class="section-head"><div><div class="eyebrow">Recorded findings</div><div class="muted">Persistent independent verification observations.</div></div><div class="pill" id="finding-count">0</div></div>
       <div id="finding-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
@@ -87,6 +92,9 @@ const approvalsEl=document.getElementById('approvals');
 const approvalStatusEl=document.getElementById('approval-status');
 const approvalCountEl=document.getElementById('approval-count');
 const approvalActionsTemplate=document.getElementById('approval-actions-template');
+const evidenceEl=document.getElementById('evidence');
+const evidenceStatusEl=document.getElementById('evidence-status');
+const evidenceCountEl=document.getElementById('evidence-count');
 const findingsEl=document.getElementById('findings');
 const findingStatusEl=document.getElementById('finding-status');
 const findingCountEl=document.getElementById('finding-count');
@@ -94,6 +102,7 @@ let summaryLoadGeneration=0;
 let archiveLoadGeneration=0;
 let retentionLoadGeneration=0;
 let approvalLoadGeneration=0;
+let evidenceLoadGeneration=0;
 let findingLoadGeneration=0;
 
 if(missionId){
@@ -101,18 +110,20 @@ if(missionId){
   const es=new EventSource('/missions/'+encodeURIComponent(missionId)+'/events');
   es.onopen=()=>connectionEl.textContent='live';
   es.onerror=()=>connectionEl.textContent='reconnecting';
-  es.addEventListener('mission.updated',e=>{render(JSON.parse(e.data));void loadOperationalSummary();void loadHistoryArchives();void loadHistoryRetention();void loadApprovals();void loadFindings()});
+  es.addEventListener('mission.updated',e=>{render(JSON.parse(e.data));void loadOperationalSummary();void loadHistoryArchives();void loadHistoryRetention();void loadApprovals();void loadEvidence();void loadFindings()});
   fetch('/missions/'+encodeURIComponent(missionId)).then(r=>r.json()).then(render);
   void loadOperationalSummary();
   void loadHistoryArchives();
   void loadHistoryRetention();
   void loadApprovals();
+  void loadEvidence();
   void loadFindings();
 }else{
   summaryStatusEl.textContent='Open a Mission to review runtime health.';
   archiveStatusEl.textContent='Open a Mission to review registered history archives.';
   retentionStatusEl.textContent='Open a Mission to review history retention safety.';
   approvalStatusEl.textContent='Open a Mission to review pending approvals.';
+  evidenceStatusEl.textContent='Open a Mission to review verification Evidence.';
   findingStatusEl.textContent='Open a Mission to review verification findings.';
 }
 
@@ -315,6 +326,50 @@ async function decideApproval(approvalId,approved,article){
     approvalStatusEl.textContent=error instanceof Error?error.message:String(error);
     for(const button of buttons)button.disabled=false;
   }
+}
+
+async function loadEvidence(){
+  if(!missionId)return;
+  const generation=++evidenceLoadGeneration;
+  evidenceStatusEl.textContent='Refreshing verification Evidence…';
+  try{
+    const response=await fetch('/missions/'+encodeURIComponent(missionId)+'/evidence/page?limit=25');
+    if(!response.ok)throw new Error('Verification Evidence unavailable ('+response.status+')');
+    const page=await response.json();
+    if(!page||typeof page!=='object'||Array.isArray(page)||!Array.isArray(page.items))throw new Error('Verification Evidence response was not a page');
+    if(generation!==evidenceLoadGeneration)return;
+    renderEvidence(page);
+    evidenceStatusEl.textContent=page.nextCursor!==undefined?'Showing the first 25 Evidence records; more records are available.':page.items.length?page.items.length+' Evidence record'+(page.items.length===1?'':'s')+'.':'No verification Evidence.';
+  }catch(error){
+    if(generation!==evidenceLoadGeneration)return;
+    evidenceStatusEl.textContent=error instanceof Error?error.message:String(error);
+  }
+}
+
+function renderEvidence(page){
+  evidenceCountEl.textContent=page.nextCursor!==undefined?page.items.length+' shown':String(page.items.length);
+  const fragment=document.createDocumentFragment();
+  for(const record of page.items){
+    const article=document.createElement('article');
+    article.className='evidence';
+
+    const meta=document.createElement('div');
+    meta.className='evidence-meta';
+    const kind=document.createElement('span'); kind.className='pill'; kind.textContent=String(record.kind||'evidence');
+    const result=document.createElement('span'); result.className='pill'; result.textContent=String(record.result||'unknown');
+    const createdAt=document.createElement('span'); createdAt.textContent=String(record.createdAt||'');
+    meta.append(kind,result,createdAt);
+
+    const claim=document.createElement('div'); claim.className='evidence-title'; claim.textContent=String(record.claim||record.id||'Evidence');
+    const context=document.createElement('div'); context.className='evidence-meta';
+    const subjectRef=document.createElement('span'); subjectRef.textContent='Subject: '+String(record.subjectRef||'—');
+    const collectorId=document.createElement('span'); collectorId.textContent='Collector: '+String(record.collectorId||'—');
+    context.append(subjectRef,collectorId);
+
+    article.append(meta,claim,context);
+    fragment.append(article);
+  }
+  evidenceEl.replaceChildren(fragment);
 }
 
 async function loadFindings(){
