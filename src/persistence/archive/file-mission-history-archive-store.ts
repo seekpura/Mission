@@ -16,6 +16,7 @@ import type { SqliteHistoryReader } from "../sqlite/sqlite-history-reader.ts";
 const OBJECT_ID_PATTERN = /^[0-9a-f]{64}$/;
 const ARCHIVE_PAGE_SIZE = 5000;
 const MAX_RECEIPT_BYTES = 16 * 1024;
+const MAX_EVENT_LINE_BYTES = 16 * 1024 * 1024;
 const RECEIPT_FILENAME = "receipt.json";
 const EVENTS_FILENAME = "events.jsonl";
 const RECEIPT_KEYS = [
@@ -76,21 +77,29 @@ export class FileMissionHistoryArchiveStore {
       return existing;
     }
 
-    const stagingDir = join(this.rootDir, ".staging", randomUUID());
+    const stagingRoot = join(this.rootDir, ".staging");
+    const stagingDir = join(stagingRoot, randomUUID());
     await mkdir(stagingDir, { recursive: false, mode: 0o700 });
+    await syncDirectory(stagingRoot);
     try {
       await this.writeStagedObject(stagingDir, history, receipt);
       const staged = await verifyArchiveDirectory(stagingDir, receipt.receiptSha256);
       assertSameReceipt(staged.receipt, receipt);
 
       const finalParent = dirname(finalDir);
+      const objectsDir = join(this.rootDir, "objects");
+      const finalParentExisted = await pathExists(finalParent);
       await mkdir(finalParent, { recursive: true, mode: 0o700 });
       await assertDirectory(finalParent, "archive object prefix directory");
+      if (!finalParentExisted) await syncDirectory(objectsDir);
       try {
         await rename(stagingDir, finalDir);
+        await syncDirectory(finalParent);
+        await syncDirectory(stagingRoot);
       } catch (error) {
         if (!isExistingDestinationError(error)) throw error;
         await rm(stagingDir, { recursive: true, force: true });
+        await syncDirectory(stagingRoot);
         const existing = await this.verify(receipt.receiptSha256);
         assertSameReceipt(existing.receipt, receipt);
         return existing;
@@ -99,6 +108,7 @@ export class FileMissionHistoryArchiveStore {
       return await this.verify(receipt.receiptSha256);
     } catch (error) {
       await rm(stagingDir, { recursive: true, force: true });
+      await syncDirectoryIfPresent(stagingRoot);
       throw error;
     }
   }
@@ -133,7 +143,13 @@ export class FileMissionHistoryArchiveStore {
             `Mission archive source boundary changed for ${receipt.missionId}: expected ${receipt.throughSequence}, received ${page.throughSequence}`
           );
         }
-        for (const event of page.events) await eventsFile.write(canonicalMissionEventLine(event), null, "utf8");
+        for (const event of page.events) {
+          const line = canonicalMissionEventLine(event);
+          if (Buffer.byteLength(line, "utf8") > MAX_EVENT_LINE_BYTES) {
+            throw new Error(`Archive event ${event.sequence} exceeds ${MAX_EVENT_LINE_BYTES} canonical bytes`);
+          }
+          await eventsFile.write(line, null, "utf8");
+        }
         if (page.complete) {
           afterSequence = receipt.throughSequence;
           break;
@@ -143,6 +159,7 @@ export class FileMissionHistoryArchiveStore {
         }
         afterSequence = page.nextAfterSequence;
       }
+      await eventsFile.sync();
     } finally {
       await eventsFile.close();
     }
@@ -150,9 +167,11 @@ export class FileMissionHistoryArchiveStore {
     const receiptFile = await open(receiptPath, "wx", 0o600);
     try {
       await receiptFile.write(`${canonicalJsonV1(receipt)}\n`, null, "utf8");
+      await receiptFile.sync();
     } finally {
       await receiptFile.close();
     }
+    await syncDirectory(stagingDir);
   }
 
   private objectDirectory(objectId: string): string {
@@ -161,14 +180,18 @@ export class FileMissionHistoryArchiveStore {
   }
 
   private async ensureStoreDirectories(): Promise<void> {
+    const rootExisted = await pathExists(this.rootDir);
     await mkdir(this.rootDir, { recursive: true, mode: 0o700 });
     await assertDirectory(this.rootDir, "archive root");
     const objects = join(this.rootDir, "objects");
     const staging = join(this.rootDir, ".staging");
+    const objectsExisted = await pathExists(objects);
+    const stagingExisted = await pathExists(staging);
     await mkdir(objects, { recursive: true, mode: 0o700 });
     await mkdir(staging, { recursive: true, mode: 0o700 });
     await assertDirectory(objects, "archive objects directory");
     await assertDirectory(staging, "archive staging directory");
+    if (!rootExisted || !objectsExisted || !stagingExisted) await syncDirectory(this.rootDir);
   }
 }
 
@@ -218,6 +241,9 @@ async function verifyArchiveDirectory(
     while (newline !== -1) {
       const lineBytes = pending.subarray(0, newline);
       pending = pending.subarray(newline + 1);
+      if (lineBytes.length + 1 > MAX_EVENT_LINE_BYTES) {
+        throw new Error(`Archive event line exceeds ${MAX_EVENT_LINE_BYTES} canonical bytes`);
+      }
       if (lineBytes.length === 0) throw new Error("Archive event data contains an empty line");
       const event = parseMissionEvent(lineBytes);
       if (event.missionId !== receipt.missionId) {
@@ -232,6 +258,9 @@ async function verifyArchiveDirectory(
       expectedSequence += 1;
       eventCount += 1;
       newline = pending.indexOf(0x0a);
+    }
+    if (pending.length + 1 > MAX_EVENT_LINE_BYTES) {
+      throw new Error(`Archive event line exceeds ${MAX_EVENT_LINE_BYTES} canonical bytes`);
     }
   }
 
@@ -345,6 +374,19 @@ async function pathExists(path: string): Promise<boolean> {
   } catch (error) {
     if (isErrorCode(error, "ENOENT")) return false;
     throw error;
+  }
+}
+
+async function syncDirectoryIfPresent(path: string): Promise<void> {
+  if (await pathExists(path)) await syncDirectory(path);
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const handle = await open(path, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 
