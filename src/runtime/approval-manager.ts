@@ -6,9 +6,16 @@ import type { SideEffectApprovalRequest } from "./side-effect-manager.ts";
 
 export type RuntimeApprovalKind = "host" | "acquisition" | "side-effect";
 
-type IdempotentAcquisitionApprovalRequest = AcquisitionApprovalRequest & {
+export type IdempotentAcquisitionApprovalRequest = AcquisitionApprovalRequest & {
   idempotencyKey?: string;
 };
+
+export interface IdempotentAcquisitionApprovalBroker {
+  requestApproval(request: IdempotentAcquisitionApprovalRequest): Promise<{
+    approved: boolean;
+    actor?: string;
+  }>;
+}
 
 export interface RuntimeApprovalRecord {
   id: string;
@@ -37,7 +44,7 @@ export interface RuntimeApprovalManagerOptions {
   timeoutMs?: number;
 }
 
-export class RuntimeApprovalManager implements AcquisitionApprovalBroker {
+export class RuntimeApprovalManager implements AcquisitionApprovalBroker, IdempotentAcquisitionApprovalBroker {
   private readonly store: EventStore;
   private readonly timeoutMs: number;
   private readonly pending = new Map<string, PendingApproval>();
@@ -385,7 +392,7 @@ function stableJson(value: unknown): string {
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>)
       .filter(([, nested]) => nested !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right));
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
     return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`).join(",")}}`;
   }
   const encoded = JSON.stringify(value);
