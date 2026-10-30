@@ -41,7 +41,7 @@ class ExternalMcpBootstrapHost implements HostAdapter {
         id: "test.agent",
         kind: "agent",
         name: "Test Agent",
-        description: "Generic host agent without vendor documentation search",
+        description: "Generic host agent",
         hostNative: true,
         available: true,
         invocationRef: "test-agent",
@@ -124,7 +124,6 @@ function controlResponse(workItemId: string): unknown {
         urgency: "blocking",
         acquisitionAllowed: true,
         maxRisk: "high",
-        policy: { acceptableKinds: ["mcp"] },
         requirementRefs: [],
         gapRefs: []
       }],
