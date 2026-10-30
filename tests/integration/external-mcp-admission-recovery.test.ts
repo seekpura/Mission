@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
+import { MissionCapabilityOverlay } from "../../src/core/capabilities/mission-capability-overlay.ts";
 import type { CapabilityDescriptor, CapabilityNeed } from "../../src/core/domain/capability.ts";
 import type { CapabilityEnsureResult, CapabilityRuntime } from "../../src/core/capabilities/capability-coordinator.ts";
 import { MissionController } from "../../src/core/mission/controller.ts";
@@ -21,12 +22,12 @@ import type {
 } from "../../src/hosts/host-adapter.ts";
 import { MissionDatabase } from "../../src/persistence/sqlite/database.ts";
 import { SqliteEventStore } from "../../src/persistence/sqlite/sqlite-event-store.ts";
+import { SqliteMissionReader } from "../../src/persistence/sqlite/sqlite-mission-reader.ts";
 import { RuntimeApprovalManager } from "../../src/runtime/approval-manager.ts";
 import { ExternalMcpCatalogDiscoveryProvider } from "../../src/runtime/external-mcp-catalog.ts";
 import {
   ExternalMcpAdmissionRuntime,
-  MissionExternalMcpHostAdapter,
-  MissionExternalMcpRegistry
+  MissionExternalMcpHostAdapter
 } from "../../src/runtime/external-mcp-admission.ts";
 import { TrustedMcpHostAdapter, TrustedMcpRegistry } from "../../src/runtime/trusted-mcp-runtime.ts";
 
@@ -35,8 +36,22 @@ function schemaPath() {
 }
 
 class MissingRuntime implements CapabilityRuntime {
-  restoreMissionCapabilities(): void {}
-  deactivateMissionCapability(): void {}
+  private readonly overlay: MissionCapabilityOverlay;
+
+  constructor(overlay: MissionCapabilityOverlay) {
+    this.overlay = overlay;
+  }
+
+  restoreMissionCapabilities(missionId: string, capabilities: Iterable<CapabilityDescriptor>): void {
+    for (const capability of capabilities) {
+      if (!capability.hostNative && capability.available) this.overlay.activate(missionId, capability);
+    }
+  }
+
+  deactivateMissionCapability(missionId: string, capabilityId: string): void {
+    this.overlay.deactivate(missionId, capabilityId);
+  }
+
   async ensure(): Promise<CapabilityEnsureResult> {
     return { status: "missing", source: "none", attempts: [], reason: "no existing capability" };
   }
@@ -116,27 +131,34 @@ async function waitForPending(manager: RuntimeApprovalManager) {
 
 function admission(
   approvals: RuntimeApprovalManager,
-  registry: MissionExternalMcpRegistry
+  overlay: MissionCapabilityOverlay
 ): ExternalMcpAdmissionRuntime {
   return new ExternalMcpAdmissionRuntime({
-    base: new MissingRuntime(),
+    base: new MissingRuntime(overlay),
     catalog: new ExternalMcpCatalogDiscoveryProvider(catalogEntries),
-    approvals,
-    registry
+    approvals
   });
+}
+
+function deliveryHost(capture: CaptureHost, overlay: MissionCapabilityOverlay): HostAdapter {
+  return new TrustedMcpHostAdapter(
+    new MissionExternalMcpHostAdapter(capture, overlay),
+    new TrustedMcpRegistry([])
+  );
 }
 
 test("external MCP approval is idempotent, non-deliverable before durable activation, and restart-recoverable", async () => {
   const database = new MissionDatabase(":memory:");
   database.migrate(schemaPath());
   const events = new SqliteEventStore(database);
+  const reader = new SqliteMissionReader(database);
   const controller = new MissionController(events);
   let approvals = new RuntimeApprovalManager(events, { timeoutMs: 10_000 });
 
   try {
     await controller.createMission(need().missionId, "prove durable external MCP admission");
-    const firstRegistry = new MissionExternalMcpRegistry();
-    const firstRuntime = admission(approvals, firstRegistry);
+    const firstOverlay = new MissionCapabilityOverlay();
+    const firstRuntime = admission(approvals, firstOverlay);
     const firstEnsure = firstRuntime.ensure(need());
     const pending = await waitForPending(approvals);
     assert.equal(pending.length, 1);
@@ -158,35 +180,63 @@ test("external MCP approval is idempotent, non-deliverable before durable activa
     assert.equal(capability.provenance?.source, "external");
     assert.equal(capability.native?.provider, "external-mcp");
     assert(capability.native?.features?.includes("no-credentials"));
+    assert.equal(firstOverlay.list(need().missionId).length, 0, "approval alone must not mutate Mission activation state");
 
-    assert.throws(
-      () => firstRegistry.select(need().missionId, [capability.id]),
+    const preActivationCapture = new CaptureHost();
+    await assert.rejects(
+      () => deliveryHost(preActivationCapture, firstOverlay).createAgent({
+        missionId: need().missionId,
+        workItemId: "work-before-activation",
+        context: {},
+        allowedCapabilityRefs: [capability.id]
+      }),
       /not activated/i,
       "approval alone must not make an MCP deliverable before capability.activated becomes durable"
     );
+    assert.equal(preActivationCapture.createRequests.length, 0);
 
+    // Simulate a crash after durable approval but before Controller commits capability.activated.
     approvals.dispose();
     approvals = new RuntimeApprovalManager(events, { timeoutMs: 10_000 });
-    const retryRegistry = new MissionExternalMcpRegistry();
+    const retryOverlay = new MissionCapabilityOverlay();
+    const retryRuntime = admission(approvals, retryOverlay);
     const retry = await Promise.race([
-      admission(approvals, retryRegistry).ensure(need()),
+      retryRuntime.ensure(need()),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("approved external MCP retry prompted again")), 100))
     ]);
     assert.equal(retry.status, "resolved");
     assert.deepEqual(retry.capability, capability);
-    assert.equal(
-      (await events.list(need().missionId)).filter(event => event.type === "approval.requested").length,
-      1,
-      "retry after approval but before durable activation must reuse the same acquisition approval"
-    );
 
-    retryRegistry.restoreMissionCapabilities(need().missionId, [capability]);
-    const capture = new CaptureHost();
-    const host = new TrustedMcpHostAdapter(
-      new MissionExternalMcpHostAdapter(capture, retryRegistry),
-      new TrustedMcpRegistry([])
+    const approvalEvents = (await events.list(need().missionId)).filter(event =>
+      event.type === "approval.requested" || event.type === "approval.decided"
     );
-    await host.createAgent({
+    assert.equal(approvalEvents.filter(event => event.type === "approval.requested").length, 1);
+    assert.equal(approvalEvents.filter(event => event.type === "approval.decided").length, 1);
+
+    const expectedSequence = await events.lastSequence(need().missionId);
+    await events.append({
+      id: "external-mcp-activation-fixture",
+      missionId: need().missionId,
+      type: "capability.activated",
+      actor: { type: "controller" },
+      payload: {
+        capabilityNeedId: need().id,
+        capability,
+        source: "acquired",
+        reason: "approved external MCP fixture",
+        attempts: []
+      },
+      idempotencyKey: `capability-activated:${need().id}:${capability.id}:${capability.revision}`,
+      schemaVersion: 1,
+      createdAt: new Date().toISOString()
+    }, expectedSequence);
+
+    const journal = await reader.journal(need().missionId);
+    assert.deepEqual(journal.capabilities.get(capability.id), capability);
+    retryRuntime.restoreMissionCapabilities(need().missionId, journal.capabilities.values());
+
+    const capture = new CaptureHost();
+    await deliveryHost(capture, retryOverlay).createAgent({
       missionId: need().missionId,
       workItemId: "work-docs",
       context: {},
@@ -196,13 +246,11 @@ test("external MCP approval is idempotent, non-deliverable before durable activa
       { transport: "http", name: "vendor_docs", url: "https://mcp.example.test/mcp", headers: [] }
     ]);
 
-    const restartedRegistry = new MissionExternalMcpRegistry();
-    restartedRegistry.restoreMissionCapabilities(need().missionId, [structuredClone(capability)]);
+    const restartedOverlay = new MissionCapabilityOverlay();
+    const restartedRuntime = admission(approvals, restartedOverlay);
+    restartedRuntime.restoreMissionCapabilities(need().missionId, (await reader.journal(need().missionId)).capabilities.values());
     const restartedCapture = new CaptureHost();
-    const restartedHost = new TrustedMcpHostAdapter(
-      new MissionExternalMcpHostAdapter(restartedCapture, restartedRegistry),
-      new TrustedMcpRegistry([])
-    );
+    const restartedHost = deliveryHost(restartedCapture, restartedOverlay);
     await restartedHost.createAgent({
       missionId: need().missionId,
       workItemId: "work-after-restart",
