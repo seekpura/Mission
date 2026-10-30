@@ -8,6 +8,7 @@ import type { Evidence } from "../core/domain/verification.ts";
 import type { MissionController } from "../core/mission/controller.ts";
 import type { EventStore } from "../core/events/event-store.ts";
 import { MissionHistoryArchiveReceiptReader } from "../persistence/sqlite/mission-history-archive-receipt.ts";
+import type { SqliteHistoryArchiveRegistry } from "../persistence/sqlite/sqlite-history-archive-registry.ts";
 import type { SqliteHistoryReader } from "../persistence/sqlite/sqlite-history-reader.ts";
 import type { SqliteMissionReader } from "../persistence/sqlite/sqlite-mission-reader.ts";
 import type { SqliteOperationalSummaryReader } from "../persistence/sqlite/sqlite-operational-summary-reader.ts";
@@ -76,6 +77,7 @@ export interface MissionApiRuntime {
   summaryReader?: Pick<SqliteOperationalSummaryReader, "readSummary">;
   historyReader?: Pick<SqliteHistoryReader, "readExportPage" | "readRetentionState">;
   historyArchive?: MissionHistoryArchiveOperator;
+  historyArchiveReader?: Pick<SqliteHistoryArchiveRegistry, "readHistoryArchives">;
 }
 
 export interface MissionApiServer extends Server {
@@ -170,6 +172,18 @@ export function createMissionApi(
             ...(typeof throughSequence === "number" ? { throughSequence } : {})
           });
           return receipt ? json(res, 200, receipt) : json(res, 404, { error: "mission_not_found" });
+        }
+        if (req.method === "GET" && parts[2] === "history" && parts[3] === "archives" && parts.length === 4) {
+          if (!runtime.historyArchiveReader) return json(res, 503, { error: "history_archive_registry_unavailable" });
+          const afterSequence = parseOptionalInteger(url.searchParams.get("afterSequence"), 0, Number.MAX_SAFE_INTEGER);
+          if (afterSequence === "invalid") return json(res, 400, { error: "invalid_history_archive_after_sequence" });
+          const limit = parseOptionalInteger(url.searchParams.get("limit"), 1, 500);
+          if (limit === "invalid") return json(res, 400, { error: "invalid_history_archive_limit" });
+          const page = runtime.historyArchiveReader.readHistoryArchives(missionId, {
+            ...(typeof afterSequence === "number" ? { afterSequence } : {}),
+            ...(typeof limit === "number" ? { limit } : {})
+          });
+          return page ? json(res, 200, page) : json(res, 404, { error: "mission_not_found" });
         }
         if (req.method === "POST" && parts[2] === "history" && parts[3] === "archive" && parts.length === 4) {
           if (!runtime.historyArchive) return json(res, 503, { error: "history_archive_unavailable" });
