@@ -357,6 +357,17 @@ CREATE INDEX IF NOT EXISTS idx_rm_evidence_kind_page ON rm_evidence(mission_id, 
 CREATE INDEX IF NOT EXISTS idx_rm_evidence_collector_page ON rm_evidence(mission_id, collector_id);
 CREATE INDEX IF NOT EXISTS idx_rm_evidence_result_page ON rm_evidence(mission_id, result);
 
+CREATE TABLE IF NOT EXISTS rm_history_archives (
+  mission_id TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  event_sequence INTEGER NOT NULL,
+  data_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(mission_id, object_id),
+  UNIQUE(mission_id, event_sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_rm_history_archives_page ON rm_history_archives(mission_id, event_sequence);
+
 CREATE TABLE IF NOT EXISTS rm_side_effects (
   mission_id TEXT NOT NULL,
   operation_key TEXT NOT NULL,
