@@ -27,6 +27,15 @@ import {
 } from "./capability-ledger-runtime.ts";
 import { CapabilityWorkspaceHostAdapter } from "./capability-context-host-adapter.ts";
 import {
+  ExternalMcpAdmissionRuntime,
+  MissionExternalMcpHostAdapter
+} from "./external-mcp-admission.ts";
+import {
+  ExternalMcpCatalogDiscoveryProvider,
+  parseExternalMcpCatalogJson,
+  type ExternalMcpCatalogEntry
+} from "./external-mcp-catalog.ts";
+import {
   createTrustedHostCapabilityEvidenceCollectors,
   parseTrustedHostCapabilityEvidenceBindingsJson,
   type TrustedHostCapabilityEvidenceBinding
@@ -95,6 +104,7 @@ export interface MissionRuntimeOptions {
   maxSupervisorCycles?: number;
   retainControlWorkspaces?: boolean;
   capabilityAcquisition?: ProductionCapabilityAcquisitionOptions;
+  externalMcpCatalog?: ExternalMcpCatalogEntry[];
   trustedMcpServers?: TrustedMcpServerConfig[];
   allowInsecureTrustedMcpHttp?: boolean;
   /**
@@ -174,11 +184,12 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
         argsPrefix: options.dshArgsPrefix,
         approvalHandler
       })));
+  const overlay = new MissionCapabilityOverlay();
+  const missionMcpHost = new MissionExternalMcpHostAdapter(baseHost, overlay);
   const trustedMcp = new TrustedMcpRegistry(options.trustedMcpServers ?? [], {
     allowInsecureHttp: options.allowInsecureTrustedMcpHttp
   });
-  const mcpHost = new TrustedMcpHostAdapter(baseHost, trustedMcp);
-  const overlay = new MissionCapabilityOverlay();
+  const mcpHost = new TrustedMcpHostAdapter(missionMcpHost, trustedMcp);
   const capabilityHost = !options.host && hostKind === "deepseek"
     ? new CapabilityWorkspaceHostAdapter(mcpHost, new MissionAgentSkillWorkspaceProjector(overlay))
     : mcpHost;
@@ -239,7 +250,14 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     acquisition: options.capabilityAcquisition,
     trustedCache: trustedCapabilityCache
   });
-  const capabilities = new CapabilityLedgerRuntime(baseCapabilities, events);
+  const admittedCapabilities = options.externalMcpCatalog?.length
+    ? new ExternalMcpAdmissionRuntime({
+        base: baseCapabilities,
+        catalog: new ExternalMcpCatalogDiscoveryProvider(options.externalMcpCatalog),
+        approvals
+      })
+    : baseCapabilities;
+  const capabilities = new CapabilityLedgerRuntime(admittedCapabilities, events);
   const capabilityLifecycle = new RuntimeCapabilityLifecycleManager(
     capabilities,
     events,
@@ -323,6 +341,7 @@ export function createProductionMissionRuntimeFromEnv(
   const hostKind = parseProductionHostKind(env.MISSION_HOST_KIND);
   const dshArgsPrefix = parseStringArrayEnv(env.MISSION_DSH_ARGS_PREFIX_JSON, "MISSION_DSH_ARGS_PREFIX_JSON");
   const codexArgsPrefix = parseStringArrayEnv(env.MISSION_CODEX_ARGS_PREFIX_JSON, "MISSION_CODEX_ARGS_PREFIX_JSON");
+  const externalMcpCatalog = parseExternalMcpCatalogJson(env.MISSION_EXTERNAL_MCP_CATALOG_JSON);
   const allowInsecureTrustedMcpHttp = env.MISSION_TRUSTED_MCP_ALLOW_HTTP === "1";
   const trustedMcpServers = parseTrustedMcpServersJson(env.MISSION_TRUSTED_MCP_SERVERS_JSON, {
     allowInsecureHttp: allowInsecureTrustedMcpHttp
@@ -355,6 +374,7 @@ export function createProductionMissionRuntimeFromEnv(
     maxSupervisorCycles: positiveNumber(env.MISSION_MAX_CYCLES_PER_WAKE),
     retainControlWorkspaces: env.MISSION_RETAIN_CONTROL_WORKSPACES === "1",
     capabilityAcquisition: capabilityAcquisitionFromEnv(env),
+    externalMcpCatalog,
     trustedMcpServers,
     allowInsecureTrustedMcpHttp,
     providerEvidenceRoutes,

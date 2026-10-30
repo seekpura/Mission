@@ -21,7 +21,7 @@ export interface ExternalMcpCatalogEntry {
   produces?: string[];
 }
 
-interface NormalizedExternalMcpCatalogEntry {
+export interface ResolvedExternalMcpCatalogEntry {
   id: string;
   name: string;
   description: string;
@@ -34,6 +34,8 @@ interface NormalizedExternalMcpCatalogEntry {
   sourceUri: string;
   contentHash: string;
 }
+
+type NormalizedExternalMcpCatalogEntry = ResolvedExternalMcpCatalogEntry;
 
 /**
  * Operator-configured discovery authority for external MCP endpoints.
@@ -84,6 +86,28 @@ export class ExternalMcpCatalogDiscoveryProvider implements CapabilityDiscoveryP
       contentHash: entry.contentHash,
       status: "discovered"
     }));
+  }
+
+  resolveCandidate(candidate: CapabilityCandidate): ResolvedExternalMcpCatalogEntry {
+    const entry = this.entries.find(item => item.candidateId === candidate.id);
+    if (!entry) throw new Error(`External MCP candidate is not present in the configured catalog: ${candidate.id}`);
+    if (
+      candidate.sourceType !== "mcp-registry"
+      || candidate.candidateKind !== "mcp"
+      || candidate.sourceUri !== entry.sourceUri
+      || candidate.name !== entry.name
+      || candidate.resolvedRevision !== entry.revision
+      || candidate.contentHash !== entry.contentHash
+      || candidate.status !== "discovered"
+    ) {
+      throw new Error(`External MCP candidate immutable identity mismatch: ${candidate.id}`);
+    }
+    return {
+      ...entry,
+      functions: [...entry.functions],
+      accepts: [...entry.accepts],
+      produces: [...entry.produces]
+    };
   }
 }
 
