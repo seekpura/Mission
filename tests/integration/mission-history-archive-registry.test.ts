@@ -137,15 +137,19 @@ test("Mission API exposes bounded registered archive history and fails closed wi
     historyArchive,
     historyArchiveReader
   });
+  let firstObjectId = "";
+  let secondObjectId = "";
 
   try {
     await controller.createMission(missionId, "query registered archive history over HTTP");
     const first = await historyArchive.create(missionId, { throughSequence: await events.lastSequence(missionId) });
     assert.ok(first);
+    firstObjectId = first.objectId;
     const firstRegistrationSequence = await events.lastSequence(missionId);
     await appendSteering(events, missionId, "archive-registry-api-tail");
     const second = await historyArchive.create(missionId, { throughSequence: await events.lastSequence(missionId) });
     assert.ok(second);
+    secondObjectId = second.objectId;
 
     const base = await listen(server);
     const firstPageResponse = await fetch(`${base}/missions/${missionId}/history/archives?limit=1`);
@@ -155,7 +159,7 @@ test("Mission API exposes bounded registered archive history and fails closed wi
       nextAfterSequence?: number;
     };
     assert.equal(firstPage.items.length, 1);
-    assert.equal(firstPage.items[0]?.objectId, first.objectId);
+    assert.equal(firstPage.items[0]?.objectId, firstObjectId);
     assert.equal(firstPage.items[0]?.eventSequence, firstRegistrationSequence);
     assert.equal(firstPage.nextAfterSequence, firstRegistrationSequence);
 
@@ -168,7 +172,7 @@ test("Mission API exposes bounded registered archive history and fails closed wi
       nextAfterSequence?: number;
     };
     assert.equal(secondPage.items.length, 1);
-    assert.equal(secondPage.items[0]?.objectId, second.objectId);
+    assert.equal(secondPage.items[0]?.objectId, secondObjectId);
     assert.equal(secondPage.nextAfterSequence, undefined);
 
     assert.equal((await fetch(`${base}/missions/${missionId}/history/archives?afterSequence=-1`)).status, 400);
@@ -184,7 +188,7 @@ test("Mission API exposes bounded registered archive history and fails closed wi
     const response = await fetch(`${base}/missions/${missionId}/history/archives`);
     assert.equal(response.status, 200);
     const page = await response.json() as { items: Array<{ objectId: string }> };
-    assert.deepEqual(page.items.map(item => item.objectId), [first.objectId, second.objectId]);
+    assert.deepEqual(page.items.map(item => item.objectId), [firstObjectId, secondObjectId]);
 
     const createResponse = await fetch(`${base}/missions/${missionId}/history/archive`, {
       method: "POST",
