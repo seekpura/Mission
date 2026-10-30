@@ -3,8 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CodexNativeCapabilityHostAdapter } from "../../src/hosts/codex/codex-native-host-adapter.ts";
-import type { HostAgentEvent } from "../../src/hosts/host-adapter.ts";
+import {
+  CodexNativeCapabilityHostAdapter,
+  compileCodexMcpProjection
+} from "../../src/hosts/codex/codex-native-host-adapter.ts";
+import type { HostAgentEvent, HostMcpServer } from "../../src/hosts/host-adapter.ts";
 import { TrustedMcpHostAdapter, TrustedMcpRegistry } from "../../src/runtime/trusted-mcp-runtime.ts";
 
 const FIXTURE = String.raw`
@@ -137,4 +140,37 @@ test("secret-bearing trusted MCP remains fail-closed on Codex", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Codex MCP projection rejects config injection and ambiguous server identity", () => {
+  const stdio: HostMcpServer = {
+    transport: "stdio",
+    name: "local_docs",
+    command: "/opt/mission/mcp-docs",
+    args: ["--read-only"],
+    env: []
+  };
+  const http: HostMcpServer = {
+    transport: "http",
+    name: "remote_docs",
+    url: "https://mcp.example.test/mcp",
+    headers: []
+  };
+
+  assert.throws(
+    () => compileCodexMcpProjection([{ ...stdio, name: "bad.name" }]),
+    /server name is unsafe/
+  );
+  assert.throws(
+    () => compileCodexMcpProjection([{ ...stdio, command: "relative-command" }]),
+    /command must be an absolute path/
+  );
+  assert.throws(
+    () => compileCodexMcpProjection([stdio, { ...http, name: stdio.name }]),
+    /Duplicate Codex MCP server name/
+  );
+  assert.throws(
+    () => compileCodexMcpProjection([{ ...http, url: "https://user:password@example.test/mcp" }]),
+    /credential-bearing URL/
+  );
 });
