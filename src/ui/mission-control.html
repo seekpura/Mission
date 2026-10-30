@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Mission Control</title>
 <style>
-:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}body{margin:0}.shell{max-width:1180px;margin:0 auto;padding:40px 24px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#666}.title{font-size:42px;line-height:1;margin:8px 0}.muted{color:#666}.grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-top:28px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.03)}.metric{font-size:28px;font-weight:650}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:12px}.wide{grid-column:1/-1}.section-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:8px}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px}.summary-stat{border:1px solid #eee;border-radius:12px;padding:12px}.summary-value{font-size:20px;font-weight:650;margin-top:5px}.archive,.evidence,.approval,.finding{padding:16px 0;border-bottom:1px solid #eee}.archive:last-child,.evidence:last-child,.approval:last-child,.finding:last-child{border-bottom:0}.archive-title,.evidence-title,.approval-title,.finding-title{font-weight:650;margin:4px 0;word-break:break-all}.approval-reason,.finding-expected{margin:4px 0 10px;color:#444}.archive-meta,.evidence-meta,.approval-meta,.finding-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#666}.actions{display:flex;gap:8px;margin-top:12px}.action{appearance:none;border:1px solid #ccc;border-radius:10px;background:#fff;color:#111;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}.action:hover{background:#f5f5f3}.action:focus-visible{outline:3px solid #bbb;outline-offset:2px}.action[data-decision="approve"]{background:#111;color:#fff;border-color:#111}.action:disabled{opacity:.5;cursor:wait}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.title{font-size:32px}.top{align-items:start;flex-direction:column}.section-head{align-items:start}}
+:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}body{margin:0}.shell{max-width:1180px;margin:0 auto;padding:40px 24px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#666}.title{font-size:42px;line-height:1;margin:8px 0}.muted{color:#666}.grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-top:28px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.03)}.metric{font-size:28px;font-weight:650}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:12px}.wide{grid-column:1/-1}.section-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:8px}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px}.summary-stat{border:1px solid #eee;border-radius:12px;padding:12px}.summary-value{font-size:20px;font-weight:650;margin-top:5px}.archive,.evidence,.side-effect,.approval,.finding{padding:16px 0;border-bottom:1px solid #eee}.archive:last-child,.evidence:last-child,.side-effect:last-child,.approval:last-child,.finding:last-child{border-bottom:0}.archive-title,.evidence-title,.side-effect-title,.approval-title,.finding-title{font-weight:650;margin:4px 0;word-break:break-all}.approval-reason,.finding-expected,.side-effect-description{margin:4px 0 10px;color:#444}.archive-meta,.evidence-meta,.side-effect-meta,.approval-meta,.finding-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#666}.actions{display:flex;gap:8px;margin-top:12px}.action{appearance:none;border:1px solid #ccc;border-radius:10px;background:#fff;color:#111;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}.action:hover{background:#f5f5f3}.action:focus-visible{outline:3px solid #bbb;outline-offset:2px}.action[data-decision="approve"]{background:#111;color:#fff;border-color:#111}.action:disabled{opacity:.5;cursor:wait}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.title{font-size:32px}.top{align-items:start;flex-direction:column}.section-head{align-items:start}}
 </style>
 </head>
 <body>
@@ -43,6 +43,11 @@
         <div class="summary-stat"><div class="eyebrow">Deletion eligible through</div><div class="summary-value" id="retention-deletion-eligible">—</div></div>
       </div>
       <p id="retention-reason" class="muted">Retention authority not loaded.</p>
+    </section>
+    <section class="card wide" data-surface="side-effects">
+      <div class="section-head"><div><div class="eyebrow">Side-effect safety</div><div class="muted">Durable operation state and replay protection. Read-only.</div></div><div class="pill" id="side-effect-count">0</div></div>
+      <div id="side-effect-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
+      <div id="side-effects"></div>
     </section>
     <section class="card wide" data-surface="pending-approvals">
       <div class="section-head"><div><div class="eyebrow">Pending approvals</div><div class="muted">Explicit one-shot decisions required by the Runtime.</div></div><div class="pill" id="approval-count">0</div></div>
@@ -88,6 +93,9 @@ const retentionLatestSequenceEl=document.getElementById('retention-latest-sequen
 const retentionSnapshotSequenceEl=document.getElementById('retention-snapshot-sequence');
 const retentionDeletionEligibleEl=document.getElementById('retention-deletion-eligible');
 const retentionReasonEl=document.getElementById('retention-reason');
+const sideEffectsEl=document.getElementById('side-effects');
+const sideEffectStatusEl=document.getElementById('side-effect-status');
+const sideEffectCountEl=document.getElementById('side-effect-count');
 const approvalsEl=document.getElementById('approvals');
 const approvalStatusEl=document.getElementById('approval-status');
 const approvalCountEl=document.getElementById('approval-count');
@@ -101,6 +109,7 @@ const findingCountEl=document.getElementById('finding-count');
 let summaryLoadGeneration=0;
 let archiveLoadGeneration=0;
 let retentionLoadGeneration=0;
+let sideEffectLoadGeneration=0;
 let approvalLoadGeneration=0;
 let evidenceLoadGeneration=0;
 let findingLoadGeneration=0;
@@ -110,11 +119,12 @@ if(missionId){
   const es=new EventSource('/missions/'+encodeURIComponent(missionId)+'/events');
   es.onopen=()=>connectionEl.textContent='live';
   es.onerror=()=>connectionEl.textContent='reconnecting';
-  es.addEventListener('mission.updated',e=>{render(JSON.parse(e.data));void loadOperationalSummary();void loadHistoryArchives();void loadHistoryRetention();void loadApprovals();void loadEvidence();void loadFindings()});
+  es.addEventListener('mission.updated',e=>{render(JSON.parse(e.data));void loadOperationalSummary();void loadHistoryArchives();void loadHistoryRetention();void loadSideEffects();void loadApprovals();void loadEvidence();void loadFindings()});
   fetch('/missions/'+encodeURIComponent(missionId)).then(r=>r.json()).then(render);
   void loadOperationalSummary();
   void loadHistoryArchives();
   void loadHistoryRetention();
+  void loadSideEffects();
   void loadApprovals();
   void loadEvidence();
   void loadFindings();
@@ -122,6 +132,7 @@ if(missionId){
   summaryStatusEl.textContent='Open a Mission to review runtime health.';
   archiveStatusEl.textContent='Open a Mission to review registered history archives.';
   retentionStatusEl.textContent='Open a Mission to review history retention safety.';
+  sideEffectStatusEl.textContent='Open a Mission to review side-effect safety.';
   approvalStatusEl.textContent='Open a Mission to review pending approvals.';
   evidenceStatusEl.textContent='Open a Mission to review verification Evidence.';
   findingStatusEl.textContent='Open a Mission to review verification findings.';
@@ -256,6 +267,60 @@ function renderHistoryRetention(state){
   retentionStatusEl.textContent=state.mode==='full-history'&&deletionEligible===0
     ?'Full history required; no Mission events are eligible for deletion.'
     :'Retention state requires review.';
+}
+
+async function loadSideEffects(){
+  if(!missionId)return;
+  const generation=++sideEffectLoadGeneration;
+  sideEffectStatusEl.textContent='Refreshing side-effect safety…';
+  try{
+    const response=await fetch('/missions/'+encodeURIComponent(missionId)+'/side-effects?limit=25');
+    if(!response.ok)throw new Error('Side-effect safety unavailable ('+response.status+')');
+    const items=await response.json();
+    if(!Array.isArray(items))throw new Error('Side-effect response was not a list');
+    if(generation!==sideEffectLoadGeneration)return;
+    renderSideEffects(items);
+    sideEffectStatusEl.textContent=items.length===25?'Showing up to 25 side-effect operations.':items.length?items.length+' side-effect operation'+(items.length===1?'':'s')+'.':'No recorded side effects.';
+  }catch(error){
+    if(generation!==sideEffectLoadGeneration)return;
+    sideEffectStatusEl.textContent=error instanceof Error?error.message:String(error);
+  }
+}
+
+function renderSideEffects(items){
+  sideEffectCountEl.textContent=items.length===25?'25 shown':String(items.length);
+  const fragment=document.createDocumentFragment();
+  for(const view of items){
+    const intent=view.intent&&typeof view.intent==='object'?view.intent:{};
+    const replay=view.lastReplayBlocked&&typeof view.lastReplayBlocked==='object'?view.lastReplayBlocked:null;
+    const article=document.createElement('article');
+    article.className='side-effect';
+
+    const meta=document.createElement('div');
+    meta.className='side-effect-meta';
+    const status=document.createElement('span'); status.className='pill'; status.textContent=String(view.status||'unknown');
+    const effectClass=document.createElement('span'); effectClass.className='pill'; effectClass.textContent=String(intent.effectClass||'unknown-effect');
+    const updatedAt=document.createElement('span'); updatedAt.textContent=String(view.updatedAt||'');
+    meta.append(status,effectClass,updatedAt);
+
+    const operationKey=document.createElement('div'); operationKey.className='side-effect-title'; operationKey.textContent=String(view.operationKey||'Side effect');
+    const description=document.createElement('p'); description.className='side-effect-description'; description.textContent=String(intent.description||'No description supplied.');
+
+    const details=document.createElement('div');
+    details.className='side-effect-meta';
+    const target=document.createElement('span'); target.textContent='Target: '+String(intent.target||'—');
+    const reversible=document.createElement('span'); reversible.textContent='Reversible: '+(intent.reversible===true?'yes':intent.reversible===false?'no':'—');
+    const replayBlockCount=document.createElement('span'); replayBlockCount.textContent='Replay blocks: '+finiteCount(view.replayBlockCount);
+    details.append(target,reversible,replayBlockCount);
+
+    const replayReason=document.createElement('p');
+    replayReason.className='muted';
+    replayReason.textContent=replay?'Last replay block: '+String(replay.reason||'Blocked by Runtime policy.'):'No replay block recorded.';
+
+    article.append(meta,operationKey,description,details,replayReason);
+    fragment.append(article);
+  }
+  sideEffectsEl.replaceChildren(fragment);
 }
 
 async function loadApprovals(){
