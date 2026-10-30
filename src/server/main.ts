@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { FileMissionHistoryArchiveStore } from "../persistence/archive/file-mission-history-archive-store.ts";
+import { SqliteHistoryArchiveRegistry } from "../persistence/sqlite/sqlite-history-archive-registry.ts";
 import { SqliteHistoryReader } from "../persistence/sqlite/sqlite-history-reader.ts";
 import { SqliteOperationalSummaryReader } from "../persistence/sqlite/sqlite-operational-summary-reader.ts";
 import { createProductionMissionRuntimeFromEnv } from "../runtime/bootstrap.ts";
@@ -10,6 +11,7 @@ import { shutdownHttpRuntime } from "./graceful-shutdown.ts";
 const runtime = createProductionMissionRuntimeFromEnv();
 const summaryReader = new SqliteOperationalSummaryReader(runtime.database);
 const historyReader = new SqliteHistoryReader(runtime.database);
+const historyArchiveReader = new SqliteHistoryArchiveRegistry(runtime.database);
 const archiveRoot = process.env.MISSION_HISTORY_ARCHIVE_ROOT?.trim();
 const historyArchive = archiveRoot
   ? new RuntimeMissionHistoryArchiveOperator(
@@ -47,7 +49,8 @@ const server = createMissionApi(runtime.controller, runtime.events, {
   operationalReader: runtime.reader,
   summaryReader,
   historyReader,
-  historyArchive
+  historyArchive,
+  historyArchiveReader
 });
 
 let shutdownTask: Promise<void> | undefined;
