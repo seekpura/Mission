@@ -9,6 +9,7 @@ import type {
   CapabilityRuntime
 } from "../core/capabilities/capability-coordinator.ts";
 import { CandidateRanker } from "../core/capabilities/candidate-ranker.ts";
+import type { MissionCapabilityOverlay } from "../core/capabilities/mission-capability-overlay.ts";
 import type {
   AgentCreateRequest,
   AgentResumeRequest,
@@ -34,74 +35,24 @@ import {
 const EXTERNAL_MCP_PREFIX = "external-mcp:";
 const SERVER_NAME = /^[A-Za-z0-9_-]{1,32}$/;
 const EXTERNAL_MCP_RISK: RiskLevel = "high";
-
-interface MissionExternalMcpEntry {
-  capability: CapabilityDescriptor;
-  server: Extract<HostMcpServer, { transport: "http" }>;
-}
+const RISK_RANK: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2, blocked: 3 };
 
 /**
- * Mission-local delivery authority for external MCP servers.
+ * Projects only already-restored Mission-local external MCP descriptors into
+ * Host MCP declarations. MissionCapabilityOverlay is a transient projection of
+ * durable capability.activated history; approval by itself never populates it.
  *
- * Approval is intentionally insufficient to populate this registry. Only
- * durable CapabilityDescriptors replayed through restoreMissionCapabilities
- * become selectable, so a crash between approval and capability.activated
- * cannot create an in-memory capability that the Mission journal does not own.
- */
-export class MissionExternalMcpRegistry {
-  private readonly missions = new Map<string, Map<string, MissionExternalMcpEntry>>();
-
-  restoreMissionCapabilities(missionId: string, capabilities: Iterable<CapabilityDescriptor>): void {
-    const next = new Map<string, MissionExternalMcpEntry>();
-    for (const capability of capabilities) {
-      const entry = deliveryEntry(capability);
-      if (!entry) continue;
-      if (next.has(capability.id)) throw new Error(`Duplicate external MCP capability: ${capability.id}`);
-      for (const existing of next.values()) {
-        if (existing.server.name === entry.server.name) {
-          throw new Error(`Duplicate external MCP server name in Mission ${missionId}: ${entry.server.name}`);
-        }
-      }
-      next.set(capability.id, entry);
-    }
-    if (next.size === 0) this.missions.delete(missionId);
-    else this.missions.set(missionId, next);
-  }
-
-  deactivateMissionCapability(missionId: string, capabilityId: string): void {
-    const mission = this.missions.get(missionId);
-    if (!mission) return;
-    mission.delete(capabilityId);
-    if (mission.size === 0) this.missions.delete(missionId);
-  }
-
-  select(missionId: string, capabilityRefs: string[]): HostMcpServer[] {
-    const mission = this.missions.get(missionId);
-    const selected: HostMcpServer[] = [];
-    const seen = new Set<string>();
-    for (const ref of capabilityRefs) {
-      if (!ref.startsWith(EXTERNAL_MCP_PREFIX) || seen.has(ref)) continue;
-      seen.add(ref);
-      const entry = mission?.get(ref);
-      if (!entry) throw new Error(`External MCP capability ${ref} is not activated for Mission ${missionId}`);
-      selected.push(cloneServer(entry.server));
-    }
-    return selected;
-  }
-}
-
-/**
- * Appends durable Mission-local external MCP delivery to the MCP declarations
- * selected by an outer trusted delivery layer. It never discovers or approves
- * capabilities and never accepts credentials from the catalog descriptor.
+ * Production places TrustedMcpHostAdapter outside this adapter. That outer
+ * boundary rejects caller-supplied mcpServers before trusted and Mission-local
+ * declarations are merged here and passed to provider-native delivery.
  */
 export class MissionExternalMcpHostAdapter implements HostAdapter {
   private readonly base: HostAdapter;
-  private readonly registry: MissionExternalMcpRegistry;
+  private readonly overlay: MissionCapabilityOverlay;
 
-  constructor(base: HostAdapter, registry: MissionExternalMcpRegistry) {
+  constructor(base: HostAdapter, overlay: MissionCapabilityOverlay) {
     this.base = base;
-    this.registry = registry;
+    this.overlay = overlay;
   }
 
   describeHost(): Promise<HostDescriptor> {
@@ -113,12 +64,12 @@ export class MissionExternalMcpHostAdapter implements HostAdapter {
   }
 
   createAgent(request: AgentCreateRequest): Promise<HostAgentHandle> {
-    return this.base.createAgent(withMissionMcp(request, this.registry));
+    return this.base.createAgent(withMissionMcp(request, this.overlay));
   }
 
   async resumeAgent(request: AgentResumeRequest): Promise<HostAgentResumeResult> {
     try {
-      return await this.base.resumeAgent(withMissionMcp(request, this.registry));
+      return await this.base.resumeAgent(withMissionMcp(request, this.overlay));
     } catch (error) {
       return { status: "failed", reason: error instanceof Error ? error.message : String(error) };
     }
@@ -145,11 +96,19 @@ export class MissionExternalMcpHostAdapter implements HostAdapter {
   }
 }
 
+/**
+ * External MCP acquisition boundary.
+ *
+ * The Runtime does not mutate Mission activation state here. A successful
+ * ensure returns an approved immutable descriptor to MissionController; only
+ * the controller's durable capability.activated Event makes it restorable and
+ * deliverable. This keeps the crash window after approval fail-closed while the
+ * stable approval idempotency key lets a retry reuse the durable decision.
+ */
 export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
   private readonly base: CapabilityRuntime;
   private readonly catalog: ExternalMcpCatalogDiscoveryProvider;
   private readonly approvals: IdempotentAcquisitionApprovalBroker;
-  private readonly registry: MissionExternalMcpRegistry;
   private readonly ranker: CandidateRanker;
   private readonly maxCandidates: number;
 
@@ -157,27 +116,22 @@ export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
     base: CapabilityRuntime;
     catalog: ExternalMcpCatalogDiscoveryProvider;
     approvals: IdempotentAcquisitionApprovalBroker;
-    registry: MissionExternalMcpRegistry;
     ranker?: CandidateRanker;
     maxCandidates?: number;
   }) {
     this.base = options.base;
     this.catalog = options.catalog;
     this.approvals = options.approvals;
-    this.registry = options.registry;
     this.ranker = options.ranker ?? new CandidateRanker();
     this.maxCandidates = Math.max(1, Math.min(10, options.maxCandidates ?? 3));
   }
 
   restoreMissionCapabilities(missionId: string, capabilities: Iterable<CapabilityDescriptor>): void {
-    const restored = [...capabilities].map(capability => structuredClone(capability));
-    this.registry.restoreMissionCapabilities(missionId, restored);
-    this.base.restoreMissionCapabilities(missionId, restored);
+    this.base.restoreMissionCapabilities(missionId, capabilities);
   }
 
   deactivateMissionCapability(missionId: string, capabilityId: string): void {
     this.base.deactivateMissionCapability(missionId, capabilityId);
-    this.registry.deactivateMissionCapability(missionId, capabilityId);
   }
 
   async ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult> {
@@ -205,7 +159,7 @@ export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
         continue;
       }
 
-      if (!allowsHighRisk(need.maxRisk)) {
+      if (RISK_RANK[EXTERNAL_MCP_RISK] > RISK_RANK[need.maxRisk]) {
         attempts.push({
           candidateId: entry.candidateId,
           candidateName: entry.name,
@@ -307,15 +261,15 @@ function capabilityFromEntry(entry: ResolvedExternalMcpCatalogEntry): Capability
       concurrent: true,
       isolation: "remote"
     },
-    cost: { monetaryClass: "unknown", latencyClass: "remote" },
+    cost: { monetaryClass: "unknown", latencyClass: "remote", metered: true },
     native: {
       provider: "external-mcp",
       nativeId: entry.name,
       protocol: "mcp-streamable-http",
       loadMode: "mission-overlay",
       approvalModes: ["once"],
-      features: ["remote-https", "no-credentials", "explicit-acquisition-approval"],
-      persistence: ["recovery", "durable-state"]
+      features: ["remote-https", "no-credentials", "explicit-acquisition-approval", "provider-native-mcp-config"],
+      persistence: ["session", "resume", "recovery", "durable-state"]
     },
     provenance: {
       source: "external",
@@ -326,7 +280,7 @@ function capabilityFromEntry(entry: ResolvedExternalMcpCatalogEntry): Capability
   };
 }
 
-function deliveryEntry(capability: CapabilityDescriptor): MissionExternalMcpEntry | undefined {
+function deliveryServer(capability: CapabilityDescriptor): HostMcpServer | undefined {
   if (!capability.id.startsWith(EXTERNAL_MCP_PREFIX)) return undefined;
   if (capability.kind !== "mcp" || capability.hostNative || !capability.available || capability.scope !== "mission") {
     throw new Error(`External MCP capability ${capability.id} has invalid durable descriptor shape`);
@@ -345,19 +299,32 @@ function deliveryEntry(capability: CapabilityDescriptor): MissionExternalMcpEntr
     throw new Error(`External MCP capability ${capability.id} has invalid server name`);
   }
   if (!capability.invocationRef) throw new Error(`External MCP capability ${capability.id} is missing endpoint`);
-  const url = normalizeDeliveryUrl(capability.invocationRef, capability.id);
   return {
-    capability: structuredClone(capability),
-    server: { transport: "http", name, url, headers: [] }
+    transport: "http",
+    name,
+    url: normalizeDeliveryUrl(capability.invocationRef, capability.id),
+    headers: []
   };
 }
 
 function withMissionMcp<T extends AgentCreateRequest | AgentResumeRequest>(
   request: T,
-  registry: MissionExternalMcpRegistry
+  overlay: MissionCapabilityOverlay
 ): T {
-  const external = registry.select(request.missionId, request.allowedCapabilityRefs);
+  const capabilities = new Map(overlay.list(request.missionId).map(capability => [capability.id, capability]));
+  const external: HostMcpServer[] = [];
+  const seenRefs = new Set<string>();
+  for (const ref of request.allowedCapabilityRefs) {
+    if (!ref.startsWith(EXTERNAL_MCP_PREFIX) || seenRefs.has(ref)) continue;
+    seenRefs.add(ref);
+    const capability = capabilities.get(ref);
+    if (!capability) throw new Error(`External MCP capability ${ref} is not activated for Mission ${request.missionId}`);
+    const server = deliveryServer(capability);
+    if (!server) throw new Error(`External MCP capability ${ref} cannot be projected for Host delivery`);
+    external.push(server);
+  }
   if (external.length === 0) return request;
+
   const existing = (request.mcpServers ?? []).map(cloneServer);
   const names = new Set(existing.map(server => server.name));
   for (const server of external) {
@@ -400,15 +367,12 @@ function normalizeDeliveryUrl(value: string, capabilityId: string): string {
 
 function approvalKey(need: CapabilityNeed, entry: ResolvedExternalMcpCatalogEntry): string {
   return [
-    "external-mcp",
+    "external-mcp-admission/v1",
     need.missionId,
     need.id,
     entry.candidateId,
+    entry.sourceUri,
     entry.revision,
     entry.contentHash
   ].join("\u0000");
-}
-
-function allowsHighRisk(maxRisk: RiskLevel): boolean {
-  return maxRisk === "high";
 }
