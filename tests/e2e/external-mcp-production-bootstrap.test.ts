@@ -124,6 +124,7 @@ function controlResponse(workItemId: string): unknown {
         urgency: "blocking",
         acquisitionAllowed: true,
         maxRisk: "high",
+        policy: { acceptableKinds: ["mcp"] },
         requirementRefs: [],
         gapRefs: []
       }],
