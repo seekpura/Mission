@@ -130,7 +130,7 @@ function controlResponse(workItemId: string): unknown {
       workItems: [{
         id: "use-vendor-docs",
         workstreamId: "research",
-        purpose: "research",
+        purpose: "production",
         objective: "search vendor docs",
         requirementRefs: [],
         gapRefs: [],
