@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { isAbsolute } from "node:path";
 import { createInterface } from "node:readline";
 import { buildHostCapabilityGraph } from "../../core/capabilities/capability-graph.ts";
+import type { CapabilityDescriptor } from "../../core/domain/capability.ts";
 import type {
   AgentCreateRequest,
   AgentResumeRequest,
@@ -14,7 +17,8 @@ import type {
   HostAgentResumeResult,
   HostCapabilityInvocation,
   HostCapabilityResult,
-  HostDescriptor
+  HostDescriptor,
+  HostMcpServer
 } from "../host-adapter.ts";
 import { CodexAppServerHostAdapter } from "./codex-app-server-host-adapter.ts";
 import {
@@ -55,10 +59,17 @@ interface RpcEnvelope {
   error?: { code?: number; message?: string; data?: unknown };
 }
 
+interface CodexMcpProjection {
+  args: string[];
+  identity: string;
+}
+
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 5_000;
 const DEFAULT_DISCOVERY_CACHE_MS = 60_000;
 const DEFAULT_DISCOVERY_MAX_PAGES = 4;
 const MAX_DISCOVERED_MODELS = 256;
+const MAX_MCP_SERVERS = 16;
+const SAFE_MCP_NAME = /^[A-Za-z0-9_-]{1,32}$/;
 
 /**
  * Provider-semantic layer for Codex app-server.
@@ -67,8 +78,11 @@ const MAX_DISCOVERED_MODELS = 256;
  * This wrapper adds bounded stable `model/list` discovery, exposes the returned
  * model/reasoning/multi-agent semantics as CapabilityDescriptors, and routes an
  * explicitly allowed provider capability selection into the exact Codex worker
- * instance used for create/resume/observe. It never advertises experimental
- * background-terminal APIs because production initialization keeps experimentalApi=false.
+ * instance used for create/resume/observe. Trusted no-secret MCP declarations
+ * are projected into provider-native process config here, while the lower-level
+ * app-server adapter continues to reject direct MCP declarations. It never
+ * advertises experimental background-terminal APIs because production
+ * initialization keeps experimentalApi=false.
  */
 export class CodexNativeCapabilityHostAdapter implements HostAdapter {
   private readonly binary: string;
@@ -111,7 +125,7 @@ export class CodexNativeCapabilityHostAdapter implements HostAdapter {
   }
 
   async snapshotEnvironment(): Promise<EnvironmentSnapshot> {
-    const base = await this.base.snapshotEnvironment();
+    const base = withMcpDeliverySnapshot(await this.base.snapshotEnvironment());
     if (!this.nativeDiscovery) return base;
     const catalog = await this.discoverCatalog(false);
     if (!catalog) return base;
@@ -133,15 +147,16 @@ export class CodexNativeCapabilityHostAdapter implements HostAdapter {
 
   async createAgent(request: AgentCreateRequest): Promise<HostAgentHandle> {
     const adapter = await this.adapterForRequest(request);
-    const handle = await adapter.createAgent(request);
+    const handle = await adapter.createAgent(withoutMcp(request));
     this.bindHandle(handle, adapter);
     return handle;
   }
 
   async resumeAgent(request: AgentResumeRequest): Promise<HostAgentResumeResult> {
     const alreadyBound = this.handleAdapters.get(request.handleId);
+    if (alreadyBound) compileCodexMcpProjection(request.mcpServers ?? []);
     const adapter = alreadyBound ?? await this.adapterForRequest(request);
-    const result = await adapter.resumeAgent(request);
+    const result = await adapter.resumeAgent(withoutMcp(request));
     if (result.status === "resumed") this.bindHandle(result.handle, adapter);
     return result;
   }
@@ -172,6 +187,7 @@ export class CodexNativeCapabilityHostAdapter implements HostAdapter {
   }
 
   private async adapterForRequest(request: AgentCreateRequest): Promise<CodexAppServerHostAdapter> {
+    const mcp = compileCodexMcpProjection(request.mcpServers ?? []);
     const hasNativeSelection = request.allowedCapabilityRefs.some(isCodexNativeSelectionCapabilityRef);
     let catalog: CodexNativeCapabilityCatalog;
     if (hasNativeSelection) {
@@ -190,26 +206,32 @@ export class CodexNativeCapabilityHostAdapter implements HostAdapter {
       configuredModel: this.configuredModel,
       configuredReasoningEffort: this.configuredReasoningEffort
     });
-    if (!hasNativeSelection && selection.model === this.configuredModel && selection.reasoningEffort === this.configuredReasoningEffort) {
+    if (
+      mcp.args.length === 0 &&
+      !hasNativeSelection &&
+      selection.model === this.configuredModel &&
+      selection.reasoningEffort === this.configuredReasoningEffort
+    ) {
       return this.base;
     }
-    const key = `${selection.model ?? "provider-default"}\u0000${selection.reasoningEffort ?? "provider-default"}`;
+    const key = `${selection.model ?? "provider-default"}\u0000${selection.reasoningEffort ?? "provider-default"}\u0000${mcp.identity}`;
     let adapter = this.adapters.get(key);
     if (!adapter) {
-      adapter = this.createExecutionAdapter(selection);
+      adapter = this.createExecutionAdapter(selection, mcp.args);
       this.adapters.set(key, adapter);
     }
     return adapter;
   }
 
-  private createExecutionAdapter(selection: CodexNativeSelection): CodexAppServerHostAdapter {
+  private createExecutionAdapter(selection: CodexNativeSelection, mcpArgs: readonly string[] = []): CodexAppServerHostAdapter {
     return new CodexAppServerHostAdapter({
       binary: this.binary,
       argsPrefix: [
         ...this.argsPrefix,
         ...(selection.reasoningEffort
           ? ["-c", `model_reasoning_effort=${JSON.stringify(selection.reasoningEffort)}`]
-          : [])
+          : []),
+        ...mcpArgs
       ],
       env: this.env,
       cancelGraceMs: this.cancelGraceMs,
@@ -300,6 +322,106 @@ export class CodexNativeCapabilityHostAdapter implements HostAdapter {
       if (child.exitCode === null) child.kill();
     }
   }
+}
+
+export function compileCodexMcpProjection(servers: readonly HostMcpServer[]): CodexMcpProjection {
+  if (servers.length > MAX_MCP_SERVERS) throw new Error(`Codex MCP projection exceeds ${MAX_MCP_SERVERS} servers`);
+  const names = new Set<string>();
+  const args: string[] = [];
+  const identityShape: unknown[] = [];
+
+  for (const server of servers) {
+    if (!SAFE_MCP_NAME.test(server.name)) throw new Error(`Codex MCP server name is unsafe: ${server.name}`);
+    if (names.has(server.name)) throw new Error(`Duplicate Codex MCP server name: ${server.name}`);
+    names.add(server.name);
+    const root = `mcp_servers.${server.name}`;
+
+    if (server.transport === "stdio") {
+      if (!isAbsolute(server.command) || server.command.includes("\0")) {
+        throw new Error(`Codex stdio MCP ${server.name} command must be an absolute path without NUL`);
+      }
+      if (server.args.some(value => value.includes("\0"))) {
+        throw new Error(`Codex stdio MCP ${server.name} args contain NUL`);
+      }
+      if (server.env.length > 0) {
+        throw new Error(
+          `Codex MCP ${server.name} contains environment secrets; secure provider-native secret projection is not implemented`
+        );
+      }
+      args.push("-c", `${root}.command=${tomlString(server.command)}`);
+      if (server.args.length > 0) args.push("-c", `${root}.args=${tomlStringArray(server.args)}`);
+      args.push("-c", `${root}.enabled=true`);
+      identityShape.push({ transport: "stdio", name: server.name, command: server.command, args: server.args });
+      continue;
+    }
+
+    if (server.headers.length > 0) {
+      throw new Error(
+        `Codex MCP ${server.name} contains HTTP header secrets; secure provider-native secret projection is not implemented`
+      );
+    }
+    const url = new URL(server.url);
+    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
+      throw new Error(`Codex HTTP MCP ${server.name} has an unsupported or credential-bearing URL`);
+    }
+    args.push("-c", `${root}.url=${tomlString(url.toString())}`);
+    args.push("-c", `${root}.enabled=true`);
+    identityShape.push({ transport: "http", name: server.name, url: url.toString() });
+  }
+
+  const identity = createHash("sha256").update(JSON.stringify(identityShape)).digest("hex");
+  return { args, identity };
+}
+
+function withMcpDeliverySnapshot(snapshot: EnvironmentSnapshot): EnvironmentSnapshot {
+  const capabilities = snapshot.capabilities.map(capability =>
+    capability.id === "openai-codex.app-server-agent"
+      ? withMcpDeliverySemantics(capability)
+      : capability
+  );
+  return {
+    ...snapshot,
+    capabilities,
+    capabilityGraph: buildHostCapabilityGraph({
+      revision: snapshot.revision,
+      host: snapshot.host,
+      capabilities,
+      shellAvailable: snapshot.shellAvailable,
+      filesystemAvailable: snapshot.filesystemAvailable,
+      browserAvailable: snapshot.browserAvailable
+    })
+  };
+}
+
+function withMcpDeliverySemantics(capability: CapabilityDescriptor): CapabilityDescriptor {
+  const functions = new Set(capability.functions ?? []);
+  functions.add("deliver trusted MCP servers to agent session");
+  const features = new Set(capability.native?.features ?? []);
+  features.add("provider-native-mcp-config");
+  features.add("mcp-stdio-no-secret");
+  features.add("mcp-http-no-secret");
+  return {
+    ...capability,
+    functions: [...functions],
+    native: {
+      ...(capability.native ?? {}),
+      features: [...features]
+    }
+  };
+}
+
+function withoutMcp<T extends AgentCreateRequest | AgentResumeRequest>(request: T): T {
+  const clone = { ...request } as T & { mcpServers?: HostMcpServer[] };
+  delete clone.mcpServers;
+  return clone;
+}
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function tomlStringArray(values: readonly string[]): string {
+  return `[${values.map(tomlString).join(",")}]`;
 }
 
 class CatalogJsonRpcConnection {
