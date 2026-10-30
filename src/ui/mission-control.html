@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Mission Control</title>
 <style>
-:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}body{margin:0}.shell{max-width:1180px;margin:0 auto;padding:40px 24px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#666}.title{font-size:42px;line-height:1;margin:8px 0}.muted{color:#666}.grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-top:28px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.03)}.metric{font-size:28px;font-weight:650}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:12px}.wide{grid-column:1/-1}.section-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:8px}.approval,.finding{padding:16px 0;border-bottom:1px solid #eee}.approval:last-child,.finding:last-child{border-bottom:0}.approval-title,.finding-title{font-weight:650;margin:4px 0}.approval-reason,.finding-expected{margin:4px 0 10px;color:#444}.approval-meta,.finding-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#666}.actions{display:flex;gap:8px;margin-top:12px}.action{appearance:none;border:1px solid #ccc;border-radius:10px;background:#fff;color:#111;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}.action:hover{background:#f5f5f3}.action:focus-visible{outline:3px solid #bbb;outline-offset:2px}.action[data-decision="approve"]{background:#111;color:#fff;border-color:#111}.action:disabled{opacity:.5;cursor:wait}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.title{font-size:32px}.top{align-items:start;flex-direction:column}.section-head{align-items:start}}
+:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}body{margin:0}.shell{max-width:1180px;margin:0 auto;padding:40px 24px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#666}.title{font-size:42px;line-height:1;margin:8px 0}.muted{color:#666}.grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-top:28px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.03)}.metric{font-size:28px;font-weight:650}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:12px}.wide{grid-column:1/-1}.section-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:8px}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px}.summary-stat{border:1px solid #eee;border-radius:12px;padding:12px}.summary-value{font-size:20px;font-weight:650;margin-top:5px}.approval,.finding{padding:16px 0;border-bottom:1px solid #eee}.approval:last-child,.finding:last-child{border-bottom:0}.approval-title,.finding-title{font-weight:650;margin:4px 0}.approval-reason,.finding-expected{margin:4px 0 10px;color:#444}.approval-meta,.finding-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#666}.actions{display:flex;gap:8px;margin-top:12px}.action{appearance:none;border:1px solid #ccc;border-radius:10px;background:#fff;color:#111;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}.action:hover{background:#f5f5f3}.action:focus-visible{outline:3px solid #bbb;outline-offset:2px}.action[data-decision="approve"]{background:#111;color:#fff;border-color:#111}.action:disabled{opacity:.5;cursor:wait}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.title{font-size:32px}.top{align-items:start;flex-direction:column}.section-head{align-items:start}}
 </style>
 </head>
 <body>
@@ -16,6 +16,18 @@
     <section class="card"><div class="eyebrow">Blocking gaps</div><div class="metric" id="gaps">0</div></section>
     <section class="card"><div class="eyebrow">Active work</div><div id="work"></div></section>
     <section class="card"><div class="eyebrow">Artifacts</div><div id="artifacts"></div></section>
+    <section class="card wide" data-surface="operational-summary">
+      <div class="section-head"><div><div class="eyebrow">Runtime health</div><div class="muted">Bounded aggregate signals from the durable Mission read model.</div></div></div>
+      <div id="summary-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
+      <div class="summary-grid">
+        <div class="summary-stat"><div class="eyebrow">Events · 5m</div><div class="summary-value" id="summary-throughput-5">—</div></div>
+        <div class="summary-stat"><div class="eyebrow">Events · 60m</div><div class="summary-value" id="summary-throughput-60">—</div></div>
+        <div class="summary-stat"><div class="eyebrow">Idle</div><div class="summary-value" id="summary-idle">—</div></div>
+        <div class="summary-stat"><div class="eyebrow">Replay blocks</div><div class="summary-value" id="summary-replay-blocks">—</div></div>
+        <div class="summary-stat"><div class="eyebrow">Active capabilities</div><div class="summary-value" id="summary-active-capabilities">—</div></div>
+        <div class="summary-stat"><div class="eyebrow">Completed latency</div><div class="summary-value" id="summary-latency">—</div></div>
+      </div>
+    </section>
     <section class="card wide" data-surface="pending-approvals">
       <div class="section-head"><div><div class="eyebrow">Pending approvals</div><div class="muted">Explicit one-shot decisions required by the Runtime.</div></div><div class="pill" id="approval-count">0</div></div>
       <div id="approval-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
@@ -39,6 +51,13 @@ const gapsEl=document.getElementById('gaps');
 const workEl=document.getElementById('work');
 const artifactsEl=document.getElementById('artifacts');
 const rawEl=document.getElementById('raw');
+const summaryStatusEl=document.getElementById('summary-status');
+const summaryThroughput5El=document.getElementById('summary-throughput-5');
+const summaryThroughput60El=document.getElementById('summary-throughput-60');
+const summaryIdleEl=document.getElementById('summary-idle');
+const summaryReplayBlocksEl=document.getElementById('summary-replay-blocks');
+const summaryActiveCapabilitiesEl=document.getElementById('summary-active-capabilities');
+const summaryLatencyEl=document.getElementById('summary-latency');
 const approvalsEl=document.getElementById('approvals');
 const approvalStatusEl=document.getElementById('approval-status');
 const approvalCountEl=document.getElementById('approval-count');
@@ -46,6 +65,7 @@ const approvalActionsTemplate=document.getElementById('approval-actions-template
 const findingsEl=document.getElementById('findings');
 const findingStatusEl=document.getElementById('finding-status');
 const findingCountEl=document.getElementById('finding-count');
+let summaryLoadGeneration=0;
 let approvalLoadGeneration=0;
 let findingLoadGeneration=0;
 
@@ -54,11 +74,13 @@ if(missionId){
   const es=new EventSource('/missions/'+encodeURIComponent(missionId)+'/events');
   es.onopen=()=>connectionEl.textContent='live';
   es.onerror=()=>connectionEl.textContent='reconnecting';
-  es.addEventListener('mission.updated',e=>{render(JSON.parse(e.data));void loadApprovals();void loadFindings()});
+  es.addEventListener('mission.updated',e=>{render(JSON.parse(e.data));void loadOperationalSummary();void loadApprovals();void loadFindings()});
   fetch('/missions/'+encodeURIComponent(missionId)).then(r=>r.json()).then(render);
+  void loadOperationalSummary();
   void loadApprovals();
   void loadFindings();
 }else{
+  summaryStatusEl.textContent='Open a Mission to review runtime health.';
   approvalStatusEl.textContent='Open a Mission to review pending approvals.';
   findingStatusEl.textContent='Open a Mission to review verification findings.';
 }
@@ -69,6 +91,54 @@ function render(s){
   workEl.innerHTML=[...s.activeWorkItemIds,...s.readyWorkItemIds].map(x=>'<div class="row"><span>'+esc(x)+'</span><span class="pill">work</span></div>').join('')||'<div class="muted">No active work</div>';
   artifactsEl.innerHTML=s.finalArtifactRefs.map(x=>'<div class="row"><span>'+esc(x)+'</span><span class="pill">final</span></div>').join('')||'<div class="muted">No final artifacts</div>';
   rawEl.textContent=JSON.stringify(s,null,2);
+}
+
+async function loadOperationalSummary(){
+  if(!missionId)return;
+  const generation=++summaryLoadGeneration;
+  summaryStatusEl.textContent='Refreshing runtime health…';
+  try{
+    const response=await fetch('/missions/'+encodeURIComponent(missionId)+'/summary');
+    if(!response.ok)throw new Error('Runtime health unavailable ('+response.status+')');
+    const summary=await response.json();
+    if(!summary||typeof summary!=='object'||Array.isArray(summary))throw new Error('Runtime health response was not an object');
+    if(generation!==summaryLoadGeneration)return;
+    renderOperationalSummary(summary);
+  }catch(error){
+    if(generation!==summaryLoadGeneration)return;
+    summaryStatusEl.textContent=error instanceof Error?error.message:String(error);
+  }
+}
+
+function renderOperationalSummary(summary){
+  const throughput=summary.eventThroughput&&typeof summary.eventThroughput==='object'?summary.eventThroughput:{};
+  const latency=summary.completedExecutionLatencyMs&&typeof summary.completedExecutionLatencyMs==='object'?summary.completedExecutionLatencyMs:{};
+  summaryThroughput5El.textContent=finiteCount(throughput.last5Minutes);
+  summaryThroughput60El.textContent=finiteCount(throughput.last60Minutes);
+  summaryIdleEl.textContent=formatDuration(summary.idleMs);
+  summaryReplayBlocksEl.textContent=finiteCount(summary.replayBlockCount);
+  summaryActiveCapabilitiesEl.textContent=finiteCount(summary.activeCapabilityCount);
+  const sampleCount=Number(latency.sampleCount);
+  summaryLatencyEl.textContent=Number.isSafeInteger(sampleCount)&&sampleCount>0&&Number.isFinite(Number(latency.averageMs))
+    ?formatDuration(Number(latency.averageMs))+' avg · '+sampleCount+' sample'+(sampleCount===1?'':'s')
+    :'No completed samples';
+  const sequence=Number(summary.eventSequence);
+  summaryStatusEl.textContent=Number.isSafeInteger(sequence)&&sequence>=0?'Aggregate at event sequence '+sequence+'.':'Aggregate refreshed.';
+}
+
+function finiteCount(value){
+  const number=Number(value);
+  return Number.isSafeInteger(number)&&number>=0?String(number):'—';
+}
+
+function formatDuration(value){
+  const ms=Number(value);
+  if(!Number.isFinite(ms)||ms<0)return '—';
+  if(ms<1000)return Math.round(ms)+' ms';
+  if(ms<60000)return (ms/1000).toFixed(ms<10000?1:0)+' s';
+  if(ms<3600000)return Math.round(ms/60000)+' min';
+  if(ms<86400000)return (ms/3600000).toFixed(ms<36000000?1:0)+' h';
+  return (ms/86400000).toFixed(ms<864000000?1:0)+' d';
 }
 
 async function loadApprovals(){
