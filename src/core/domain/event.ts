@@ -61,6 +61,7 @@ export type MissionEventType =
   | "capability.audit.recorded"
   | "approval.requested"
   | "approval.decided"
+  | "history.archive.created"
   | "user.steering.received"
   | "mission.completed"
   | "mission.reopened";

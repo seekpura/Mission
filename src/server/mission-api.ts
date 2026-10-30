@@ -13,6 +13,12 @@ import type { SqliteMissionReader } from "../persistence/sqlite/sqlite-mission-r
 import type { SqliteOperationalSummaryReader } from "../persistence/sqlite/sqlite-operational-summary-reader.ts";
 import type { RuntimeApprovalManager } from "../runtime/approval-manager.ts";
 import type { RuntimeCapabilityLifecycleManager } from "../runtime/capability-ledger-runtime.ts";
+import {
+  MissionHistoryArchiveConflictError,
+  MissionHistoryArchiveInternalError,
+  MissionHistoryArchiveUnavailableError,
+  type MissionHistoryArchiveOperator
+} from "../runtime/mission-history-archive-operator.ts";
 import type { MissionSupervisor } from "../runtime/mission-supervisor.ts";
 
 const SIDE_EFFECT_STATUSES = new Set<SideEffectOperationStatus>([
@@ -52,6 +58,7 @@ const CAPABILITY_AUDIT_DECISIONS = new Set<CapabilityAuditDecision>([
   "revoked",
   "rejected"
 ]);
+const ARCHIVE_OBJECT_ID_PATTERN = /^[0-9a-f]{64}$/;
 
 export interface MissionApiRuntime {
   supervisor?: MissionSupervisor;
@@ -68,6 +75,7 @@ export interface MissionApiRuntime {
   operationalReader?: Pick<SqliteMissionReader, "readActivity" | "readAttempts" | "readExecutions">;
   summaryReader?: Pick<SqliteOperationalSummaryReader, "readSummary">;
   historyReader?: Pick<SqliteHistoryReader, "readExportPage" | "readRetentionState">;
+  historyArchive?: MissionHistoryArchiveOperator;
 }
 
 export interface MissionApiServer extends Server {
@@ -162,6 +170,31 @@ export function createMissionApi(
             ...(typeof throughSequence === "number" ? { throughSequence } : {})
           });
           return receipt ? json(res, 200, receipt) : json(res, 404, { error: "mission_not_found" });
+        }
+        if (req.method === "POST" && parts[2] === "history" && parts[3] === "archive" && parts.length === 4) {
+          if (!runtime.historyArchive) return json(res, 503, { error: "history_archive_unavailable" });
+          const body = await readJson(req);
+          const throughSequence = parseOptionalBodyInteger(body.throughSequence, 0, Number.MAX_SAFE_INTEGER);
+          if (throughSequence === "invalid") return json(res, 400, { error: "invalid_history_through_sequence" });
+          try {
+            const archived = await runtime.historyArchive.create(missionId, {
+              ...(typeof throughSequence === "number" ? { throughSequence } : {})
+            });
+            return archived ? json(res, 200, archived) : json(res, 404, { error: "mission_not_found" });
+          } catch (error) {
+            return archiveErrorResponse(res, error);
+          }
+        }
+        if (req.method === "GET" && parts[2] === "history" && parts[3] === "archive" && parts[4] && parts.length === 5) {
+          if (!runtime.historyArchive) return json(res, 503, { error: "history_archive_unavailable" });
+          const objectId = parts[4];
+          if (!ARCHIVE_OBJECT_ID_PATTERN.test(objectId)) return json(res, 400, { error: "invalid_archive_object_id" });
+          try {
+            const verified = await runtime.historyArchive.verify(missionId, objectId);
+            return verified ? json(res, 200, verified) : json(res, 404, { error: "archive_object_not_found" });
+          } catch (error) {
+            return archiveErrorResponse(res, error);
+          }
         }
         if (req.method === "POST" && parts[2] === "steer") {
           const body = await readJson(req);
@@ -484,11 +517,30 @@ function json(res: ServerResponse, status: number, value: unknown) {
   res.end(JSON.stringify(value));
 }
 
+function archiveErrorResponse(res: ServerResponse, error: unknown) {
+  if (error instanceof MissionHistoryArchiveConflictError) {
+    return json(res, 409, { error: "archive_object_conflict" });
+  }
+  if (error instanceof MissionHistoryArchiveUnavailableError) {
+    return json(res, 503, { error: "history_archive_storage_unavailable" });
+  }
+  if (error instanceof MissionHistoryArchiveInternalError) {
+    return json(res, 500, { error: "history_archive_internal_error" });
+  }
+  return json(res, 500, { error: "history_archive_internal_error" });
+}
+
 function parseOptionalInteger(raw: string | null, minimum: number, maximum: number): number | undefined | "invalid" {
   if (raw === null || raw.trim() === "") return undefined;
   if (!/^\d+$/.test(raw)) return "invalid";
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) return "invalid";
+  return value;
+}
+
+function parseOptionalBodyInteger(value: unknown, minimum: number, maximum: number): number | undefined | "invalid" {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum || value > maximum) return "invalid";
   return value;
 }
 
