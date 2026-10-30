@@ -47,6 +47,10 @@ test("Mission Control exposes a bounded read-only Findings surface", async () =>
     assert.match(html, /function renderFindings\(/);
     assert.match(html, /findingLoadGeneration/);
     assert.match(html, /mission\.updated[\s\S]*loadFindings/);
+    assert.match(html, /50 shown/);
+    assert.match(html, /Showing up to 50 recorded findings/);
+    assert.match(html, /observation\.textContent/);
+    assert.match(html, /expected\.textContent/);
     assert.doesNotMatch(html, /innerHTML\s*=\s*.*finding/i);
   } finally {
     await closeServer(server);
