@@ -178,6 +178,25 @@ test("Mission API exposes bounded registered archive history and fails closed wi
     await closeServer(server);
   }
 
+  const readOnlyServer = createMissionApi(controller, events, { historyReader, historyArchiveReader });
+  try {
+    const base = await listen(readOnlyServer);
+    const response = await fetch(`${base}/missions/${missionId}/history/archives`);
+    assert.equal(response.status, 200);
+    const page = await response.json() as { items: Array<{ objectId: string }> };
+    assert.deepEqual(page.items.map(item => item.objectId), [first.objectId, second.objectId]);
+
+    const createResponse = await fetch(`${base}/missions/${missionId}/history/archive`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    });
+    assert.equal(createResponse.status, 503);
+    assert.deepEqual(await createResponse.json(), { error: "history_archive_unavailable" });
+  } finally {
+    await closeServer(readOnlyServer);
+  }
+
   const disabledServer = createMissionApi(controller, events, { historyReader });
   try {
     const base = await listen(disabledServer);
