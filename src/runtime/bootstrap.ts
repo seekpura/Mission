@@ -185,9 +185,7 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
         approvalHandler
       })));
   const overlay = new MissionCapabilityOverlay();
-  const missionMcpHost = options.externalMcpCatalog?.length
-    ? new MissionExternalMcpHostAdapter(baseHost, overlay)
-    : baseHost;
+  const missionMcpHost = new MissionExternalMcpHostAdapter(baseHost, overlay);
   const trustedMcp = new TrustedMcpRegistry(options.trustedMcpServers ?? [], {
     allowInsecureHttp: options.allowInsecureTrustedMcpHttp
   });
