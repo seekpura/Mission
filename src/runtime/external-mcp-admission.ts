@@ -37,6 +37,10 @@ const SERVER_NAME = /^[A-Za-z0-9_-]{1,32}$/;
 const EXTERNAL_MCP_RISK: RiskLevel = "high";
 const RISK_RANK: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2, blocked: 3 };
 
+export interface CapabilityRevocationReader {
+  isCapabilityRevoked(missionId: string, capabilityId: string): boolean;
+}
+
 /**
  * Projects only already-restored Mission-local external MCP descriptors into
  * Host MCP declarations. MissionCapabilityOverlay is a transient projection of
@@ -104,11 +108,17 @@ export class MissionExternalMcpHostAdapter implements HostAdapter {
  * the controller's durable capability.activated Event makes it restorable and
  * deliverable. This keeps the crash window after approval fail-closed while the
  * stable approval idempotency key lets a retry reuse the durable decision.
+ *
+ * A durable capability.revoked lifecycle decision is a tombstone for that
+ * Mission-local external MCP capability id. Admission checks it before asking
+ * for or reusing approval, so an old approval can never silently reacquire a
+ * revoked external identity.
  */
 export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
   private readonly base: CapabilityRuntime;
   private readonly catalog: ExternalMcpCatalogDiscoveryProvider;
   private readonly approvals: IdempotentAcquisitionApprovalBroker;
+  private readonly revocations: CapabilityRevocationReader;
   private readonly ranker: CandidateRanker;
   private readonly maxCandidates: number;
 
@@ -116,12 +126,14 @@ export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
     base: CapabilityRuntime;
     catalog: ExternalMcpCatalogDiscoveryProvider;
     approvals: IdempotentAcquisitionApprovalBroker;
+    revocations: CapabilityRevocationReader;
     ranker?: CandidateRanker;
     maxCandidates?: number;
   }) {
     this.base = options.base;
     this.catalog = options.catalog;
     this.approvals = options.approvals;
+    this.revocations = options.revocations;
     this.ranker = options.ranker ?? new CandidateRanker();
     this.maxCandidates = Math.max(1, Math.min(10, options.maxCandidates ?? 3));
   }
@@ -155,6 +167,17 @@ export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
           candidateName: ranked.candidate.name,
           ok: false,
           reason: error instanceof Error ? error.message : String(error)
+        });
+        continue;
+      }
+
+      const capabilityId = externalCapabilityId(entry);
+      if (this.revocations.isCapabilityRevoked(need.missionId, capabilityId)) {
+        attempts.push({
+          candidateId: entry.candidateId,
+          candidateName: entry.name,
+          ok: false,
+          reason: `External MCP capability ${capabilityId} is durably revoked for Mission ${need.missionId}`
         });
         continue;
       }
@@ -239,9 +262,13 @@ export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
   }
 }
 
+function externalCapabilityId(entry: ResolvedExternalMcpCatalogEntry): string {
+  return `${EXTERNAL_MCP_PREFIX}${entry.id}`;
+}
+
 function capabilityFromEntry(entry: ResolvedExternalMcpCatalogEntry): CapabilityDescriptor {
   return {
-    id: `${EXTERNAL_MCP_PREFIX}${entry.id}`,
+    id: externalCapabilityId(entry),
     kind: "mcp",
     name: entry.name,
     description: entry.description,
