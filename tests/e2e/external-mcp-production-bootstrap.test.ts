@@ -235,12 +235,17 @@ test("production host keeps external MCP refs fail-closed when discovery catalog
 
   try {
     await assert.rejects(
-      () => runtime.host.createAgent({
-        missionId: "mission-no-external-catalog",
-        workItemId: "external-ref-without-activation",
-        context: {},
-        allowedCapabilityRefs: [capabilityId]
-      }),
+      async () => {
+        const unexpectedHandle = await runtime.host.createAgent({
+          missionId: "mission-no-external-catalog",
+          workItemId: "external-ref-without-activation",
+          context: {},
+          allowedCapabilityRefs: [capabilityId]
+        });
+        for await (const _event of runtime.host.observeAgent(unexpectedHandle)) {
+          // Drain the unexpected session so the RED assertion is not masked by shutdown cleanup.
+        }
+      },
       /not activated/i
     );
     assert.equal(baseHost.createRequests.length, 0, "external refs must be rejected before reaching the base Host");
