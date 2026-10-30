@@ -27,6 +27,14 @@ import {
 } from "./capability-ledger-runtime.ts";
 import { CapabilityWorkspaceHostAdapter } from "./capability-context-host-adapter.ts";
 import {
+  ExternalMcpAdmissionRuntime,
+  MissionExternalMcpHostAdapter
+} from "./external-mcp-admission.ts";
+import {
+  ExternalMcpCatalogDiscoveryProvider,
+  type ExternalMcpCatalogEntry
+} from "./external-mcp-catalog.ts";
+import {
   createTrustedHostCapabilityEvidenceCollectors,
   parseTrustedHostCapabilityEvidenceBindingsJson,
   type TrustedHostCapabilityEvidenceBinding
@@ -95,6 +103,7 @@ export interface MissionRuntimeOptions {
   maxSupervisorCycles?: number;
   retainControlWorkspaces?: boolean;
   capabilityAcquisition?: ProductionCapabilityAcquisitionOptions;
+  externalMcpCatalog?: ExternalMcpCatalogEntry[];
   trustedMcpServers?: TrustedMcpServerConfig[];
   allowInsecureTrustedMcpHttp?: boolean;
   /**
@@ -174,11 +183,14 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
         argsPrefix: options.dshArgsPrefix,
         approvalHandler
       })));
+  const overlay = new MissionCapabilityOverlay();
+  const missionMcpHost = options.externalMcpCatalog?.length
+    ? new MissionExternalMcpHostAdapter(baseHost, overlay)
+    : baseHost;
   const trustedMcp = new TrustedMcpRegistry(options.trustedMcpServers ?? [], {
     allowInsecureHttp: options.allowInsecureTrustedMcpHttp
   });
-  const mcpHost = new TrustedMcpHostAdapter(baseHost, trustedMcp);
-  const overlay = new MissionCapabilityOverlay();
+  const mcpHost = new TrustedMcpHostAdapter(missionMcpHost, trustedMcp);
   const capabilityHost = !options.host && hostKind === "deepseek"
     ? new CapabilityWorkspaceHostAdapter(mcpHost, new MissionAgentSkillWorkspaceProjector(overlay))
     : mcpHost;
@@ -239,7 +251,14 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     acquisition: options.capabilityAcquisition,
     trustedCache: trustedCapabilityCache
   });
-  const capabilities = new CapabilityLedgerRuntime(baseCapabilities, events);
+  const admittedCapabilities = options.externalMcpCatalog?.length
+    ? new ExternalMcpAdmissionRuntime({
+        base: baseCapabilities,
+        catalog: new ExternalMcpCatalogDiscoveryProvider(options.externalMcpCatalog),
+        approvals
+      })
+    : baseCapabilities;
+  const capabilities = new CapabilityLedgerRuntime(admittedCapabilities, events);
   const capabilityLifecycle = new RuntimeCapabilityLifecycleManager(
     capabilities,
     events,
