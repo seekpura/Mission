@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Mission Control</title>
 <style>
-:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}body{margin:0}.shell{max-width:1180px;margin:0 auto;padding:40px 24px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#666}.title{font-size:42px;line-height:1;margin:8px 0}.muted{color:#666}.grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-top:28px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.03)}.metric{font-size:28px;font-weight:650}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:12px}.wide{grid-column:1/-1}.section-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:8px}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px}.summary-stat{border:1px solid #eee;border-radius:12px;padding:12px}.summary-value{font-size:20px;font-weight:650;margin-top:5px}.archive,.evidence,.side-effect,.approval,.finding{padding:16px 0;border-bottom:1px solid #eee}.archive:last-child,.evidence:last-child,.side-effect:last-child,.approval:last-child,.finding:last-child{border-bottom:0}.archive-title,.evidence-title,.side-effect-title,.approval-title,.finding-title{font-weight:650;margin:4px 0;word-break:break-all}.approval-reason,.finding-expected,.side-effect-description{margin:4px 0 10px;color:#444}.archive-meta,.evidence-meta,.side-effect-meta,.approval-meta,.finding-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#666}.actions{display:flex;gap:8px;margin-top:12px}.action{appearance:none;border:1px solid #ccc;border-radius:10px;background:#fff;color:#111;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}.action:hover{background:#f5f5f3}.action:focus-visible{outline:3px solid #bbb;outline-offset:2px}.action[data-decision="approve"]{background:#111;color:#fff;border-color:#111}.action:disabled{opacity:.5;cursor:wait}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.title{font-size:32px}.top{align-items:start;flex-direction:column}.section-head{align-items:start}}
+:root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#111;background:#f5f5f3}body{margin:0}.shell{max-width:1180px;margin:0 auto;padding:40px 24px}.top{display:flex;justify-content:space-between;gap:24px;align-items:end}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#666}.title{font-size:42px;line-height:1;margin:8px 0}.muted{color:#666}.grid{display:grid;grid-template-columns:2fr 1fr;gap:18px;margin-top:28px}.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.03)}.metric{font-size:28px;font-weight:650}.row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #eee}.row:last-child{border:0}.pill{padding:4px 8px;border-radius:999px;background:#efefec;font-size:12px}.wide{grid-column:1/-1}.section-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:8px}.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px}.summary-stat{border:1px solid #eee;border-radius:12px;padding:12px}.summary-value{font-size:20px;font-weight:650;margin-top:5px}.archive,.evidence,.side-effect,.capability-record,.approval,.finding{padding:16px 0;border-bottom:1px solid #eee}.archive:last-child,.evidence:last-child,.side-effect:last-child,.capability-record:last-child,.approval:last-child,.finding:last-child{border-bottom:0}.archive-title,.evidence-title,.side-effect-title,.capability-title,.approval-title,.finding-title{font-weight:650;margin:4px 0;word-break:break-all}.approval-reason,.finding-expected,.side-effect-description{margin:4px 0 10px;color:#444}.archive-meta,.evidence-meta,.side-effect-meta,.capability-meta,.approval-meta,.finding-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#666}.actions{display:flex;gap:8px;margin-top:12px}.action{appearance:none;border:1px solid #ccc;border-radius:10px;background:#fff;color:#111;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}.action:hover{background:#f5f5f3}.action:focus-visible{outline:3px solid #bbb;outline-offset:2px}.action[data-decision="approve"]{background:#111;color:#fff;border-color:#111}.action:disabled{opacity:.5;cursor:wait}pre{white-space:pre-wrap;word-break:break-word;font-size:12px;max-height:280px;overflow:auto}@media(max-width:760px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}.title{font-size:32px}.top{align-items:start;flex-direction:column}.section-head{align-items:start}}
 </style>
 </head>
 <body>
@@ -48,6 +48,11 @@
       <div class="section-head"><div><div class="eyebrow">Side-effect safety</div><div class="muted">Durable operation state and replay protection. Read-only.</div></div><div class="pill" id="side-effect-count">0</div></div>
       <div id="side-effect-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
       <div id="side-effects"></div>
+    </section>
+    <section class="card wide" data-surface="capability-ledger">
+      <div class="section-head"><div><div class="eyebrow">Capability trust &amp; lifecycle</div><div class="muted">Bounded durable trust and lifecycle decisions. Read-only.</div></div><div class="pill" id="capability-ledger-count">0</div></div>
+      <div id="capability-ledger-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
+      <div id="capability-ledger"></div>
     </section>
     <section class="card wide" data-surface="pending-approvals">
       <div class="section-head"><div><div class="eyebrow">Pending approvals</div><div class="muted">Explicit one-shot decisions required by the Runtime.</div></div><div class="pill" id="approval-count">0</div></div>
@@ -96,6 +101,9 @@ const retentionReasonEl=document.getElementById('retention-reason');
 const sideEffectsEl=document.getElementById('side-effects');
 const sideEffectStatusEl=document.getElementById('side-effect-status');
 const sideEffectCountEl=document.getElementById('side-effect-count');
+const capabilityLedgerEl=document.getElementById('capability-ledger');
+const capabilityLedgerStatusEl=document.getElementById('capability-ledger-status');
+const capabilityLedgerCountEl=document.getElementById('capability-ledger-count');
 const approvalsEl=document.getElementById('approvals');
 const approvalStatusEl=document.getElementById('approval-status');
 const approvalCountEl=document.getElementById('approval-count');
@@ -110,6 +118,7 @@ let summaryLoadGeneration=0;
 let archiveLoadGeneration=0;
 let retentionLoadGeneration=0;
 let sideEffectLoadGeneration=0;
+let capabilityLedgerLoadGeneration=0;
 let approvalLoadGeneration=0;
 let evidenceLoadGeneration=0;
 let findingLoadGeneration=0;
@@ -119,12 +128,13 @@ if(missionId){
   const es=new EventSource('/missions/'+encodeURIComponent(missionId)+'/events');
   es.onopen=()=>connectionEl.textContent='live';
   es.onerror=()=>connectionEl.textContent='reconnecting';
-  es.addEventListener('mission.updated',e=>{render(JSON.parse(e.data));void loadOperationalSummary();void loadHistoryArchives();void loadHistoryRetention();void loadSideEffects();void loadApprovals();void loadEvidence();void loadFindings()});
+  es.addEventListener('mission.updated',e=>{render(JSON.parse(e.data));void loadOperationalSummary();void loadHistoryArchives();void loadHistoryRetention();void loadSideEffects();void loadCapabilityLedger();void loadApprovals();void loadEvidence();void loadFindings()});
   fetch('/missions/'+encodeURIComponent(missionId)).then(r=>r.json()).then(render);
   void loadOperationalSummary();
   void loadHistoryArchives();
   void loadHistoryRetention();
   void loadSideEffects();
+  void loadCapabilityLedger();
   void loadApprovals();
   void loadEvidence();
   void loadFindings();
@@ -133,6 +143,7 @@ if(missionId){
   archiveStatusEl.textContent='Open a Mission to review registered history archives.';
   retentionStatusEl.textContent='Open a Mission to review history retention safety.';
   sideEffectStatusEl.textContent='Open a Mission to review side-effect safety.';
+  capabilityLedgerStatusEl.textContent='Open a Mission to review capability trust history.';
   approvalStatusEl.textContent='Open a Mission to review pending approvals.';
   evidenceStatusEl.textContent='Open a Mission to review verification Evidence.';
   findingStatusEl.textContent='Open a Mission to review verification findings.';
@@ -321,6 +332,65 @@ function renderSideEffects(items){
     fragment.append(article);
   }
   sideEffectsEl.replaceChildren(fragment);
+}
+
+async function loadCapabilityLedger(){
+  if(!missionId)return;
+  const generation=++capabilityLedgerLoadGeneration;
+  capabilityLedgerStatusEl.textContent='Refreshing capability trust history…';
+  try{
+    const response=await fetch('/missions/'+encodeURIComponent(missionId)+'/capabilities/ledger?limit=10');
+    if(!response.ok)throw new Error('Capability ledger unavailable ('+response.status+')');
+    const ledger=await response.json();
+    if(!ledger||typeof ledger!=='object'||Array.isArray(ledger)||!Array.isArray(ledger.trust)||!Array.isArray(ledger.audit))throw new Error('Capability ledger response was not a ledger');
+    if(generation!==capabilityLedgerLoadGeneration)return;
+    renderCapabilityLedger(ledger);
+    const next=ledger.next&&typeof ledger.next==='object'?ledger.next:{};
+    const hasMore=next.trust!==undefined||next.costs!==undefined||next.audit!==undefined;
+    capabilityLedgerStatusEl.textContent=hasMore
+      ?'Showing the first 10 records per ledger stream; more capability history is available.'
+      :(ledger.trust.length||ledger.audit.length)?'Capability trust and lifecycle history refreshed.':'No capability trust or lifecycle records.';
+  }catch(error){
+    if(generation!==capabilityLedgerLoadGeneration)return;
+    capabilityLedgerStatusEl.textContent=error instanceof Error?error.message:String(error);
+  }
+}
+
+function renderCapabilityLedger(ledger){
+  const next=ledger.next&&typeof ledger.next==='object'?ledger.next:{};
+  const hasMore=next.trust!==undefined||next.costs!==undefined||next.audit!==undefined;
+  capabilityLedgerCountEl.textContent=ledger.trust.length+' trust · '+ledger.audit.length+' audit'+(hasMore?' shown':'');
+  const fragment=document.createDocumentFragment();
+
+  for(const record of ledger.trust){
+    const article=document.createElement('article');
+    article.className='capability-record';
+    const meta=document.createElement('div'); meta.className='capability-meta';
+    const trustLevel=document.createElement('span'); trustLevel.className='pill'; trustLevel.textContent=String(record.trustLevel||'unknown-trust');
+    const provenanceSource=document.createElement('span'); provenanceSource.textContent='Source: '+String(record.provenanceSource||'—');
+    const recordedAt=document.createElement('span'); recordedAt.textContent=String(record.recordedAt||'');
+    meta.append(trustLevel,provenanceSource,recordedAt);
+    const capabilityId=document.createElement('div'); capabilityId.className='capability-title'; capabilityId.textContent=String(record.capabilityId||'Capability');
+    const reason=document.createElement('p'); reason.className='muted'; reason.textContent=String(record.reason||'No trust reason supplied.');
+    article.append(meta,capabilityId,reason);
+    fragment.append(article);
+  }
+
+  for(const record of ledger.audit){
+    const article=document.createElement('article');
+    article.className='capability-record';
+    const meta=document.createElement('div'); meta.className='capability-meta';
+    const decision=document.createElement('span'); decision.className='pill'; decision.textContent=String(record.decision||'audit');
+    const resolutionSource=document.createElement('span'); resolutionSource.textContent='Source: '+String(record.resolutionSource||'—');
+    const recordedAt=document.createElement('span'); recordedAt.textContent=String(record.recordedAt||'');
+    meta.append(decision,resolutionSource,recordedAt);
+    const capabilityId=document.createElement('div'); capabilityId.className='capability-title'; capabilityId.textContent=String(record.capabilityId||'Capability');
+    const reason=document.createElement('p'); reason.className='muted'; reason.textContent=String(record.reason||'No lifecycle reason supplied.');
+    article.append(meta,capabilityId,reason);
+    fragment.append(article);
+  }
+
+  capabilityLedgerEl.replaceChildren(fragment);
 }
 
 async function loadApprovals(){
