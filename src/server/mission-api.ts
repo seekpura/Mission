@@ -180,7 +180,9 @@ export function createMissionApi(
             const archived = await runtime.historyArchive.create(missionId, {
               ...(typeof throughSequence === "number" ? { throughSequence } : {})
             });
-            return archived ? json(res, 200, archived) : json(res, 404, { error: "mission_not_found" });
+            if (!archived) return json(res, 404, { error: "mission_not_found" });
+            await publish(missionId);
+            return json(res, 200, archived);
           } catch (error) {
             return archiveErrorResponse(res, error);
           }
