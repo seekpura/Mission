@@ -222,3 +222,30 @@ test("production runtime admits external MCP durably before injecting it into Wo
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("production host keeps external MCP refs fail-closed when discovery catalog is not configured", async () => {
+  const root = await mkdtemp(join(tmpdir(), "mission-external-mcp-no-catalog-"));
+  const baseHost = new ExternalMcpBootstrapHost();
+  const runtime = createMissionRuntime({
+    rootDir: root,
+    schemaPath: join(process.cwd(), "src", "persistence", "sqlite", "schema.sql"),
+    host: baseHost,
+    executorId: "external-mcp-test-host"
+  });
+
+  try {
+    await assert.rejects(
+      () => runtime.host.createAgent({
+        missionId: "mission-no-external-catalog",
+        workItemId: "external-ref-without-activation",
+        context: {},
+        allowedCapabilityRefs: [capabilityId]
+      }),
+      /not activated/i
+    );
+    assert.equal(baseHost.createRequests.length, 0, "external refs must be rejected before reaching the base Host");
+  } finally {
+    runtime.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
