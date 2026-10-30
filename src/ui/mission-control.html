@@ -22,7 +22,7 @@
       <div id="approvals"></div>
     </section>
     <section class="card wide" data-surface="findings">
-      <div class="section-head"><div><div class="eyebrow">Findings</div><div class="muted">Persistent independent verification observations.</div></div><div class="pill" id="finding-count">0</div></div>
+      <div class="section-head"><div><div class="eyebrow">Recorded findings</div><div class="muted">Persistent independent verification observations.</div></div><div class="pill" id="finding-count">0</div></div>
       <div id="finding-status" role="status" aria-live="polite" class="muted">Waiting for mission id…</div>
       <div id="findings"></div>
     </section>
@@ -152,7 +152,7 @@ async function loadFindings(){
     if(!Array.isArray(items))throw new Error('Findings response was not a list');
     if(generation!==findingLoadGeneration)return;
     renderFindings(items);
-    findingStatusEl.textContent=items.length===50?'Showing up to 50 findings.':items.length?items.length+' finding'+(items.length===1?'':'s')+'.':'No findings.';
+    findingStatusEl.textContent=items.length===50?'Showing up to 50 recorded findings.':items.length?items.length+' finding'+(items.length===1?'':'s')+'.':'No findings.';
   }catch(error){
     if(generation!==findingLoadGeneration)return;
     findingStatusEl.textContent=error instanceof Error?error.message:String(error);
