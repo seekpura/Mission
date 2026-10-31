@@ -150,15 +150,56 @@ export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
 
   async ensure(need: CapabilityNeed): Promise<CapabilityEnsureResult> {
     const base = await this.base.ensure(need);
-    if (base.status === "resolved" && base.capability) return base;
-    if (!need.acquisitionAllowed) return base;
+    let rejectedActiveExternal: CapabilityEnsureAttempt | undefined;
+
+    if (base.status === "resolved" && base.capability) {
+      if (!base.capability.id.startsWith(EXTERNAL_MCP_PREFIX)) return base;
+      const rejection = this.reusableExternalRejection(need, base.capability);
+      if (!rejection) return base;
+      rejectedActiveExternal = {
+        candidateId: base.capability.id,
+        candidateName: base.capability.name,
+        ok: false,
+        reason: rejection
+      };
+    }
+
+    if (!need.acquisitionAllowed) {
+      if (!rejectedActiveExternal) return base;
+      return {
+        status: "missing",
+        source: "none",
+        attempts: [...base.attempts, rejectedActiveExternal],
+        reason: `${rejectedActiveExternal.reason}; acquisition is disabled for this need`
+      };
+    }
+
     const acceptableKinds = need.policy?.acceptableKinds;
-    if (acceptableKinds && acceptableKinds.length > 0 && !acceptableKinds.includes("mcp")) return base;
+    if (acceptableKinds && acceptableKinds.length > 0 && !acceptableKinds.includes("mcp")) {
+      if (!rejectedActiveExternal) return base;
+      return {
+        status: "missing",
+        source: "none",
+        attempts: [...base.attempts, rejectedActiveExternal],
+        reason: `${rejectedActiveExternal.reason}; current policy does not allow MCP acquisition`
+      };
+    }
 
     const candidates = this.ranker.rank(need, await this.catalog.discover(need));
-    if (candidates.length === 0) return base;
+    if (candidates.length === 0) {
+      if (!rejectedActiveExternal) return base;
+      return {
+        status: "missing",
+        source: "none",
+        attempts: [...base.attempts, rejectedActiveExternal],
+        reason: `${rejectedActiveExternal.reason}; no eligible external MCP candidates discovered`
+      };
+    }
 
-    const attempts: CapabilityEnsureAttempt[] = [...base.attempts];
+    const attempts: CapabilityEnsureAttempt[] = [
+      ...base.attempts,
+      ...(rejectedActiveExternal ? [rejectedActiveExternal] : [])
+    ];
     for (const ranked of candidates.slice(0, this.maxCandidates)) {
       let entry: ResolvedExternalMcpCatalogEntry;
       try {
@@ -272,6 +313,17 @@ export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
         ? attempts.map(attempt => `${attempt.candidateName}: ${attempt.reason ?? (attempt.ok ? "approved" : "failed")}`).join(" | ")
         : "External MCP acquisition failed without a candidate attempt"
     };
+  }
+
+  private reusableExternalRejection(need: CapabilityNeed, capability: CapabilityDescriptor): string | undefined {
+    if (this.revocations.isCapabilityRevoked(need.missionId, capability.id)) {
+      return `External MCP capability ${capability.id} is durably revoked for Mission ${need.missionId}`;
+    }
+    if (RISK_RANK[EXTERNAL_MCP_RISK] > RISK_RANK[need.maxRisk]) {
+      return `External MCP requires high-risk admission, but need ${need.id} allows ${need.maxRisk}`;
+    }
+    const eligibility = this.resolver.resolve(need, [capability]);
+    return eligibility.status === "resolved" ? undefined : eligibility.reason;
   }
 }
 
