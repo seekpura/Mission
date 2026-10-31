@@ -254,7 +254,14 @@ export function createMissionRuntime(options: MissionRuntimeOptions): MissionRun
     ? new ExternalMcpAdmissionRuntime({
         base: baseCapabilities,
         catalog: new ExternalMcpCatalogDiscoveryProvider(options.externalMcpCatalog),
-        approvals
+        approvals,
+        revocations: {
+          isCapabilityRevoked: (missionId, capabilityId) => reader.readCapabilityAuditPage(missionId, {
+            capabilityId,
+            decision: "revoked",
+            limit: 1
+          }).items.length > 0
+        }
       })
     : baseCapabilities;
   const capabilities = new CapabilityLedgerRuntime(admittedCapabilities, events);
