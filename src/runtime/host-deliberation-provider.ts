@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { Artifact } from "../core/domain/artifact.ts";
-import type { CapabilityDescriptor, CapabilityNeed, RiskLevel } from "../core/domain/capability.ts";
+import type {
+  CapabilityCostClass,
+  CapabilityDescriptor,
+  CapabilityExecutionMode,
+  CapabilityKind,
+  CapabilityNeed,
+  CapabilityNeedPolicy,
+  CapabilityProvenance,
+  RiskLevel
+} from "../core/domain/capability.ts";
 import type { MissionState } from "../core/domain/mission.ts";
 import type { ArtifactExpectation, LocalAcceptanceCriterion, WorkItem, WorkPurpose } from "../core/domain/work-item.ts";
 import type { Gap } from "../core/domain/verification.ts";
@@ -40,12 +49,35 @@ interface DurablePlannerContext {
   openGaps: Gap[];
 }
 
+type KnownMonetaryClass = Exclude<CapabilityCostClass, "unknown">;
+
 const WORK_PURPOSES = new Set<WorkPurpose>([
   "exploration", "production", "verification", "repair", "acquisition", "integration"
 ]);
 const NEED_PURPOSES = new Set<CapabilityNeed["purpose"]>(["production", "verification", "research", "integration"]);
 const NEED_URGENCY = new Set<CapabilityNeed["urgency"]>(["blocking", "high-value", "optional-improvement"]);
 const RISK_LEVELS = new Set<RiskLevel>(["low", "medium", "high", "blocked"]);
+const CAPABILITY_KINDS = new Set<CapabilityKind>([
+  "skill", "tool", "mcp", "agent", "runtime", "library", "cli", "application", "workflow"
+]);
+const CAPABILITY_EXECUTION_MODES = new Set<CapabilityExecutionMode>([
+  "host-agent", "host-capability", "mission-context", "local-process", "remote-service", "library"
+]);
+const CAPABILITY_PROVENANCE_SOURCES = new Set<CapabilityProvenance["source"]>([
+  "host", "mission", "trusted-cache", "external"
+]);
+const CAPABILITY_MONETARY_CLASSES = new Set<KnownMonetaryClass>([
+  "negligible", "low", "medium", "high"
+]);
+const CAPABILITY_NEED_POLICY_KEYS = new Set([
+  "acceptableKinds",
+  "requiredExecutionModes",
+  "forbiddenPermissions",
+  "acceptableProviders",
+  "requiredNativeFeatures",
+  "acceptableProvenanceSources",
+  "maxMonetaryClass"
+]);
 const GAP_INTERVENTIONS = new Set<GapDiagnosis["intervention"]>([
   "retry", "revise_work", "replace_capability", "replan_local", "revise_strategy"
 ]);
@@ -120,7 +152,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
         `Valid executor ids are: ${[...this.knownExecutorIds].join(", ")}.`,
         this.defaultExecutorId ? `If no special route is needed, assignedExecutorId may be omitted and Runtime will use ${this.defaultExecutorId}.` : "Every executable work item must name assignedExecutorId.",
         "Return JSON with graphRevision:number, capabilityNeeds:array, workItems:array.",
-        "Each capability need may contain id?, objective, requiredFunctions[], desiredInputs[], desiredOutputs[], purpose, urgency, acquisitionAllowed, maxRisk, requirementRefs[], gapRefs[].",
+        "Each capability need may contain id?, objective, requiredFunctions[], desiredInputs[], desiredOutputs[], purpose, urgency, acquisitionAllowed, maxRisk, policy?, requirementRefs[], gapRefs[]. If policy is present, its only allowed keys are acceptableKinds[], requiredExecutionModes[], forbiddenPermissions[], acceptableProviders[], requiredNativeFeatures[], acceptableProvenanceSources[], maxMonetaryClass.",
         "Each work item may contain id?, workstreamId?, parentWorkItemId?, purpose, objective, requirementRefs[], gapRefs[], inputArtifactRefs[], expectedOutputs:[{logicalName,type,required}], localAcceptanceCriteria:[{id?,description,priority}], capabilityNeedRefs[], assignedExecutorId?, priority.",
         "Do not set missionId, status, graphRevision, createdBy or timestamps; Runtime owns those fields."
       ].join(" "),
@@ -325,6 +357,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
     if (!RISK_LEVELS.has(maxRisk)) throw new Error(`Unsupported capability maxRisk at ${path}: ${maxRisk}`);
     const requiredFunctions = stringArray(object.requiredFunctions, `${path}.requiredFunctions`);
     if (requiredFunctions.length === 0) throw new Error(`Capability need requires at least one function at ${path}`);
+    const policy = object.policy === undefined ? undefined : normalizeCapabilityNeedPolicy(object.policy, `${path}.policy`);
     return {
       id: optionalNonEmptyString(object.id) ?? `capability-need:${randomUUID()}`,
       missionId,
@@ -336,6 +369,7 @@ export class HostDeliberationProvider implements DeliberationProvider {
       urgency,
       acquisitionAllowed: booleanValue(object.acquisitionAllowed, `${path}.acquisitionAllowed`),
       maxRisk,
+      ...(policy ? { policy } : {}),
       requirementRefs: stringArray(object.requirementRefs ?? [], `${path}.requirementRefs`),
       gapRefs: stringArray(object.gapRefs ?? [], `${path}.gapRefs`)
     };
@@ -463,6 +497,48 @@ function compactState(state: MissionState) {
   };
 }
 
+function normalizeCapabilityNeedPolicy(value: unknown, path: string): CapabilityNeedPolicy {
+  const object = objectValue(value, path);
+  for (const key of Object.keys(object)) {
+    if (!CAPABILITY_NEED_POLICY_KEYS.has(key)) {
+      throw new Error(`Unsupported capability need policy field at ${path}: ${key}`);
+    }
+  }
+
+  const policy: CapabilityNeedPolicy = {};
+  if (object.acceptableKinds !== undefined) {
+    policy.acceptableKinds = enumStringArray(object.acceptableKinds, `${path}.acceptableKinds`, CAPABILITY_KINDS, "capability kind");
+  }
+  if (object.requiredExecutionModes !== undefined) {
+    policy.requiredExecutionModes = enumStringArray(object.requiredExecutionModes, `${path}.requiredExecutionModes`, CAPABILITY_EXECUTION_MODES, "execution mode");
+  }
+  if (object.forbiddenPermissions !== undefined) {
+    policy.forbiddenPermissions = stringArray(object.forbiddenPermissions, `${path}.forbiddenPermissions`);
+  }
+  if (object.acceptableProviders !== undefined) {
+    policy.acceptableProviders = stringArray(object.acceptableProviders, `${path}.acceptableProviders`);
+  }
+  if (object.requiredNativeFeatures !== undefined) {
+    policy.requiredNativeFeatures = stringArray(object.requiredNativeFeatures, `${path}.requiredNativeFeatures`);
+  }
+  if (object.acceptableProvenanceSources !== undefined) {
+    policy.acceptableProvenanceSources = enumStringArray(
+      object.acceptableProvenanceSources,
+      `${path}.acceptableProvenanceSources`,
+      CAPABILITY_PROVENANCE_SOURCES,
+      "provenance source"
+    );
+  }
+  if (object.maxMonetaryClass !== undefined) {
+    const monetaryClass = nonEmptyString(object.maxMonetaryClass, `${path}.maxMonetaryClass`) as KnownMonetaryClass;
+    if (!CAPABILITY_MONETARY_CLASSES.has(monetaryClass)) {
+      throw new Error(`Unsupported capability monetary class at ${path}.maxMonetaryClass: ${monetaryClass}`);
+    }
+    policy.maxMonetaryClass = monetaryClass;
+  }
+  return policy;
+}
+
 function normalizeExpectedOutputs(value: unknown, path: string): ArtifactExpectation[] {
   return arrayValue(value, path).map((item, index) => {
     const object = objectValue(item, `${path}[${index}]`);
@@ -501,6 +577,18 @@ function arrayValue(value: unknown, path: string): unknown[] {
 
 function stringArray(value: unknown, path: string): string[] {
   return arrayValue(value, path).map((item, index) => nonEmptyString(item, `${path}[${index}]`));
+}
+
+function enumStringArray<T extends string>(
+  value: unknown,
+  path: string,
+  allowed: ReadonlySet<T>,
+  label: string
+): T[] {
+  return stringArray(value, path).map(item => {
+    if (!allowed.has(item as T)) throw new Error(`Unsupported ${label} at ${path}: ${item}`);
+    return item as T;
+  });
 }
 
 function nonEmptyString(value: unknown, path: string): string {
