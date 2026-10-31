@@ -77,6 +77,14 @@ async function waitForPending(manager: RuntimeApprovalManager) {
   return pending;
 }
 
+function isRevoked(reader: SqliteMissionReader, missionId: string, capabilityId: string): boolean {
+  return reader.readCapabilityAuditPage(missionId, {
+    capabilityId,
+    decision: "revoked",
+    limit: 1
+  }).items.length > 0;
+}
+
 function admission(
   approvals: RuntimeApprovalManager,
   overlay: MissionCapabilityOverlay,
@@ -86,7 +94,9 @@ function admission(
     base: new MissingRuntime(overlay),
     catalog,
     approvals,
-    revocations: reader
+    revocations: {
+      isCapabilityRevoked: (missionId, capabilityId) => isRevoked(reader, missionId, capabilityId)
+    }
   });
 }
 
@@ -140,7 +150,7 @@ test("durably revoked external MCP identity cannot reuse an old approval to reac
       reason: "operator revoked compromised external endpoint identity",
       revoked: true
     });
-    assert.equal(reader.isCapabilityRevoked(need().missionId, capability.id), true);
+    assert.equal(isRevoked(reader, need().missionId, capability.id), true);
     assert.equal((await reader.journal(need().missionId)).capabilities.has(capability.id), false);
 
     approvals.dispose();
