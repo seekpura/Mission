@@ -9,6 +9,7 @@ import type {
   CapabilityRuntime
 } from "../core/capabilities/capability-coordinator.ts";
 import { CandidateRanker } from "../core/capabilities/candidate-ranker.ts";
+import { CapabilityResolver } from "../core/capabilities/resolver.ts";
 import type { MissionCapabilityOverlay } from "../core/capabilities/mission-capability-overlay.ts";
 import type {
   AgentCreateRequest,
@@ -120,6 +121,7 @@ export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
   private readonly approvals: IdempotentAcquisitionApprovalBroker;
   private readonly revocations: CapabilityRevocationReader;
   private readonly ranker: CandidateRanker;
+  private readonly resolver = new CapabilityResolver();
   private readonly maxCandidates: number;
 
   constructor(options: {
@@ -192,6 +194,18 @@ export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
         continue;
       }
 
+      const capability = capabilityFromEntry(entry);
+      const eligibility = this.resolver.resolve(need, [capability]);
+      if (eligibility.status !== "resolved") {
+        attempts.push({
+          candidateId: entry.candidateId,
+          candidateName: entry.name,
+          ok: false,
+          reason: eligibility.reason
+        });
+        continue;
+      }
+
       try {
         const approval = await this.approvals.requestApproval({
           missionId: need.missionId,
@@ -223,7 +237,6 @@ export class ExternalMcpAdmissionRuntime implements CapabilityRuntime {
           continue;
         }
 
-        const capability = capabilityFromEntry(entry);
         attempts.push({ candidateId: entry.candidateId, candidateName: entry.name, ok: true });
         return {
           status: "resolved",
