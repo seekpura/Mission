@@ -10,7 +10,12 @@ import { ExternalMcpAdmissionRuntime } from "../../src/runtime/external-mcp-admi
 import { ExternalMcpCatalogDiscoveryProvider } from "../../src/runtime/external-mcp-catalog.ts";
 
 class ReusingRuntime implements CapabilityRuntime {
-  constructor(private readonly capability: CapabilityDescriptor) {}
+  private readonly capability: CapabilityDescriptor;
+
+  constructor(capability: CapabilityDescriptor) {
+    this.capability = capability;
+  }
+
   restoreMissionCapabilities(): void {}
   deactivateMissionCapability(): void {}
   async ensure(): Promise<CapabilityEnsureResult> {
