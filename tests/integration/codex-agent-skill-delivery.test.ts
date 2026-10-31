@@ -32,45 +32,44 @@ let turn = 0;
 function log(value) { if (logPath) appendFileSync(logPath, JSON.stringify({ pid: process.pid, ...value }) + "\n"); }
 function send(value) { process.stdout.write(JSON.stringify(value) + "\n"); }
 function reply(id, result) { send({ jsonrpc: "2.0", id, result }); }
-function discovered(cwd) {
-  const skillPath = join(cwd, ".agents", "skills", "${SKILL_NAME}", "SKILL.md");
-  return !omitSkill && existsSync(skillPath)
-    ? [{ name: "${SKILL_NAME}", description: "Verify source truth before finalizing deliverables.", path: skillPath, scope: "repo", enabled: true, pluginId: null }]
-    : [];
+function fail(id, message) { send({ jsonrpc: "2.0", id, error: { code: -32603, message } }); }
+function skillVisible(cwd) {
+  return !omitSkill && existsSync(join(cwd, ".agents", "skills", "${SKILL_NAME}", "SKILL.md"));
 }
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 lines.on("line", line => {
   if (!line.trim()) return;
   const message = JSON.parse(line);
-  log({ method: message.method, params: message.params });
   if (message.method === "initialize" && message.id !== undefined) {
+    log({ method: message.method, params: message.params });
     reply(message.id, { userAgent: "fake-codex-skills" });
     return;
   }
   if (message.method === "initialized") return;
-  if (message.method === "skills/list" && message.id !== undefined) {
-    const cwd = message.params?.cwds?.[0] || process.cwd();
-    reply(message.id, { data: [{ cwd, skills: discovered(cwd), errors: [] }] });
-    return;
-  }
   if (message.method === "thread/start" && message.id !== undefined) {
+    const visible = skillVisible(message.params.cwd);
+    log({ method: message.method, params: message.params, skillVisible: visible });
+    if (!visible) return fail(message.id, "canonical repo Skill was not visible before thread/start");
     reply(message.id, { thread: { id: "skill-thread" }, model: "provider-default" });
     return;
   }
   if (message.method === "thread/resume" && message.id !== undefined) {
+    const visible = skillVisible(message.params.cwd);
+    log({ method: message.method, params: message.params, skillVisible: visible });
+    if (!visible) return fail(message.id, "canonical repo Skill was not visible before thread/resume");
     reply(message.id, { thread: { id: message.params.threadId }, model: "provider-default" });
     return;
   }
+  log({ method: message.method, params: message.params });
   if (message.method === "turn/start" && message.id !== undefined) {
     const id = "turn-" + (++turn);
     reply(message.id, { turn: { id, status: "inProgress" } });
     send({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: message.params.threadId, turn: { id, status: "completed" } } });
-    return;
   }
 });
 `;
 
-type RpcLog = { pid: number; method: string; params?: Record<string, unknown> };
+type RpcLog = { pid: number; method: string; params?: Record<string, unknown>; skillVisible?: boolean };
 
 async function fixture() {
   const root = await mkdtemp(join(os.tmpdir(), "mission-codex-skill-"));
@@ -133,15 +132,13 @@ async function rows(path: string): Promise<RpcLog[]> {
     .map(line => JSON.parse(line) as RpcLog);
 }
 
-function assertSkillVerificationBefore(logRows: RpcLog[], terminalMethod: "thread/start" | "thread/resume") {
-  const listIndex = logRows.findIndex(row => row.method === "skills/list");
-  const threadIndex = logRows.findIndex(row => row.method === terminalMethod);
-  assert.ok(listIndex >= 0, "Codex must verify native repo-skill discovery");
-  assert.ok(threadIndex > listIndex, `${terminalMethod} must not run before provider skill acknowledgement`);
-  assert.equal(logRows[listIndex]?.params?.forceReload, true);
+function assertSkillVisibleAt(logRows: RpcLog[], terminalMethod: "thread/start" | "thread/resume") {
+  const thread = logRows.find(row => row.method === terminalMethod);
+  assert(thread, `${terminalMethod} was not invoked`);
+  assert.equal(thread.skillVisible, true, `Codex must see the canonical repo Skill before ${terminalMethod}`);
 }
 
-test("Codex create projects only authorized Mission Skill and verifies provider discovery before thread/start", async () => {
+test("Codex create receives only the authorized Mission Skill at its canonical repo path before thread/start", async () => {
   const { root, script, log, activated, workspace } = await fixture();
   const missionId = "mission-codex-skill-create";
   const overlay = new MissionCapabilityOverlay();
@@ -157,16 +154,14 @@ test("Codex create projects only authorized Mission Skill and verifies provider 
       context: { objective: "use verified source truth" }
     });
     assert((await collect(host, handle)).some(event => event.type === "completed"));
-
-    const logRows = await rows(log);
-    assertSkillVerificationBefore(logRows, "thread/start");
+    assertSkillVisibleAt(await rows(log), "thread/start");
     assert.equal(await readFile(join(workspace, ".agents", "skills", SKILL_NAME, "SKILL.md"), "utf8"), SKILL);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("Codex cross-process resume rebuilds and re-verifies the authorized Skill before thread/resume", async () => {
+test("Codex cross-process resume rebuilds the authorized repo Skill before thread/resume", async () => {
   const { root, script, log, activated, workspace } = await fixture();
   const missionId = "mission-codex-skill-resume";
   const overlay = new MissionCapabilityOverlay();
@@ -197,14 +192,13 @@ test("Codex cross-process resume rebuilds and re-verifies the authorized Skill b
     assert.equal(result.status, "resumed");
     if (result.status !== "resumed") return;
     await collect(recovered, result.handle);
-
-    assertSkillVerificationBefore(await rows(log), "thread/resume");
+    assertSkillVisibleAt(await rows(log), "thread/resume");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("Codex fails closed before thread/start when provider does not acknowledge the projected Skill", async () => {
+test("Codex fails closed before work when the provider process cannot see the projected canonical repo Skill", async () => {
   const { root, script, log, activated, workspace } = await fixture();
   const missionId = "mission-codex-skill-missing";
   const overlay = new MissionCapabilityOverlay();
@@ -218,14 +212,15 @@ test("Codex fails closed before thread/start when provider does not acknowledge 
       workspaceRoot: workspace,
       allowedCapabilityRefs: [capability.id],
       context: { objective: "must fail before work" }
-    }), /skill|provider|discover/i);
-    assert.equal((await rows(log)).some(row => row.method === "thread/start"), false);
+    }), /canonical repo Skill|thread\/start|Failed to create Codex/i);
+    const logRows = await rows(log);
+    assert.equal(logRows.some(row => row.method === "turn/start"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("production bootstrap permits Codex Agent Skill acquisition only through the provider-native delivery path", async () => {
+test("production bootstrap permits Codex Agent Skill acquisition through the provider-native repo Skill path", async () => {
   const root = await mkdtemp(join(os.tmpdir(), "mission-codex-skill-bootstrap-"));
   const runtime = createMissionRuntime({
     rootDir: root,
