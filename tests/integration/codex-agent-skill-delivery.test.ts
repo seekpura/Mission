@@ -28,11 +28,16 @@ const { join } = require("node:path");
 const { createInterface } = require("node:readline");
 const logPath = process.env.FAKE_CODEX_SKILL_LOG;
 const omitSkill = process.env.FAKE_CODEX_OMIT_SKILL === "1";
-let roots = [];
 let turn = 0;
 function log(value) { if (logPath) appendFileSync(logPath, JSON.stringify({ pid: process.pid, ...value }) + "\n"); }
 function send(value) { process.stdout.write(JSON.stringify(value) + "\n"); }
 function reply(id, result) { send({ jsonrpc: "2.0", id, result }); }
+function discovered(cwd) {
+  const skillPath = join(cwd, ".agents", "skills", "${SKILL_NAME}", "SKILL.md");
+  return !omitSkill && existsSync(skillPath)
+    ? [{ name: "${SKILL_NAME}", description: "Verify source truth before finalizing deliverables.", path: skillPath, scope: "repo", enabled: true, pluginId: null }]
+    : [];
+}
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 lines.on("line", line => {
   if (!line.trim()) return;
@@ -43,18 +48,9 @@ lines.on("line", line => {
     return;
   }
   if (message.method === "initialized") return;
-  if (message.method === "skills/extraRoots/set" && message.id !== undefined) {
-    roots = Array.isArray(message.params?.extraRoots) ? [...message.params.extraRoots] : [];
-    reply(message.id, {});
-    return;
-  }
   if (message.method === "skills/list" && message.id !== undefined) {
     const cwd = message.params?.cwds?.[0] || process.cwd();
-    const skillPath = roots[0] ? join(roots[0], "${SKILL_NAME}", "SKILL.md") : "";
-    const skills = !omitSkill && skillPath && existsSync(skillPath)
-      ? [{ name: "${SKILL_NAME}", description: "Verify source truth before finalizing deliverables.", path: skillPath, scope: "repo", enabled: true, pluginId: null }]
-      : [];
-    reply(message.id, { data: [{ cwd, skills, errors: [] }] });
+    reply(message.id, { data: [{ cwd, skills: discovered(cwd), errors: [] }] });
     return;
   }
   if (message.method === "thread/start" && message.id !== undefined) {
@@ -137,12 +133,10 @@ async function rows(path: string): Promise<RpcLog[]> {
     .map(line => JSON.parse(line) as RpcLog);
 }
 
-function assertSkillSetupBefore(logRows: RpcLog[], terminalMethod: "thread/start" | "thread/resume") {
-  const setIndex = logRows.findIndex(row => row.method === "skills/extraRoots/set");
+function assertSkillVerificationBefore(logRows: RpcLog[], terminalMethod: "thread/start" | "thread/resume") {
   const listIndex = logRows.findIndex(row => row.method === "skills/list");
   const threadIndex = logRows.findIndex(row => row.method === terminalMethod);
-  assert.ok(setIndex >= 0, "Codex must receive Runtime-owned skill roots");
-  assert.ok(listIndex > setIndex, "Codex must reload/list skills after setting the extra root");
+  assert.ok(listIndex >= 0, "Codex must verify native repo-skill discovery");
   assert.ok(threadIndex > listIndex, `${terminalMethod} must not run before provider skill acknowledgement`);
   assert.equal(logRows[listIndex]?.params?.forceReload, true);
 }
@@ -165,12 +159,8 @@ test("Codex create projects only authorized Mission Skill and verifies provider 
     assert((await collect(host, handle)).some(event => event.type === "completed"));
 
     const logRows = await rows(log);
-    assertSkillSetupBefore(logRows, "thread/start");
-    const set = logRows.find(row => row.method === "skills/extraRoots/set");
-    const extraRoots = set?.params?.extraRoots as string[] | undefined;
-    assert.equal(extraRoots?.length, 1);
-    assert.equal(extraRoots?.[0], join(workspace, ".agents", "skills"));
-    assert.equal(await readFile(join(extraRoots![0]!, SKILL_NAME, "SKILL.md"), "utf8"), SKILL);
+    assertSkillVerificationBefore(logRows, "thread/start");
+    assert.equal(await readFile(join(workspace, ".agents", "skills", SKILL_NAME, "SKILL.md"), "utf8"), SKILL);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -208,7 +198,7 @@ test("Codex cross-process resume rebuilds and re-verifies the authorized Skill b
     if (result.status !== "resumed") return;
     await collect(recovered, result.handle);
 
-    assertSkillSetupBefore(await rows(log), "thread/resume");
+    assertSkillVerificationBefore(await rows(log), "thread/resume");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
