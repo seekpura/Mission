@@ -118,11 +118,10 @@ function adapter(input: { script: string; log: string; overlay: MissionCapabilit
     },
     nativeDiscovery: false
   });
-  const projector = new MissionAgentSkillWorkspaceProjector(input.overlay, {
-    workspaceNamespace: ".mission",
-    skillsDirectory: "codex-skills"
-  });
-  return new CodexAgentSkillHostAdapter(base, projector);
+  return new CodexAgentSkillHostAdapter(
+    base,
+    new MissionAgentSkillWorkspaceProjector(input.overlay)
+  );
 }
 
 async function collect(host: CodexAgentSkillHostAdapter, handle: { id: string; nativeRef?: string }): Promise<HostAgentEvent[]> {
@@ -170,7 +169,7 @@ test("Codex create projects only authorized Mission Skill and verifies provider 
     const set = logRows.find(row => row.method === "skills/extraRoots/set");
     const extraRoots = set?.params?.extraRoots as string[] | undefined;
     assert.equal(extraRoots?.length, 1);
-    assert.equal(extraRoots?.[0], join(workspace, ".mission", "codex-skills"));
+    assert.equal(extraRoots?.[0], join(workspace, ".agents", "skills"));
     assert.equal(await readFile(join(extraRoots![0]!, SKILL_NAME, "SKILL.md"), "utf8"), SKILL);
   } finally {
     await rm(root, { recursive: true, force: true });
