@@ -76,26 +76,11 @@ test("production bootstrap validates Codex native discovery boolean configuratio
   }
 });
 
-test("production bootstrap rejects unknown host kinds and DeepSeek-native Skill delivery through Codex", () => {
+test("production bootstrap rejects unknown host kinds", () => {
   assert.throws(
     () => createProductionMissionRuntimeFromEnv({ MISSION_HOST_KIND: "mystery-host" }, process.cwd()),
     /Unsupported MISSION_HOST_KIND/
   );
-
-  const root = mkdtempSync(join(tmpdir(), "mission-codex-skill-gate-"));
-  try {
-    assert.throws(
-      () => createProductionMissionRuntimeFromEnv({
-        MISSION_HOME: root,
-        MISSION_HOST_KIND: "codex",
-        MISSION_CAPABILITY_ACQUISITION: "github-skills",
-        MISSION_CAPABILITY_ISOLATION: "docker"
-      }, process.cwd()),
-      /not yet deliverable through Codex app-server/
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
 });
 
 test("custom HostAdapters do not silently inherit DeepSeek-native Agent Skill delivery", () => {
