@@ -6,9 +6,9 @@ import test from "node:test";
 import { MissionCapabilityOverlay } from "../../src/core/capabilities/mission-capability-overlay.ts";
 import type { CapabilityDescriptor } from "../../src/core/domain/capability.ts";
 import { CodexNativeCapabilityHostAdapter } from "../../src/hosts/codex/codex-native-host-adapter.ts";
-import type { HostAgentEvent } from "../../src/hosts/host-adapter.ts";
+import type { HostAdapter, HostAgentEvent } from "../../src/hosts/host-adapter.ts";
 import { MissionAgentSkillWorkspaceProjector } from "../../src/runtime/agent-skill-runtime.ts";
-import { CodexAgentSkillHostAdapter } from "../../src/runtime/codex-agent-skill-host-adapter.ts";
+import { CapabilityWorkspaceHostAdapter } from "../../src/runtime/capability-context-host-adapter.ts";
 import { createMissionRuntime } from "../../src/runtime/bootstrap.ts";
 
 const SKILL_NAME = "verified-source-truth";
@@ -107,7 +107,7 @@ function activate(overlay: MissionCapabilityOverlay, missionId: string, activate
   return capability;
 }
 
-function adapter(input: { script: string; log: string; overlay: MissionCapabilityOverlay; omitSkill?: boolean }) {
+function adapter(input: { script: string; log: string; overlay: MissionCapabilityOverlay; omitSkill?: boolean }): HostAdapter {
   const base = new CodexNativeCapabilityHostAdapter({
     binary: process.execPath,
     argsPrefix: [input.script],
@@ -118,13 +118,13 @@ function adapter(input: { script: string; log: string; overlay: MissionCapabilit
     },
     nativeDiscovery: false
   });
-  return new CodexAgentSkillHostAdapter(
+  return new CapabilityWorkspaceHostAdapter(
     base,
     new MissionAgentSkillWorkspaceProjector(input.overlay)
   );
 }
 
-async function collect(host: CodexAgentSkillHostAdapter, handle: { id: string; nativeRef?: string }): Promise<HostAgentEvent[]> {
+async function collect(host: HostAdapter, handle: { id: string; nativeRef?: string }): Promise<HostAgentEvent[]> {
   const events: HostAgentEvent[] = [];
   for await (const event of host.observeAgent(handle)) events.push(event);
   return events;
@@ -235,7 +235,7 @@ test("Codex fails closed before thread/start when provider does not acknowledge 
   }
 });
 
-test("production bootstrap permits Codex Agent Skill acquisition only through the dedicated provider-native delivery path", async () => {
+test("production bootstrap permits Codex Agent Skill acquisition only through the provider-native delivery path", async () => {
   const root = await mkdtemp(join(os.tmpdir(), "mission-codex-skill-bootstrap-"));
   const runtime = createMissionRuntime({
     rootDir: root,
