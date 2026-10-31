@@ -136,7 +136,8 @@ function admission(
   return new ExternalMcpAdmissionRuntime({
     base: new MissingRuntime(overlay),
     catalog: new ExternalMcpCatalogDiscoveryProvider(catalogEntries),
-    approvals
+    approvals,
+    revocations: { isCapabilityRevoked: () => false }
   });
 }
 
@@ -195,7 +196,6 @@ test("external MCP approval is idempotent, non-deliverable before durable activa
     );
     assert.equal(preActivationCapture.createRequests.length, 0);
 
-    // Simulate a crash after durable approval but before Controller commits capability.activated.
     approvals.dispose();
     approvals = new RuntimeApprovalManager(events, { timeoutMs: 10_000 });
     const retryOverlay = new MissionCapabilityOverlay();
