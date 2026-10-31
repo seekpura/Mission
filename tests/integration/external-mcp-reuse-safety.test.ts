@@ -122,6 +122,18 @@ test("active external MCP reuse still respects the current CapabilityNeed maxRis
   assert.equal(approvals.requests.length, 0);
 });
 
+test("unsafe active external MCP fails closed when replacement acquisition is disabled", async () => {
+  const approvals = new ApprovingBroker();
+  const restrictedNeed = need("medium");
+  restrictedNeed.acquisitionAllowed = false;
+  const result = await runtime({ active: externalCapability(), approvals }).ensure(restrictedNeed);
+
+  assert.equal(result.status, "missing");
+  assert.match(result.reason, /high-risk|allows medium/i);
+  assert.match(result.reason, /acquisition is disabled/i);
+  assert.equal(approvals.requests.length, 0);
+});
+
 test("durably revoked active external MCP cannot escape through the base resolved fast path", async () => {
   const approvals = new ApprovingBroker();
   const result = await runtime({
